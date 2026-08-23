@@ -117,6 +117,30 @@ proxy/exits.py         lock-profit / trailing exit core (OpenBull port)
 tests/                 unittest suite (47 tests: indicators, PA, scoring, risk, options+chain, engine, backtest)
 \`\`\`
 
+## Deploy
+
+**Railway (always-on terminal + dashboard)** - best for running the actual
+trading loop and serving the dashboard 24/7:
+
+```bash
+# push this repo, then on Railway: New Project -> Deploy from GitHub
+# railway.json + Procfile already start: python run_terminal.py dashboard --serve
+# ($PORT is honored automatically).  Add env vars in Railway dashboard:
+#   DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN  (for live mode)
+# Note: data/*.csv is gitignored (18MB sample); copy the NIFTY CSVs into
+# data/ before deploying to enable backtests, or backtest locally first.
+```
+
+**Streamlit (interactive dashboard UI)** - free on Streamlit Community Cloud:
+
+```bash
+# Streamlit Cloud: New app -> this repo -> main branch -> streamlit_app.py
+# (or locally: pip install -r requirements.txt && streamlit run streamlit_app.py)
+# Shows KPIs, backtest, stop-loss sweep, option chain + expiries, trade log.
+# Cloud apps sleep when idle and cannot run the trading loop - it is a
+# read-only UI host.  Run the terminal on Railway or locally instead.
+```
+
 ## Paper vs live
 
 `LIVE_TRADING` = False in `proxy/config.py` — everything runs on a paper

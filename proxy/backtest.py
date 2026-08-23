@@ -1,0 +1,341 @@
+"""
+PrOxy Trading Terminal - Backtest Engine
+========================================
+
+Replays the full pipeline over historical NIFTY data and measures the
+plan: win rate, profit factor, monthly P&L vs the 62,500 INR target,
+equity curve, drawdown.
+
+Architecture (honest by construction):
+    - SIGNALS are computed on 5-minute bars (the strategy timeframe)
+    - EXITS   are simulated on 1-MINUTE bars (NIFTY_1m.csv) so GTT
+              target/stop/lock-profit orders are resolved where one bar
+              rarely spans both levels.  Falls back to 5m resolution when
+              1m data is unavailable.
+
+Premium modelling (documented approximation):
+    ATM premium ~ spot * OPTION_PREMIUM_EST_PCT  (~160-200 on NIFTY)
+    premium_pct_move = delta * (spot / premium) * underlying_pct_move
+
+Discipline enforced exactly as in live paper mode:
+    0.5% risk per trade | 1% daily loss stop | 5% monthly loss stop
+    max trades/day | max concurrent positions | no entry after 14:45
+    force exit at 15:15 | setup + >=70% confidence gate
+    OpenBull lock-profit / trailing exit management (proxy/exits.py)
+"""
+
+import json
+import os
+from datetime import datetime, time as dt_time
+from zoneinfo import ZoneInfo
+
+import numpy as np
+import pandas as pd
+
+from .config import (CAPITAL, CSV_PATH, CSV_PATH_1M, REPORT_DIR,
+                     BACKTEST_MAX_DAYS, BACKTEST_THETA_PER_BAR,
+                     SLIPPAGE_PCT, TRANSACTION_COST_PCT)
+from .data import load_csv, csv_bars_for_day
+from .indicators import calculate_indicators
+from .scoring import generate_signal
+from .options import select_leg, premium_move_pct
+from .exits import check_exits
+from .risk import (risk_budget, position_size, check_trade_allowed,
+                   apply_daily_pnl, current_equity)
+
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def aggregate_5m(bars_1m):
+    """
+    Group 1-minute bars into 5-minute bars.
+    Bar time = window start (09:15, 09:20, ...), close = last 1m close.
+    Each bucket carries its sub-bars under "_1m" for exit resolution.
+    """
+    buckets = {}
+    for b in bars_1m:
+        t = b["time"]
+        key = (t.hour, t.minute // 5)
+        buckets.setdefault(key, []).append(b)
+    out = []
+    for key in sorted(buckets):
+        group = buckets[key]
+        first = group[0]
+        out.append({
+            "time": first["time"],
+            "open": float(group[0]["open"]),
+            "high": max(float(g["high"]) for g in group),
+            "low": min(float(g["low"]) for g in group),
+            "close": float(group[-1]["close"]),
+            "volume": sum(float(g.get("volume", 0.0) or 0.0) for g in group),
+            "_1m": group,
+        })
+    return out
+
+
+class Backtest:
+    def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False):
+        self.cfg = cfg
+        self.path = path or CSV_PATH
+        self.max_days = max_days if max_days is not None else cfg.BACKTEST_MAX_DAYS
+        self.last_days = last_days
+        self.verbose = verbose
+        self.df = load_csv(self.path)
+        try:
+            self.df1m = load_csv(CSV_PATH_1M)
+            self._has_1m = True
+        except Exception:
+            self.df1m = None
+            self._has_1m = False
+        self.state = None
+        self.trades = []
+        self.daily_pnl = {}
+
+    # ----------------------------------------------------------
+
+    def _reset_state(self, day):
+        if self.state is None or self.state["date"] != str(day):
+            self.state = {
+                "date": str(day),
+                "trades_today": 0,
+                "realized_pnl_today": 0.0,
+                "realized_pnl_month": self.state["realized_pnl_month"] if self.state else 0.0,
+                "realized_pnl_total": self.state["realized_pnl_total"] if self.state else 0.0,
+                "wins": self.state["wins"] if self.state else 0,
+                "losses": self.state["losses"] if self.state else 0,
+                "trading_halted_day": False,
+                "trading_halted_month": self.state["trading_halted_month"] if self.state else False,
+                "equity_curve": self.state["equity_curve"] if self.state else [],
+            }
+
+    def _bar_time(self, bar):
+        t = bar["time"]
+        return t.time() if hasattr(t, "time") else pd.Timestamp(t).time()
+
+    def _premium_proxy(self, trade, bar):
+        """Premium high/low/close proxy for one (1m or 5m) bar."""
+        entry_premium = trade["entry_premium"]
+        entry_spot = trade["entry_spot"]
+        is_ce = trade["option_type"] == "CE"
+        pct_h = (bar["high"] - entry_spot) / entry_spot if entry_spot else 0.0
+        pct_l = (bar["low"] - entry_spot) / entry_spot if entry_spot else 0.0
+        pct_c = (bar["close"] - entry_spot) / entry_spot if entry_spot else 0.0
+        if is_ce:
+            prem_high = entry_premium * (1.0 + premium_move_pct(pct_h, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            prem_low = entry_premium * (1.0 + premium_move_pct(pct_l, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            prem_now = entry_premium * (1.0 + premium_move_pct(pct_c, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+        else:
+            prem_high = entry_premium * (1.0 + premium_move_pct(pct_l, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            prem_low = entry_premium * (1.0 + premium_move_pct(pct_h, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            prem_now = entry_premium * (1.0 - premium_move_pct(pct_c, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+        return prem_high, prem_low, prem_now
+
+    def _close_trade(self, trade, exit_price, exit_reason, bar, day_trades):
+        sign = 1.0 if trade["direction"] == "LONG" else -1.0
+        pnl = (exit_price - trade["entry_premium"]) * trade["quantity"] * sign
+        pnl -= trade["quantity"] * (exit_price + trade["entry_premium"]) * TRANSACTION_COST_PCT
+        rec = {**trade, "exit_premium": round(exit_price, 2),
+               "exit_reason": exit_reason, "pnl": round(pnl, 2),
+               "exit_time": bar["time"].isoformat()}
+        day_trades.append(rec)
+        self.trades.append(rec)
+        apply_daily_pnl(self.state, self.cfg, pnl)
+        return rec
+
+    # ----------------------------------------------------------
+
+    def run(self):
+        days = sorted(self.df["date"].dt.date.unique())
+        if self.last_days:
+            days = days[-self.last_days:]
+        elif self.max_days:
+            days = days[: self.max_days]
+
+        for day in days:
+            if self.state and self.state.get("trading_halted_month"):
+                break
+            self._reset_state(day)
+            bars5 = csv_bars_for_day(self.df, day)
+            if len(bars5) < 30:
+                continue
+
+            if self._has_1m:
+                bars1m = csv_bars_for_day(self.df1m, day)
+                buckets = aggregate_5m(bars1m)
+                if len(buckets) >= 30:
+                    five = buckets
+                else:
+                    five = [dict(b) for b in bars5]
+            else:
+                five = [dict(b) for b in bars5]
+
+            day_trades = []
+            history = []
+            active = None
+            cooldown_until = None
+            last_signal = None
+            theta_per_bar = (BACKTEST_THETA_PER_BAR / 5.0) if self._has_1m else BACKTEST_THETA_PER_BAR
+
+            for bi, bar in enumerate(five):
+                # ---- 1) exit simulation at 1m resolution ----
+                if active is not None:
+                    sub_bars = bar.get("_1m") or [bar]
+                    for sub in sub_bars:
+                        if active is None:
+                            break
+                        prem_high, prem_low, prem_now = self._premium_proxy(active, sub)
+                        # expiry-aware theta: LONG bleeds, SHORT collects
+                        theta_bar = float(active.get("theta_day_pct", 0.0) or 0.0) / 375.0
+                        if active["direction"] == "LONG":
+                            prem_high, prem_low, prem_now = prem_high * (1.0 - theta_bar), prem_low * (1.0 - theta_bar), prem_now * (1.0 - theta_bar)
+                        else:
+                            prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
+
+                        exit_price, exit_reason = check_exits(active, prem_high, prem_low, prem_now, self.cfg)
+
+                        slip = 1.0 - SLIPPAGE_PCT if active["direction"] == "LONG" else 1.0 + SLIPPAGE_PCT
+                        if exit_price is None and self._bar_time(sub) >= self.cfg.FORCE_EXIT_TIME:
+                            exit_price, exit_reason = prem_now * slip, "TIME_STOP (15:15)"
+                        if exit_price is None and last_signal is not None and last_signal.direction != "WAIT":
+                            want_long = active["direction"] == "LONG"
+                            if (last_signal.direction == "BUY") != want_long                                     and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
+                                exit_price, exit_reason = prem_now * slip, "REVERSE_SIGNAL"
+
+                        if exit_price is not None:
+                            rec = self._close_trade(active, exit_price, exit_reason, sub, day_trades)
+                            active = None
+                            if "STOP_LOSS_HIT" in exit_reason and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
+                                cooldown_until = sub["time"] + pd.Timedelta(minutes=5 * int(self.cfg.LOSS_COOLDOWN_BARS))
+                            if self.verbose:
+                                print(f"    EXIT {rec['instrument']} {rec['exit_reason']} P&L {rec['pnl']:+,.2f}")
+
+                # ---- 2) signal evaluation on the 5m bar ----
+                history.append({k: v for k, v in bar.items() if k != "_1m"})
+                if len(history) > 160:
+                    history = history[-160:]
+                frame = pd.DataFrame(history).set_index(
+                    pd.to_datetime([b["time"] for b in history])
+                )
+                signal = None
+                if len(frame) >= 30:
+                    frame = calculate_indicators(frame)
+                    signal = generate_signal(frame, self.cfg)
+                last_signal = signal
+
+                # ---- 3) fresh entry ----
+                if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and signal is not None and signal.direction in ("BUY", "SELL"):
+                    spot = float(bar["close"])
+                    leg = select_leg(signal.direction, spot, self.cfg)
+                    budget = risk_budget(self.state, self.cfg)
+                    stop_unit = leg.stop_per_unit
+                    lots, qty, actual_risk = position_size(budget, leg.premium, leg.premium - stop_unit, self.cfg)
+                    lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
+                    is_long = signal.direction == "BUY"
+                    stop_p = leg.premium - stop_unit if is_long else leg.premium + stop_unit
+                    target_p = leg.premium + leg.target_per_unit if is_long else leg.premium - leg.target_per_unit
+                    plan = {
+                        "instrument": leg.instrument, "direction": "LONG" if is_long else "SHORT",
+                        "option_type": leg.option_type, "strike": leg.strike, "lots": lots,
+                        "quantity": lots * self.cfg.LOT_SIZE, "entry_premium": leg.premium,
+                        "stop_premium": stop_p, "target_premium": target_p,
+                        "entry_spot": spot, "entry_time": bar["time"].isoformat(),
+                        "signal_score": signal.score, "confidence": signal.confidence,
+                        "setup_type": signal.setup_type, "setup_strength": signal.setup_strength,
+                        "trend": signal.trend, "reason": signal.reason,
+                        "risk_rs": round(actual_risk, 2),
+                        "pnl_peak": None, "peak_pct": 0.0,
+                        "lock_armed": False, "lock_floor_pct": 0.0,
+                        "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
+                    }
+                    gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                    if gate.allowed:
+                        active = plan
+                        if self.verbose:
+                            print(f"    ENTRY {plan['instrument']} {plan['direction']} {plan['lots']}L "
+                                  f"@{plan['entry_premium']:.2f} conf={plan['confidence']:.0f}% {plan['setup_type']}")
+
+            # end of day: force close + rollup
+            if active is not None:
+                last_bar = five[-1]
+                last_sub = (last_bar.get("_1m") or [last_bar])[-1]
+                prem_high, prem_low, prem_now = self._premium_proxy(active, last_sub)
+                exit_price = prem_now
+                sign = 1.0 if active["direction"] == "LONG" else -1.0
+                pnl = (exit_price - active["entry_premium"]) * active["quantity"] * sign
+                rec = {**active, "exit_premium": round(exit_price, 2), "exit_reason": "DAY_END",
+                       "pnl": round(pnl, 2), "exit_time": last_sub["time"].isoformat()}
+                day_trades.append(rec)
+                self.trades.append(rec)
+                apply_daily_pnl(self.state, self.cfg, pnl)
+
+            self.daily_pnl[str(day)] = round(self.state["realized_pnl_today"], 2)
+            self.state.setdefault("equity_curve", []).append([
+                f"{day}T15:15:00", round(current_equity(self.state, self.cfg), 2),
+            ])
+            if self.verbose:
+                print(f"DAY {day}: {len(day_trades)} trades | P&L {self.state['realized_pnl_today']:+,.2f} INR")
+
+        return self._report()
+
+    # ----------------------------------------------------------
+
+    def _report(self):
+        trades = self.trades
+        wins = [t for t in trades if t["pnl"] > 0]
+        losses = [t for t in trades if t["pnl"] <= 0]
+        gross_win = sum(t["pnl"] for t in wins)
+        gross_loss = abs(sum(t["pnl"] for t in losses))
+        net = sum(t["pnl"] for t in trades)
+        equity = [p[1] for p in self.state.get("equity_curve", [])] if self.state else []
+        peak = 0.0
+        max_dd = 0.0
+        for e in equity:
+            peak = max(peak, e)
+            max_dd = max(max_dd, (peak - e) / peak * 100.0 if peak > 0 else 0.0)
+
+        report = {
+            "period": f"{len(self.daily_pnl)} trading days",
+            "bars": int(len(self.df)),
+            "exit_resolution": "1m" if self._has_1m else "5m",
+            "trades": len(trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate": round(len(wins) / len(trades) * 100.0, 1) if trades else 0.0,
+            "net_pnl": round(net, 2),
+            "gross_win": round(gross_win, 2),
+            "gross_loss": round(gross_loss, 2),
+            "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
+            "avg_win": round(gross_win / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(gross_loss / len(losses), 2) if losses else 0.0,
+            "max_drawdown_pct": round(max_dd, 2),
+            "daily_pnl": self.daily_pnl,
+            "monthly_target_rs": round(self.cfg.CAPITAL * self.cfg.MONTHLY_TARGET_PCT, 2),
+            "equity_curve": self.state.get("equity_curve", []) if self.state else [],
+            "setup_counts": self._setup_counts(trades),
+            "exit_reason_counts": self._exit_counts(trades),
+            "last_equity": equity[-1] if equity else self.cfg.CAPITAL,
+        }
+        return report
+
+    def _setup_counts(self, trades):
+        counts = {}
+        for t in trades:
+            key = t.get("setup_type") or "none"
+            counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def _exit_counts(self, trades):
+        counts = {}
+        for t in trades:
+            counts[t["exit_reason"]] = counts.get(t["exit_reason"], 0) + 1
+        return counts
+
+    def save_report(self, report, name="backtest_report"):
+        os.makedirs(REPORT_DIR, exist_ok=True)
+        json_path = os.path.join(REPORT_DIR, name + ".json")
+        with open(json_path, "w", encoding="utf-8") as fh:
+            json.dump(report, fh, indent=2, default=str)
+        trades_path = os.path.join(REPORT_DIR, name + "_trades.csv")
+        if self.trades:
+            pd.DataFrame(self.trades).to_csv(trades_path, index=False)
+        return json_path, trades_path

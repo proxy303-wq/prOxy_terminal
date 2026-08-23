@@ -1,0 +1,24 @@
+# secrets - NEVER commit these
+.env
+*.env
+!*.env.example
+reports/dhan_token.txt
+dhan_token.txt
+
+# runtime state / generated reports
+reports/
+logs/
+__pycache__/
+*.pyc
+*.sqlite
+
+# large sample market data (get from the Athena sample; see README)
+data/*.csv
+
+# trained ML models (regenerate with: python run_terminal.py ml-train)
+models/
+
+# misc
+.pytest_cache/
+.vscode/
+.idea/

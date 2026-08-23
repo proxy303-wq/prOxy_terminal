@@ -307,7 +307,9 @@ def _serve(path):
         def log_message(self, *a):
             pass
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    # 0.0.0.0 so Railway's healthcheck + public routing can reach the
+    # server from outside the container (127.0.0.1 would refuse them)
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
     url = f"http://127.0.0.1:{port}/{os.path.basename(path)}"
     print(f"{GR}Serving dashboard at {url}  (Ctrl+C to stop){R}")
     try:

@@ -1,0 +1,11 @@
+# files that must NOT be uploaded to Railway
+reports/
+logs/
+data/
+models/
+.git/
+.railway/
+*.sqlite
+*.env
+.env
+dhan_token.txt

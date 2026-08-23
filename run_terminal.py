@@ -310,7 +310,10 @@ def _serve(path):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/{os.path.basename(path)}"
     print(f"{GR}Serving dashboard at {url}  (Ctrl+C to stop){R}")
-    webbrowser.open(url)
+    try:
+        webbrowser.open(url)
+    except Exception:
+        pass   # headless hosts (Railway) have no browser - that is fine
     try:
         server.serve_forever()
     except KeyboardInterrupt:

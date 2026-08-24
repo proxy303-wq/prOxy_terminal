@@ -42,7 +42,10 @@ class PaperEngine:
         self.cfg = cfg
         self.broker = broker
         self.tracker = tracker if tracker is not None else Tracker(cfg)
-        self.notify = notifier.log if notifier is not None else print
+        if notifier is not None:
+            self.notify = lambda msg, level="INFO": notifier.log(msg, level)
+        else:
+            self.notify = lambda msg, level="INFO": print(msg)
         self.trade_date = trade_date or datetime.now(IST).date()
         self.history = []            # list of bar dicts (all days)
         self.max_history = max_history
@@ -301,7 +304,7 @@ class PaperEngine:
             bars = int(self.cfg.LOSS_COOLDOWN_BARS)
             self.cooldown_until = bar["time"] + timedelta(minutes=BAR_MINUTES * bars)
         self.active_trade = None
-        self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR")
+        self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR", "EXIT")
         return record
 
     # ----------------------------------------------------------
@@ -404,7 +407,8 @@ class PaperEngine:
                             f"ENTRY {self.active_trade['instrument']} {self.active_trade['direction']} "
                             f"{self.active_trade['lots']} lots | premium {self.active_trade['entry_premium']:.2f} "
                             f"| target {self.active_trade['target_premium']:.2f} | stop {self.active_trade['stop_premium']:.2f} "
-                            f"| score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}"
+                            f"| score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
+                            "TRADE"
                         )
                     else:
                         self.notify(f"GATE  signal={signal.direction} blocked: {gate.reason}")

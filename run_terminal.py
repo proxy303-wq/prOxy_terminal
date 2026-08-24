@@ -30,6 +30,10 @@ except Exception:
 # allow running from any cwd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# load Telegram / Dhan credentials from C:\Athena_X\.env
+from proxy.athena_env import load_athena_env  # noqa: E402
+load_athena_env()
+
 from proxy import config as cfg  # noqa: E402
 from proxy.options import recommend_lots, estimate_premium  # noqa: E402
 from proxy.risk import projected_year1_equity  # noqa: E402

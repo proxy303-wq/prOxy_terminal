@@ -34,9 +34,18 @@ def _colorize(text, color):
 
 
 class Notifier:
-    def __init__(self, quiet=False, telegram=False):
+    def __init__(self, quiet=False, telegram=None):
         self.quiet = quiet
-        self.telegram_enabled = telegram and bool(os.getenv("TELEGRAM_BOT_TOKEN")) and bool(os.getenv("TELEGRAM_CHAT_ID"))
+        # ensure C:\Athena_X\.env is loaded so Telegram creds are visible
+        try:
+            from .athena_env import load_athena_env
+            load_athena_env()
+        except Exception:
+            pass
+        # telegram=None -> auto-enable when creds exist AND not quiet
+        # (quiet mode is used by tests/silent runs and must not notify)
+        has_creds = bool(os.getenv("TELEGRAM_BOT_TOKEN")) and bool(os.getenv("TELEGRAM_CHAT_ID"))
+        self.telegram_enabled = (has_creds and not quiet) if telegram is None else (telegram and has_creds)
         os.makedirs(LOG_DIR, exist_ok=True)
         self.log_path = os.path.join(LOG_DIR, datetime.now(IST).strftime("%Y-%m-%d") + ".log")
 
@@ -48,8 +57,10 @@ class Notifier:
             print(_colorize(line, color), flush=True)
         with open(self.log_path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
-        if self.telegram_enabled and level in ("TRADE", "EXIT", "WARN"):
-            self._telegram(line)
+        # telegram for trade events: explicit levels or ENTRY/EXIT/GATE/LIVE prefixes
+        trade_like = level in ("TRADE", "EXIT", "WARN") or message.startswith(("ENTRY", "EXIT", "GATE", "LIVE", "DAY END"))
+        if self.telegram_enabled and trade_like:
+            self._telegram(message)
 
     def _telegram(self, text):
         try:

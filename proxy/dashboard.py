@@ -442,7 +442,7 @@ async function toggleMode() {{
   const btn = document.getElementById('modeBtn');
   const isLive = btn.classList.contains('live');
   if (!isLive) {{
-    const ok = confirm('SWITCH TO LIVE TRADING?\n\nReal orders will be placed on your Dhan account.\nDaily loss halt 1% | monthly halt 5% | 5 lots.');
+    const ok = confirm('SWITCH TO LIVE TRADING?\\n\\nReal orders will be placed on your Dhan account.\\nDaily loss halt 1% | monthly halt 5% | 5 lots.');
     if (!ok) return;
   }}
   const body = JSON.stringify({{ mode: isLive ? 'paper' : 'live' }});

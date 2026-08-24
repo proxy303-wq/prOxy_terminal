@@ -247,6 +247,12 @@ class Backtest:
                         "lock_armed": False, "lock_floor_pct": 0.0,
                         "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
                     }
+                    # entry-time features for the meta-label precision layer
+                    try:
+                        from .meta_label import features_from_signal
+                        plan.update(features_from_signal(signal, frame, self.cfg))
+                    except Exception:
+                        pass
                     gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
                     if gate.allowed:
                         active = plan

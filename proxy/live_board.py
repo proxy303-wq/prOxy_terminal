@@ -1,0 +1,185 @@
+"""
+PrOxy Trading Terminal - Live board
+===================================
+
+Powers the live strip + option chain on the dashboard from Dhan:
+
+    - Dhan WebSocket (dhanhq MarketFeed)  -> live NIFTY index ticks
+      -> spot, day change, direction, last bar
+    - dhanhq option_chain (REST, refreshed every CHAIN_REFRESH_SECONDS)
+      -> REAL chain: strikes with CE/PE LTP, OI, IV, bid/ask
+
+The board is OPTIONAL: without credentials it reports status "off" and
+the dashboard falls back to the static Black-76 chain.  Credentials come
+from C:\Athena_X\.env (client id) + the access token resolved by
+proxy/dhan_auth (long-lived API key consent flow).
+
+    from proxy.live_board import LiveBoard
+    board = LiveBoard()        # starts WS + chain refresher threads
+    board.snapshot()           # JSON-ready dict for /api/board
+"""
+
+import os
+import threading
+import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from .config import REPORT_DIR
+
+IST = ZoneInfo("Asia/Kolkata")
+
+CHAIN_REFRESH_SECONDS = 30          # REST option-chain refresh cadence
+NIFTY_INDEX_ID = 13                 # Dhan security id for NIFTY 50 index
+NIFTY_CHAIN_SEGMENT = "NSE_FNO"     # options segment
+
+
+class LiveBoard:
+    def __init__(self, cfg, notify=print, client_id=None, access_token=None):
+        self.cfg = cfg
+        self.notify = notify
+        self.status = "starting"
+        self.started_at = datetime.now(IST)
+        self.spot = None
+        self.prev_close = None
+        self.day_change_pct = 0.0
+        self.direction = "NEUTRAL"
+        self.last_bar = None
+        self.chain = []              # rows: strike, CE ltp/oi/iv, PE ltp/oi/iv
+        self.chain_updated = None
+        self.chain_error = None
+        self._feed = None
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._threads = []
+        self._init_dhan(client_id, access_token)
+
+    # ----------------------------------------------------------
+    # setup
+    # ----------------------------------------------------------
+
+    def _init_dhan(self, client_id, access_token):
+        from .dhan_broker import DhanBroker
+        try:
+            self._broker = DhanBroker(client_id=client_id, access_token=access_token,
+                                      interactive=False, notify=self.notify)
+        except Exception as exc:
+            self.status = "off"
+            self.notify(f"Live board off: {exc}")
+            return
+
+        # websocket index feed
+        try:
+            from .dhan_live import DhanLiveFeed
+            self._feed = DhanLiveFeed(client_id=self._broker.client_id,
+                                      access_token=self._broker.token)
+            self._feed.connect()
+        except Exception as exc:
+            self.notify(f"Live board: index feed unavailable ({exc})")
+
+        # background refreshers
+        t1 = threading.Thread(target=self._ws_loop, daemon=True)
+        t2 = threading.Thread(target=self._chain_loop, daemon=True)
+        self._threads = [t1, t2]
+        t1.start()
+        t2.start()
+        self.status = "live"
+
+    # ----------------------------------------------------------
+    # loops
+    # ----------------------------------------------------------
+
+    def _ws_loop(self):
+        """Drain index ticks: update spot + build the last bar."""
+        if self._feed is None:
+            return
+        while not self._stop.is_set():
+            try:
+                bar = self._feed._next_5m_bar(block=False)
+            except Exception:
+                time.sleep(5)
+                continue
+            if bar is None:
+                time.sleep(5)
+                continue
+            with self._lock:
+                self.last_bar = bar
+                self.spot = bar["close"]
+                if self.prev_close is None:
+                    self.prev_close = self.spot
+                self.day_change_pct = (self.spot - self.prev_close) / self.prev_close * 100.0 if self.prev_close else 0.0
+                self.direction = "BULLISH" if bar["close"] >= bar["open"] else "BEARISH"
+
+    def _chain_loop(self):
+        """Refresh the real option chain from Dhan every N seconds."""
+        while not self._stop.is_set():
+            try:
+                self._refresh_chain()
+            except Exception as exc:
+                self.chain_error = str(exc)
+            time.sleep(CHAIN_REFRESH_SECONDS)
+
+    def _refresh_chain(self):
+        if self._broker is None or self.spot is None:
+            return
+        from .options import expiry_for_bucket
+        exp = expiry_for_bucket(getattr(self.cfg, "OPTION_EXPIRY_BUCKET", "current_week"))
+        expiry_str = exp["date"].strftime("%Y-%m-%d")
+        under_id = int(os.environ.get("DHAN_NIFTY_SECURITY_ID", NIFTY_INDEX_ID))
+        res = self._broker._api.option_chain(under_id, NIFTY_CHAIN_SEGMENT, expiry_str)
+        data = res.get("data") or []
+        if not data and isinstance(res, dict):
+            data = res.get("optionChain") or res.get("strikes") or []
+        rows = []
+        atm = round(self.spot / self.cfg.OPTION_STRIKE_STEP) * self.cfg.OPTION_STRIKE_STEP
+        step = self.cfg.OPTION_STRIKE_STEP
+        wanted = set()
+        for k in range(3, -4, -1):
+            wanted.add(atm + k * step)
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            strike = item.get("strike_price") or item.get("strike") or item.get("strikePrice")
+            if strike is None or float(strike) not in wanted:
+                continue
+            rows.append({
+                "strike": float(strike),
+                "ce_ltp": item.get("call_ltp") or item.get("callLtp") or item.get("call") or 0,
+                "ce_oi": item.get("call_oi") or item.get("callOi") or 0,
+                "ce_iv": item.get("call_iv") or item.get("callIv") or 0,
+                "pe_ltp": item.get("put_ltp") or item.get("putLtp") or item.get("put") or 0,
+                "pe_oi": item.get("put_oi") or item.get("putOi") or 0,
+                "pe_iv": item.get("put_iv") or item.get("putIv") or 0,
+            })
+        rows.sort(key=lambda r: r["strike"])
+        with self._lock:
+            self.chain = rows
+            self.chain_updated = datetime.now(IST)
+            self.chain_error = None
+
+    # ----------------------------------------------------------
+    # snapshot for the API
+    # ----------------------------------------------------------
+
+    def snapshot(self):
+        with self._lock:
+            return {
+                "status": self.status,
+                "started_at": self.started_at.isoformat(),
+                "spot": round(self.spot, 2) if self.spot else None,
+                "prev_close": round(self.prev_close, 2) if self.prev_close else None,
+                "day_change_pct": round(self.day_change_pct, 2),
+                "direction": self.direction,
+                "last_bar": self.last_bar,
+                "chain": list(self.chain),
+                "chain_updated": self.chain_updated.isoformat() if self.chain_updated else None,
+                "chain_error": self.chain_error,
+            }
+
+    def close(self):
+        self._stop.set()
+        if self._feed is not None:
+            try:
+                self._feed.close()
+            except Exception:
+                pass

@@ -133,6 +133,15 @@ ML_MODEL = "lstm"               # "lstm" | "xgboost"
 ML_CONFIRM = False              # advisory by default
 ML_MIN_PROB = 55.0              # minimum agreed probability for the gate
 
+# Meta-label precision layer (mlfinlab style): a second model that learns
+# from past outcomes whether an approved signal will win.  Advisory by
+# default; META_CONFIRM=True gates entries below META_MIN_PROB.
+# Train with:  python run_terminal.py ml-train-meta
+META_ENABLED = True
+META_MODEL = "xgboost"
+META_CONFIRM = False
+META_MIN_PROB = 60.0
+
 # Momentum interpretation: RSI > 70 / < 30 confirms trend strength
 RSI_PERIOD = 14
 RSI_BULL_EXTREME = 70.0

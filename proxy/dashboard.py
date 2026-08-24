@@ -42,6 +42,11 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     trades = snapshot.get("trades", [])
     equity = snapshot.get("equity_curve", [])
     capital = snapshot.get("capital", 500000)
+    try:
+        from .portfolio import portfolio_report
+        pfolio = portfolio_report(snapshot)
+    except Exception:
+        pfolio = {}
     monthly_target = round(capital * 0.125)
     monthly_pnl = state.get("realized_pnl_month", 0.0)
     monthly_progress = (monthly_pnl / monthly_target * 100.0) if monthly_target else 0.0
@@ -206,7 +211,16 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     <div class="brand">PrOxy <span>TRADING TERMINAL</span></div>
     <div class="tagline">NIFTY options | 5,00,000 capital | 12.5%/month | 62,500 INR/month</div>
   </div>
-  <div class="small muted">Generated {html.escape(str(snapshot.get('generated_at', '')))} IST</div>
+  <div class="small muted" style="text-align:right">
+    <div class="live-strip">
+      <span class="chip">NIFTY <b id="liveSpot">--</b></span>
+      <span class="chip" id="liveChange">--</span>
+      <span class="chip" id="liveDir">--</span>
+      <span class="chip" id="liveMode">--</span>
+      <span class="chip" id="liveChainState">--</span>
+    </div>
+    <div style="margin-top:6px">Generated {html.escape(str(snapshot.get('generated_at', '')))} IST</div>
+  </div>
 </header>
 
 <div class="grid kpis">
@@ -216,6 +230,35 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
   {_kpi("MONTH P&L", f"{monthly_pnl:+,.2f}", f"target {monthly_target:,.0f} INR", 'var(--green)' if monthly_pnl >= 0 else 'var(--red)')}
   {_kpi("TODAY", f"{state.get('realized_pnl_today', 0):+,.2f}", f"{state.get('trades_today', 0)} trades", 'var(--yellow)')}
   {_kpi("EQUITY", f"{capital + state.get('realized_pnl_total', 0):,.0f}", "capital + realized", 'var(--cyan)')}
+</div>
+
+<div class="grid" style="margin-top:14px">
+  <div class="panel">
+    <h2>Portfolio analytics</h2>
+    <div class="small">
+      <span class="chip">Sharpe {pfolio.get('sharpe', '-')}</span>
+      <span class="chip">Sortino {pfolio.get('sortino', '-')}</span>
+      <span class="chip">Calmar {pfolio.get('calmar', '-')}</span>
+      <span class="chip">MaxDD {pfolio.get('max_drawdown_pct', 0)}%</span>
+      <span class="chip">Expectancy {pfolio.get('expectancy', '-')} INR</span>
+      <span class="chip">PF {pfolio.get('profit_factor', '-')}</span>
+      <span class="chip">Kelly {pfolio.get('kelly_fraction', '-')}</span>
+      <span class="chip">Avg hold {pfolio.get('avg_hold_minutes', '-')}m</span>
+    </div>
+  </div>
+</div>
+
+<div class="grid" style="margin-top:14px">
+  <div class="panel">
+    <h2>Live option chain (Dhan WebSocket) - refreshes every 5s</h2>
+    <div class="small muted" style="margin-bottom:8px" id="liveChainInfo">Waiting for live data...</div>
+    <div style="overflow-x:auto">
+      <table id="liveChainTable">
+        <tr><th>Strike</th><th>CE LTP</th><th>CE OI</th><th>PE LTP</th><th>PE OI</th><th>Spot</th></tr>
+        <tr><td colspan="6" class="muted">Connect with: python run_terminal.py dashboard --serve --live-board</td></tr>
+      </table>
+    </div>
+  </div>
 </div>
 
 {sweep_panel_html}
@@ -346,6 +389,59 @@ function drawEquity() {{
 window.addEventListener('resize', () => {{ drawCandles(); drawEquity(); }});
 drawCandles();
 drawEquity();
+
+// ---- live board polling (Dhan WebSocket data + option chain) ----
+async function pollBoard() {{
+  try {{
+    const r = await fetch('/api/board');
+    const b = await r.json();
+    if (b && b.status === 'live' && b.spot) {{
+      document.getElementById('liveSpot').textContent = b.spot.toFixed(2);
+      const ch = document.getElementById('liveChange');
+      ch.textContent = (b.day_change_pct >= 0 ? '▲ +' : '▼ ') + b.day_change_pct.toFixed(2) + '%';
+      ch.style.color = b.day_change_pct >= 0 ? '#3ddc84' : '#f85149';
+      const dir = document.getElementById('liveDir');
+      dir.textContent = b.direction;
+      dir.style.color = b.direction === 'BULLISH' ? '#3ddc84' : b.direction === 'BEARISH' ? '#f85149' : '#e3b341';
+      document.getElementById('liveMode').textContent = 'LIVE';
+      if (b.chain && b.chain.length) {{
+        const rows = b.chain.map(c =>
+          '<tr><td>' + c.strike.toFixed(0) + '</td><td>' + (c.ce_ltp || 0) + '</td><td>' +
+          (c.ce_oi || 0) + '</td><td>' + (c.pe_ltp || 0) + '</td><td>' + (c.pe_oi || 0) +
+          '</td><td>' + b.spot.toFixed(2) + '</td></tr>').join('');
+        document.getElementById('liveChainTable').innerHTML =
+          '<tr><th>Strike</th><th>CE LTP</th><th>CE OI</th><th>PE LTP</th><th>PE OI</th><th>Spot</th></tr>' + rows;
+        document.getElementById('liveChainInfo').textContent =
+          'Updated ' + (b.chain_updated || '').replace('T', ' ').slice(0, 19) + ' IST';
+      }}
+    }} else {{
+      document.getElementById('liveChainInfo').textContent =
+        'Live board off (add DHAN creds or use --live-board). Showing modelled chain.';
+      document.getElementById('liveMode').textContent = 'PAPER';
+    }}
+  }} catch (e) {{
+    document.getElementById('liveMode').textContent = 'PAPER';
+  }}
+}}
+setInterval(pollBoard, 5000);
+pollBoard();
+
+// ---- live trade/state refresh ----
+async function pollState() {{
+  try {{
+    const r = await fetch('/api/state');
+    const s = await r.json();
+    if (!s || !s.state) return;
+    const st = s.state, pf = s.portfolio || {{}};
+    const upd = (id, txt, color) => {{
+      const el = document.getElementById(id);
+      if (el) {{ el.textContent = txt; if (color) el.style.color = color; }}
+    }};
+    upd('liveMode', s.state && s.state.realized_pnl_today !== undefined ? 'PAPER' : 'PAPER');
+  }} catch (e) {{}}
+}}
+setInterval(pollState, 10000);
+pollState();
 </script>
 </body>
 </html>

@@ -73,6 +73,8 @@ trades = snapshot.get("trades", [])
 equity = snapshot.get("equity_curve", [])
 report = _load_json("backtest_report.json")
 sweep = _load_json("stop_loss_sweep.json")
+from proxy.portfolio import portfolio_report
+pfolio = portfolio_report(snapshot)
 
 # ---------- KPIs ----------
 k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -83,6 +85,17 @@ k4.metric("Month P&L", f"{state.get('realized_pnl_month', 0):+,.0f} INR",
           f"target {cfg.CAPITAL * 0.125:,.0f}")
 k5.metric("Today", f"{state.get('realized_pnl_today', 0):+,.0f} INR")
 k6.metric("Equity", f"{cfg.CAPITAL + state.get('realized_pnl_total', 0):,.0f} INR")
+
+st.subheader("Portfolio analytics")
+a1, a2, a3, a4, a5, a6, a7, a8 = st.columns(8)
+a1.metric("Sharpe", pfolio.get("sharpe", "-"))
+a2.metric("Sortino", pfolio.get("sortino", "-"))
+a3.metric("Calmar", pfolio.get("calmar", "-"))
+a4.metric("MaxDD", f"{pfolio.get('max_drawdown_pct', 0)}%")
+a5.metric("Expectancy", f"{pfolio.get('expectancy', '-')}")
+a6.metric("Profit factor", pfolio.get("profit_factor", "-"))
+a7.metric("Kelly", pfolio.get("kelly_fraction", "-"))
+a8.metric("Avg hold", f"{pfolio.get('avg_hold_minutes', '-')}m")
 
 c1, c2 = st.columns([2, 1])
 with c1:

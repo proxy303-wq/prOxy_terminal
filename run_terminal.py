@@ -284,8 +284,15 @@ def cmd_dashboard(args):
         sweep = None
     path = build_dashboard(snapshot, bars=df, backtest_report=report, chain=chain, sweep=sweep)
     print(f"{GR}Dashboard written: {path}{R}")
+    board = None
+    if getattr(args, "live_board", False) or os.environ.get("LIVE_BOARD") == "1":
+        try:
+            from proxy.live_board import LiveBoard
+            board = LiveBoard(cfg)
+        except Exception as exc:
+            print(f"{YE}Live board unavailable: {exc}{R}")
     if args.serve:
-        _serve(path)
+        _serve(path, board=board)
     elif args.open:
         webbrowser.open("file:///" + path.replace("\\", "/"))
 
@@ -295,23 +302,58 @@ def cmd_report(args):
     cmd_dashboard(args)
 
 
-def _serve(path):
+def _serve(path, board=None):
     import http.server
+    import json as _json
     import threading
 
+    from proxy.tracker import Tracker
     root = os.path.dirname(path)
     os.chdir(root)
     port = int(os.environ.get("PORT", "8090"))   # Railway/Heroku set $PORT
+    tracker = Tracker(cfg)
+
+    def api_state():
+        try:
+            from proxy.portfolio import portfolio_report
+            snap = tracker.to_snapshot()
+            snap["portfolio"] = portfolio_report(snap)
+            return snap
+        except Exception:
+            return {}
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a):
             pass
+
+        def _json(self, payload, code=200):
+            body = _json.dumps(payload).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.path in ("/api/state", "/api/state/"):
+                return self._json(api_state())
+            if self.path in ("/api/board", "/api/board/"):
+                if board is not None:
+                    return self._json(board.snapshot())
+                return self._json({"status": "off"})
+            if self.path in ("/api/trades", "/api/trades/"):
+                return self._json({"trades": tracker.get_trades()[-100:]})
+            if self.path in ("/", "/index.html"):
+                self.path = "/" + os.path.basename(path)
+            return super().do_GET()
 
     # 0.0.0.0 so Railway's healthcheck + public routing can reach the
     # server from outside the container (127.0.0.1 would refuse them)
     server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
     url = f"http://127.0.0.1:{port}/{os.path.basename(path)}"
     print(f"{GR}Serving dashboard at {url}  (Ctrl+C to stop){R}")
+    if board is not None:
+        print(f"{GR}Live board: {board.status}{R}")
     try:
         webbrowser.open(url)
     except Exception:
@@ -486,6 +528,22 @@ def cmd_dhan_auth(args=None):
         print(f"  {key_file}")
 
 
+def cmd_ml_train_meta(args=None):
+    """Train the meta-label precision layer from backtest trade outcomes."""
+    banner()
+    days = getattr(args, "days", None) or 120
+    print(f"{MG}Generating labeled trades (last {days} days) and training the meta model...{R}\n")
+    from proxy.backtest import Backtest
+    bt = Backtest(cfg, last_days=days)
+    report = bt.run()
+    if report["trades"] < 120:
+        print(f"{YE}Only {report['trades']} trades - train on more days for a stable model.{R}")
+    from proxy.meta_label import train_from_trades
+    meta = train_from_trades(bt.trades, model_type=getattr(args, "model", None) or "xgboost")
+    print(f"\n  {B}META MODEL READY{R} - {meta}")
+    print(f"  Advisory layer active; META_CONFIRM in config.py makes it a gate.")
+
+
 def cmd_menu():
     banner()
     from proxy.mode import get_mode
@@ -564,6 +622,7 @@ def main():
     p = sub.add_parser("dashboard")
     p.add_argument("--serve", action="store_true")
     p.add_argument("--open", action="store_true")
+    p.add_argument("--live-board", action="store_true", help="stream live Dhan market data + option chain")
     p.set_defaults(func=cmd_dashboard)
 
     p = sub.add_parser("report")
@@ -584,6 +643,10 @@ def main():
     p.add_argument("--days", type=int, default=None)
     p.set_defaults(func=cmd_ml_train)
     sub.add_parser("dhan-auth").set_defaults(func=cmd_dhan_auth)
+    p = sub.add_parser("ml-train-meta")
+    p.add_argument("--model", choices=["xgboost", "gb"], default="xgboost")
+    p.add_argument("--days", type=int, default=120)
+    p.set_defaults(func=cmd_ml_train_meta)
     p = sub.add_parser("chain")
     p.add_argument("--spot", type=float, default=None)
     p.add_argument("--expiry", type=str, default=None,

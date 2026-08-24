@@ -74,6 +74,16 @@ class PaperEngine:
                 self.ml_meta = model_meta(getattr(self.cfg, "ML_MODEL", "lstm"))
             except Exception:
                 self.ml_predict = None
+        # Meta-label precision layer (mlfinlab style) - advisory/gate
+        self.meta_predict = None
+        self.meta_info = None
+        if getattr(self.cfg, "META_ENABLED", False):
+            try:
+                from .meta_label import load_meta, meta_info
+                self.meta_predict = load_meta(getattr(self.cfg, "META_MODEL", "xgboost"))
+                self.meta_info = meta_info(getattr(self.cfg, "META_MODEL", "xgboost"))
+            except Exception:
+                self.meta_predict = None
 
     # ----------------------------------------------------------
     # plumbing
@@ -348,6 +358,19 @@ class PaperEngine:
                                 ml_ok = agree and ml["probability"] >= getattr(self.cfg, "ML_MIN_PROB", 55.0)
                                 if not ml_ok:
                                     self.notify(f"GATE  ML disagrees ({ml['direction']} {ml['probability']:.0f}%) - {signal.direction} blocked")
+                    # meta-label advisory: P(this signal wins) from past outcomes
+                    if gate.allowed and ml_ok and self.meta_predict is not None:
+                        try:
+                            from .meta_label import features_from_signal
+                            feat = features_from_signal(signal, df, self.cfg)
+                            m = self.meta_predict(feat)
+                            ml_note += f" | META {m['meta_prob']:.0f}%"
+                            if getattr(self.cfg, "META_CONFIRM", False):
+                                if not m["take"] or m["meta_prob"] < getattr(self.cfg, "META_MIN_PROB", 60.0):
+                                    ml_ok = False
+                                    self.notify(f"GATE  META {m['meta_prob']:.0f}% below {getattr(self.cfg, 'META_MIN_PROB', 60.0):.0f}% - {signal.direction} blocked")
+                        except Exception:
+                            pass
                     if gate.allowed and ml_ok:
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.
@@ -362,6 +385,11 @@ class PaperEngine:
                             else:
                                 plan["broker_order_id"] = res.get("orderId") or res.get("data", {}).get("orderId")
                         if not events.get("live_order_rejected"):
+                            try:
+                                from .meta_label import features_from_signal
+                                plan.update(features_from_signal(signal, df, self.cfg))
+                            except Exception:
+                                pass
                             self.active_trade = plan
                             self.active_trade["entry_time"] = bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"])
                             self.active_trade["entry_premium"] = round(self.active_trade["entry_premium"], 2)

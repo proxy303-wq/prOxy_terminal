@@ -225,6 +225,11 @@ class LiveBoard:
 
     def snapshot(self):
         with self._lock:
+            last_bar = None
+            if self.last_bar:
+                last_bar = dict(self.last_bar)
+                t = last_bar.get("time")
+                last_bar["time"] = t.isoformat() if hasattr(t, "isoformat") else str(t)
             return {
                 "status": self.status,
                 "started_at": self.started_at.isoformat(),
@@ -232,7 +237,7 @@ class LiveBoard:
                 "prev_close": round(self.prev_close, 2) if self.prev_close else None,
                 "day_change_pct": round(self.day_change_pct, 2),
                 "direction": self.direction,
-                "last_bar": self.last_bar,
+                "last_bar": last_bar,
                 "chain": list(self.chain),
                 "chain_updated": self.chain_updated.isoformat() if self.chain_updated else None,
                 "chain_error": self.chain_error,

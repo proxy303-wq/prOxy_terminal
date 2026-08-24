@@ -28,9 +28,15 @@ class RiskCheck:
             self.details = {}
 
 
+def base_capital(state, cfg):
+    """Paper mode: the plan's 5,00,000.  Live mode: the Dhan account
+    balance (set by the engine as state['capital'])."""
+    return float(state.get("capital", cfg.CAPITAL))
+
+
 def current_equity(state, cfg):
     """Equity = starting capital + realized P&L (+ unrealized, if tracked)."""
-    equity = cfg.CAPITAL + state.get("realized_pnl_total", 0.0)
+    equity = base_capital(state, cfg) + state.get("realized_pnl_total", 0.0)
     if state.get("active_trade") is not None:
         equity += state["active_trade"].get("unrealized_pnl", 0.0) or 0.0
     return max(equity, 0.0)
@@ -99,19 +105,19 @@ def apply_daily_pnl(state, cfg, realized_pnl):
     else:
         state["losses"] = state.get("losses", 0) + 1
 
-    if state["realized_pnl_today"] <= -cfg.CAPITAL * cfg.MAX_DAILY_LOSS_PCT:
+    if state["realized_pnl_today"] <= -base_capital(state, cfg) * cfg.MAX_DAILY_LOSS_PCT:
         state["trading_halted_day"] = True
-    if state["realized_pnl_month"] <= -cfg.CAPITAL * cfg.MAX_MONTHLY_LOSS_PCT:
+    if state["realized_pnl_month"] <= -base_capital(state, cfg) * cfg.MAX_MONTHLY_LOSS_PCT:
         state["trading_halted_month"] = True
     return state
 
 
 def daily_target_hit(state, cfg):
-    return state.get("realized_pnl_today", 0.0) >= cfg.CAPITAL * cfg.DAILY_TARGET_PCT
+    return state.get("realized_pnl_today", 0.0) >= base_capital(state, cfg) * cfg.DAILY_TARGET_PCT
 
 
 def monthly_progress_pct(state, cfg):
-    target = cfg.CAPITAL * cfg.MONTHLY_TARGET_PCT
+    target = base_capital(state, cfg) * cfg.MONTHLY_TARGET_PCT
     if target <= 0:
         return 0.0
     return (state.get("realized_pnl_month", 0.0) / target) * 100.0

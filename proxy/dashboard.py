@@ -176,6 +176,11 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
   .bar-fill {{ height:100%; background:var(--green);
               width:{min(100, max(0, monthly_progress)):.1f}%; }}
   b {{ font-weight:600; }}
+  .mode-btn {{ border:1px solid var(--green); background:var(--green); color:#fff; font-weight:700;
+        padding:5px 16px; border-radius:999px; cursor:pointer; font-size:12px; letter-spacing:0.6px;
+        font-family:'JetBrains Mono','Consolas',monospace; }}
+  .mode-btn.live {{ background:var(--red); border-color:var(--red); }}
+  .mode-btn:active {{ opacity:0.85; }}
 </style>
 </head>
 <body>
@@ -186,11 +191,12 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     <div class="brand">PrOxy <span>TRADING TERMINAL</span></div>
     <div class="tagline">NIFTY options | 5,00,000 capital | 12.5%/mo | 62,500 INR/month | lot {cfg_module.DEFAULT_LOTS}</div>
   </div>
-  <div style="display:flex;gap:6px;flex-wrap:wrap">
+  <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
     <span class="chip">NIFTY <b id="liveSpot">--</b></span>
     <span class="chip" id="liveChange">--</span>
     <span class="chip" id="liveDir">--</span>
     <span class="chip" id="liveMode">{mode_tag}</span>
+    <button id="modeBtn" class="mode-btn" title="Switch between PAPER and LIVE trading">PAPER</button>
   </div>
 </header>
 
@@ -412,6 +418,50 @@ setInterval(pollBoard, 5000);
 pollBoard();
 window.addEventListener('resize', drawEquity);
 drawEquity();
+
+// ---- paper/live mode trigger button ----
+let MODE_KEY = '';
+async function pollMode() {{
+  try {{
+    const r = await fetch('/api/mode');
+    const m = await r.json();
+    const btn = document.getElementById('modeBtn');
+    if (!btn) return;
+    if (m.mode === 'live') {{
+      btn.textContent = 'LIVE';
+      btn.classList.add('live');
+      document.getElementById('liveMode').textContent = 'LIVE';
+    }} else {{
+      btn.textContent = 'PAPER';
+      btn.classList.remove('live');
+      document.getElementById('liveMode').textContent = 'PAPER';
+    }}
+  }} catch (e) {{}}
+}}
+async function toggleMode() {{
+  const btn = document.getElementById('modeBtn');
+  const isLive = btn.classList.contains('live');
+  if (!isLive) {{
+    const ok = confirm('SWITCH TO LIVE TRADING?\n\nReal orders will be placed on your Dhan account.\nDaily loss halt 1% | monthly halt 5% | 5 lots.');
+    if (!ok) return;
+  }}
+  const body = JSON.stringify({{ mode: isLive ? 'paper' : 'live' }});
+  const headers = {{ 'Content-Type': 'application/json' }};
+  if (MODE_KEY) headers['X-PROXY-KEY'] = MODE_KEY;
+  const r = await fetch('/api/mode', {{ method: 'POST', headers, body }});
+  if (r.status === 403) {{
+    MODE_KEY = prompt('Remote mode switch needs the PROXY_MODE_KEY:');
+    if (MODE_KEY) return toggleMode();
+    alert('Mode switch denied (set PROXY_MODE_KEY env to allow remote toggling).');
+    return;
+  }}
+  const m = await r.json();
+  if (m.mode) {{ btn.textContent = m.mode === 'live' ? 'LIVE' : 'PAPER'; btn.classList.toggle('live', m.mode === 'live'); }}
+}}
+const mb = document.getElementById('modeBtn');
+if (mb) mb.addEventListener('click', toggleMode);
+setInterval(pollMode, 5000);
+pollMode();
 </script>
 </body>
 </html>

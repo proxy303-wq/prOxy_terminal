@@ -176,7 +176,7 @@ class Tracker:
         stats = self.stats(trades)
         equity = state.get("equity_curve", [])
         return {
-            "capital": CAPITAL,
+            "capital": state.get("capital", CAPITAL),
             "state": state,
             "stats": stats,
             "equity_curve": equity,

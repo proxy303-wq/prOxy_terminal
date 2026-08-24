@@ -153,6 +153,7 @@ def cmd_live(args):
             broker = DhanBroker()
             balance = broker.get_balance()
             print(f"{GR}Dhan connected. Available balance: {balance['cash']:,.2f} INR{R}")
+            print(f"{YE}Live sizing uses the Dhan balance (risk {balance['cash']*cfg.RISK_PER_TRADE_PCT:,.2f} INR/trade, daily loss cap {balance['cash']*cfg.MAX_DAILY_LOSS_PCT:,.2f} INR){R}")
         except Exception as exc:
             print(f"{RED}Dhan live broker error: {exc}{R}")
             return
@@ -193,7 +194,9 @@ def cmd_live(args):
 
     tracker = Tracker(cfg)
     notifier = Notifier(quiet=False)
-    engine = PaperEngine(cfg, broker=broker, tracker=tracker, notifier=notifier, trade_date=trade_date)
+    live_capital = balance["cash"] if live_orders and balance else None
+    engine = PaperEngine(cfg, broker=broker, tracker=tracker, notifier=notifier,
+                         trade_date=trade_date, capital=live_capital)
     summary = engine.run_feed(feed, live=False)
     mode_tag = "LIVE (real orders)" if live_orders else "PAPER"
     print(f"""
@@ -322,6 +325,9 @@ def _serve(path, board=None):
         except Exception:
             return {}
 
+    from proxy.mode import get_mode, set_mode
+    _MODE_KEY = os.environ.get("PROXY_MODE_KEY", "")
+
     class Handler(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -334,6 +340,12 @@ def _serve(path, board=None):
             self.end_headers()
             self.wfile.write(body)
 
+        def _mode_allowed(self):
+            """Localhost always allowed; remote needs the PROXY_MODE_KEY header."""
+            if self.client_address[0] in ("127.0.0.1", "::1"):
+                return True
+            return bool(_MODE_KEY) and self.headers.get("X-PROXY-KEY") == _MODE_KEY
+
         def do_GET(self):
             if self.path in ("/api/state", "/api/state/"):
                 return self._json(api_state())
@@ -343,9 +355,27 @@ def _serve(path, board=None):
                 return self._json({"status": "off"})
             if self.path in ("/api/trades", "/api/trades/"):
                 return self._json({"trades": tracker.get_trades()[-100:]})
+            if self.path in ("/api/mode", "/api/mode/"):
+                return self._json({"mode": get_mode(), "key_required": bool(_MODE_KEY)})
             if self.path in ("/", "/index.html"):
                 self.path = "/" + os.path.basename(path)
             return super().do_GET()
+
+        def do_POST(self):
+            if self.path.startswith("/api/mode"):
+                if not self._mode_allowed():
+                    return self._json({"error": "not authorized - set PROXY_MODE_KEY to toggle mode remotely"}, 403)
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    payload = _json.loads(self.rfile.read(length) or b"{}")
+                    mode = (payload.get("mode") or "").lower()
+                    if mode not in ("paper", "live"):
+                        return self._json({"error": "mode must be paper|live"}, 400)
+                    set_mode(mode)
+                    return self._json({"mode": mode})
+                except Exception as exc:
+                    return self._json({"error": str(exc)}, 400)
+            return self._json({"error": "unknown endpoint"}, 404)
 
     # 0.0.0.0 so Railway's healthcheck + public routing can reach the
     # server from outside the container (127.0.0.1 would refuse them)

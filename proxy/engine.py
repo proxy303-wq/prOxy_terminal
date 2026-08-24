@@ -38,7 +38,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 class PaperEngine:
     def __init__(self, cfg, broker=None, tracker=None, notifier=None,
-                 trade_date=None, max_history=160):
+                 trade_date=None, max_history=160, capital=None):
         self.cfg = cfg
         self.broker = broker
         self.tracker = tracker if tracker is not None else Tracker(cfg)
@@ -47,6 +47,10 @@ class PaperEngine:
         self.history = []            # list of bar dicts (all days)
         self.max_history = max_history
         self.state = self.tracker.load_state()
+        # LIVE mode: size/limits from the Dhan account balance, not the
+        # paper 5,00,000.  Paper mode keeps cfg.CAPITAL.
+        if capital is not None:
+            self.state["capital"] = float(capital)
         if self.state.get("date") != str(self.trade_date):
             # new day: reset daily counters
             self.state = {

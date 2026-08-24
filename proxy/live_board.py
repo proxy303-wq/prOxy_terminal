@@ -30,7 +30,8 @@ from .config import REPORT_DIR
 IST = ZoneInfo("Asia/Kolkata")
 
 CHAIN_REFRESH_SECONDS = 30          # REST option-chain refresh cadence
-NIFTY_INDEX_ID = 13                 # Dhan security id for NIFTY 50 index
+NIFTY_INDEX_ID = 13                 # Dhan security id for NIFTY 50 INDEX (WS feed)
+NIFTY_FNO_ID = 26000                # Dhan security id for NIFTY FNO (option chain/expiry)
 NIFTY_CHAIN_SEGMENT = "NSE_FNO"     # options segment
 
 
@@ -84,6 +85,11 @@ class LiveBoard:
         t1.start()
         t2.start()
         self.status = "live"
+        # immediate first fetch: live spot + chain from the REST option chain
+        try:
+            self._refresh_chain()
+        except Exception as exc:
+            self.chain_error = str(exc)
 
     # ----------------------------------------------------------
     # loops
@@ -93,6 +99,7 @@ class LiveBoard:
         """Drain index ticks: update spot + build the last bar."""
         if self._feed is None:
             return
+        _prev_tick = None
         while not self._stop.is_set():
             try:
                 bar = self._feed._next_5m_bar(block=False)
@@ -108,7 +115,10 @@ class LiveBoard:
                 if self.prev_close is None:
                     self.prev_close = self.spot
                 self.day_change_pct = (self.spot - self.prev_close) / self.prev_close * 100.0 if self.prev_close else 0.0
-                self.direction = "BULLISH" if bar["close"] >= bar["open"] else "BEARISH"
+                # tick-level direction (snappy, no need to wait for a 5m bar)
+                if _prev_tick is not None:
+                    self.direction = "BULLISH" if bar["close"] >= _prev_tick else "BEARISH"
+                _prev_tick = bar["close"]
 
     def _chain_loop(self):
         """Refresh the real option chain from Dhan every N seconds."""
@@ -129,11 +139,28 @@ class LiveBoard:
         if not expiry_str:
             self.chain_error = "no expiry from Dhan"
             return
-        under_id = int(os.environ.get("DHAN_NIFTY_SECURITY_ID", NIFTY_INDEX_ID))
+        under_id = int(os.environ.get("DHAN_NIFTY_FNO_ID", NIFTY_FNO_ID))
         res = self._broker._api.option_chain(under_id, NIFTY_CHAIN_SEGMENT, expiry_str)
-        data = res.get("data") or []
-        if not data and isinstance(res, dict):
-            data = res.get("optionChain") or res.get("strikes") or []
+        # response shape: data -> { data: { last_price, oc: {strike: {ce: {...}, pe: {...}}} } }
+        inner = (res.get("data") or {}).get("data") if isinstance(res.get("data"), dict) else {}
+        oc = inner.get("oc") or {}
+        spot_from_chain = inner.get("last_price")
+        if spot_from_chain is not None:
+            with self._lock:
+                if self.spot is None:
+                    self.spot = float(spot_from_chain)
+                    self.prev_close = self.prev_close or self.spot
+        data = []
+        for strike_str, leg in oc.items():
+            if not isinstance(leg, dict):
+                continue
+            item = {"strike_price": float(strike_str)}
+            for side in ("ce", "pe"):
+                row = leg.get(side) or {}
+                item[side + "_ltp"] = row.get("last_price") or 0
+                item[side + "_oi"] = row.get("oi") or 0
+                item[side + "_iv"] = row.get("implied_volatility") or 0
+            data.append(item)
         rows = []
         step = self.cfg.OPTION_STRIKE_STEP
         if self.spot is not None:
@@ -154,12 +181,12 @@ class LiveBoard:
                 continue
             rows.append({
                 "strike": float(strike),
-                "ce_ltp": item.get("call_ltp") or item.get("callLtp") or item.get("call") or 0,
-                "ce_oi": item.get("call_oi") or item.get("callOi") or 0,
-                "ce_iv": item.get("call_iv") or item.get("callIv") or 0,
-                "pe_ltp": item.get("put_ltp") or item.get("putLtp") or item.get("put") or 0,
-                "pe_oi": item.get("put_oi") or item.get("putOi") or 0,
-                "pe_iv": item.get("put_iv") or item.get("putIv") or 0,
+                "ce_ltp": item.get("ce_ltp") or 0,
+                "ce_oi": item.get("ce_oi") or 0,
+                "ce_iv": item.get("ce_iv") or 0,
+                "pe_ltp": item.get("pe_ltp") or 0,
+                "pe_oi": item.get("pe_oi") or 0,
+                "pe_iv": item.get("pe_iv") or 0,
             })
         rows.sort(key=lambda r: r["strike"])
         with self._lock:

@@ -21,6 +21,7 @@ Credentials come from DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN env vars.
 NIFTY 50 index security id on Dhan = 13 (BANKNIFTY = 25).
 """
 
+import json
 import os
 import queue
 import threading
@@ -91,20 +92,22 @@ class DhanLiveFeed:
                 self.live_ltps[str(sym)] = float(ltp)
 
     def connect(self):
-        """Start the websocket in a background thread."""
-        from dhanhq import DhanContext, MarketFeed
-        ctx = DhanContext(self.client_id, self.access_token)
-        self._feed = MarketFeed(
-            ctx,
-            [(self.exchange_segment, self.security_id, 17)],   # 17 = Quote mode (LTP/OHLC/vol/OI)
-            version="v2",
-            on_connect=lambda *a: None,
-            on_ticks=self._on_ticks,
-            on_error=lambda *a: self._ticks.put({"error": str(a[-1]) if a else "ws error"}),
-            on_close=lambda *a: None,
-        )
-        self._thread = threading.Thread(target=self._feed.run_forever, daemon=True)
-        self._thread.start()
+        """Start the websocket in a background thread (raw JSON-sub protocol)."""
+        # the index segment string used by Dhan's feed for IDX_I
+        seg_name = {0: "IDX_I", 1: "NSE_EQ", 2: "NSE_FNO"}.get(self.exchange_segment, "IDX_I")
+        instruments = [(seg_name, self.security_id)]
+        self._feed = RawDhanFeed(self.client_id, self.access_token, instruments,
+                                 on_tick=self._on_raw_tick, notify=print)
+        self._feed.start()
+        self._thread = self._feed._thread
+
+    def _on_raw_tick(self, sid, fields):
+        """Raw-feed callback: enqueue a tick for the bar builder."""
+        tick = dict(fields)
+        tick["security_id"] = sid
+        if tick.get("ltp") is not None:
+            self.live_ltps[sid] = float(tick["ltp"])
+        self._ticks.put(tick)
 
     def subscribe_option(self, symbol):
         """Stream LTP for an option symbol (e.g. 'NIFTY 27AUG 24900 CE')."""
@@ -187,3 +190,106 @@ class DhanLiveFeed:
 
     def fast(self):
         return False
+# ------------------------------------------------------------
+# Raw Dhan WebSocket client (port of dhan-auto-trader/src/market/feed.py)
+# ------------------------------------------------------------
+# dhanhq's MarketFeed packs security ids as strings which Dhan's feed
+# rejects; the working protocol is a JSON subscription
+# ({"RequestCode": 17, "InstrumentList": [{"ExchangeSegment", "SecurityId"}]})
+# followed by little-endian binary packets.
+
+import asyncio
+import struct
+
+_FEED_WS_URL = "wss://api-feed.dhan.co"
+_TICKER, _INDEX, _QUOTE, _OI, _PREV_CLOSE, _MARKET_STATUS, _FULL, _DISCONNECT = 2, 1, 4, 5, 6, 7, 8, 50
+_FEED_HEADER = struct.Struct("<BhBi")
+_FEED_QUOTE = struct.Struct("<fhifiiiffff")
+
+
+def _parse_packet(raw):
+    if raw is None or len(raw) < 8:
+        return None
+    code, _length, seg, sid = _FEED_HEADER.unpack_from(raw, 0)
+    payload = raw[8:]
+    if code == _TICKER and len(payload) >= 8:
+        ltp, ltt = struct.unpack("<fi", payload[:8])
+        return (code, seg, sid, {"ltp": ltp, "ltt": ltt})
+    if code == _QUOTE and len(payload) >= _FEED_QUOTE.size:
+        (ltp, ltq, ltt, atp, volume, sell_qty, buy_qty, open_, close_, high_, low_) = _FEED_QUOTE.unpack(payload[:_FEED_QUOTE.size])
+        return (code, seg, sid, {"ltp": ltp, "volume": volume, "open": open_,
+                                 "close": close_, "high": high_, "low": low_})
+    if code == _OI and len(payload) >= 4:
+        return (code, seg, sid, {"oi": struct.unpack("<i", payload[:4])[0]})
+    if code == _PREV_CLOSE and len(payload) >= 8:
+        prev_close, prev_oi = struct.unpack("<fi", payload[:8])
+        return (code, seg, sid, {"prev_close": prev_close, "prev_oi": prev_oi})
+    if code == _DISCONNECT:
+        return (code, seg, sid, {"reason": "server disconnect"})
+    return None
+
+
+class RawDhanFeed:
+    """Background websocket: connects, subscribes (JSON), streams parsed ticks."""
+
+    def __init__(self, client_id, access_token, instruments, on_tick, notify=print):
+        self.client_id = client_id
+        self.access_token = access_token
+        self.instruments = instruments      # [(segment_str, security_id_int), ...]
+        self.on_tick = on_tick              # callable(sid_str, fields_dict)
+        self.notify = notify
+        self._thread = None
+        self._loop = None
+        self._stop = asyncio.Event()
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def _run(self):
+        import websockets
+        try:
+            self._loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._loop)
+            self._loop.run_until_complete(self._stream())
+        except Exception as exc:
+            self.notify(f"Dhan WS error: {exc}")
+
+    async def _stream(self):
+        import websockets
+        url = (f"{_FEED_WS_URL}?version=2&token={self.access_token}"
+               f"&clientId={self.client_id}&authType=2")
+        async with websockets.connect(url, ping_interval=None, max_size=None) as ws:
+            self.notify("Dhan feed ws connected")
+            try:
+                await self._subscribe(ws)
+                async for raw in ws:
+                    packet = _parse_packet(raw)
+                    if packet is None:
+                        continue
+                    code, _seg, sid, fields = packet
+                    if code == _DISCONNECT:
+                        self.notify("Dhan feed disconnect packet")
+                        break
+                    if fields:
+                        self.on_tick(str(sid), fields)
+            finally:
+                self.notify("Dhan feed ws closed")
+
+    async def _subscribe(self, ws):
+        for i in range(0, len(self.instruments), 100):
+            chunk = self.instruments[i:i + 100]
+            msg = {
+                "RequestCode": 17,   # Quote mode: LTP + OHLC + volume (+ OI)
+                "InstrumentCount": len(chunk),
+                # SecurityId MUST be a STRING per the DhanHQ API doc
+                "InstrumentList": [{"ExchangeSegment": seg, "SecurityId": str(sid)} for seg, sid in chunk],
+            }
+            await ws.send(json.dumps(msg))
+
+    def close(self):
+        self._stop.set()
+        # graceful: let the async-for exit naturally; never stop the loop
+        # from another thread (that raises "Event loop is closed" on the
+        # connection cleanup)

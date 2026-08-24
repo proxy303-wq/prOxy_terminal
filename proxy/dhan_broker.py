@@ -19,6 +19,7 @@ import re
 import threading
 
 from .broker import Broker
+from .dhan_live import NIFTY_INDEX_ID
 
 
 def _load_athena_env():
@@ -54,15 +55,20 @@ class DhanBroker(Broker):
         creds = _load_athena_env()
         self.client_id = client_id or creds["client_id"]
         api_key, api_secret = load_api_keypair()
-        env_token = access_token or creds["access_token"] or load_saved_token()
+        # pick the FIRST VALID token: explicit arg > .env > saved token file
+        candidates = [access_token, creds["access_token"], load_saved_token()]
+        env_token = next((t for t in candidates if t and not token_is_expired(t)), None)
+        if env_token is None:
+            env_token = next((t for t in candidates if t), None)  # first present, even if expired
         if not self.client_id:
             raise RuntimeError("DHAN_CLIENT_ID missing (C:\Athena_X\.env)")
         # long-lived API key (12-month credentials) replaces the expiring token:
-        # valid token -> renew -> consent flow, in that order
+        # valid token -> renew -> TOTP (automatic) -> consent flow, in that order
         self.token, self.token_source = resolve_token(
             self.client_id, access_token=env_token or "",
             api_key=api_key, api_secret=api_secret,
-            interactive=interactive, notify=notify)
+            interactive=interactive, notify=notify,
+            pin=os.environ.get("DHAN_PIN"), totp_secret=os.environ.get("DHAN_TOTP_SECRET"))
         if not self.token:
             raise RuntimeError("no usable Dhan access token (API key/secret present?)")
         from dhanhq import DhanContext, dhanhq
@@ -129,9 +135,51 @@ class DhanBroker(Broker):
                 from .dhan_auth import save_token
                 save_token(renewed)
 
+
+    # ----------------------------------------------------------
+    # expiry resolution (from Dhan's own expiry list - the calendar
+    # can disagree with the real expiry on holiday weeks)
+    # ----------------------------------------------------------
+
+    def resolve_expiry(self, index=0):
+        """Nearest Dhan expiry date string (YYYY-MM-DD), cached."""
+        if not hasattr(self, "_expiries") or not self._expiries:
+            with self._lock:
+                res = self._api.expiry_list(NIFTY_INDEX_ID, "NSE_FNO")
+            data = res.get("data") or {}
+            rows = data.get("data") if isinstance(data, dict) else data
+            self._expiries = rows if isinstance(rows, list) else []
+        if not self._expiries:
+            return None
+        return self._expiries[min(index, len(self._expiries) - 1)]
+
+    def normalize_symbol(self, symbol):
+        """
+        Ensure the option symbol carries Dhan's REAL expiry.  The engine
+        builds 'NIFTY 27AUG 25600 CE' from the calendar; Dhan may list
+        '25AUG' instead (holiday adjustments).  Returns a symbol that
+        resolves, or the original if no mapping is found.
+        """
+        try:
+            real = self.resolve_expiry(0)
+            if not real:
+                return symbol
+            from datetime import datetime as _dt
+            real_token = _dt.strptime(real, "%Y-%m-%d").strftime("%d%b").upper()
+            parts = symbol.split()
+            if len(parts) >= 3:
+                parts[1] = real_token
+                candidate = " ".join(parts)
+                if self.resolve_security_id(candidate):
+                    return candidate
+        except Exception:
+            pass
+        return symbol
+
     def place_order(self, side, instrument, quantity, price=None, order_type="MARKET", tag="PrOxy"):
         """side: 'BUY'|'SELL'.  Returns the broker response dict."""
         self._ensure_valid_token()
+        instrument = self.normalize_symbol(instrument)
         security_id = self.resolve_security_id(instrument)
         if not security_id:
             return {"status": "REJECTED", "reason": f"security id not found for {instrument}"}

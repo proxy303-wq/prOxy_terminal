@@ -120,27 +120,37 @@ class LiveBoard:
             time.sleep(CHAIN_REFRESH_SECONDS)
 
     def _refresh_chain(self):
-        if self._broker is None or self.spot is None:
+        if self._broker is None:
             return
-        from .options import expiry_for_bucket
-        exp = expiry_for_bucket(getattr(self.cfg, "OPTION_EXPIRY_BUCKET", "current_week"))
-        expiry_str = exp["date"].strftime("%Y-%m-%d")
+        # the REST option chain works pre-market too (stale LTPs); the
+        # expiry comes from Dhan's own expiry_list (the calendar can
+        # disagree on holiday weeks)
+        expiry_str = self._broker.resolve_expiry(0)
+        if not expiry_str:
+            self.chain_error = "no expiry from Dhan"
+            return
         under_id = int(os.environ.get("DHAN_NIFTY_SECURITY_ID", NIFTY_INDEX_ID))
         res = self._broker._api.option_chain(under_id, NIFTY_CHAIN_SEGMENT, expiry_str)
         data = res.get("data") or []
         if not data and isinstance(res, dict):
             data = res.get("optionChain") or res.get("strikes") or []
         rows = []
-        atm = round(self.spot / self.cfg.OPTION_STRIKE_STEP) * self.cfg.OPTION_STRIKE_STEP
         step = self.cfg.OPTION_STRIKE_STEP
-        wanted = set()
-        for k in range(3, -4, -1):
-            wanted.add(atm + k * step)
+        if self.spot is not None:
+            # pre-market (no ticks yet): keep every strike Dhan returned
+            atm = round(self.spot / step) * step
+            wanted = set()
+            for k in range(3, -4, -1):
+                wanted.add(atm + k * step)
+        else:
+            wanted = None   # market closed: show the whole returned chain
         for item in data:
             if not isinstance(item, dict):
                 continue
             strike = item.get("strike_price") or item.get("strike") or item.get("strikePrice")
-            if strike is None or float(strike) not in wanted:
+            if strike is None:
+                continue
+            if wanted is not None and float(strike) not in wanted:
                 continue
             rows.append({
                 "strike": float(strike),
@@ -156,6 +166,31 @@ class LiveBoard:
             self.chain = rows
             self.chain_updated = datetime.now(IST)
             self.chain_error = None
+        if not rows:
+            self._fallback_model_chain()
+
+    def _fallback_model_chain(self):
+        """Pre-market / REST-unavailable: show the modelled Black-76 chain
+        anchored at the last known spot (or the first chain strike)."""
+        try:
+            from .options import build_option_chain
+            spot = self.spot
+            if spot is None and self.chain:
+                spot = self.chain[0]["strike"] + self.cfg.OPTION_STRIKE_STEP
+            if spot is None:
+                spot = self.cfg.SYNTHETIC_SPOT
+            chain = build_option_chain(spot, self.cfg)
+            with self._lock:
+                self.chain = [{
+                    "strike": r["strike"], "ce_ltp": None, "ce_oi": None,
+                    "ce_iv": None, "pe_ltp": None, "pe_oi": None, "pe_iv": None,
+                    "model_premium": r["premium"], "model_delta": r["delta"],
+                } for r in chain["rows"] if r["option_type"] == "CE"]
+                self.chain_updated = datetime.now(IST)
+                if not self.chain_error:
+                    self.chain_error = "Dhan chain REST unavailable (market hours only) - showing modelled chain"
+        except Exception:
+            pass
 
     # ----------------------------------------------------------
     # snapshot for the API

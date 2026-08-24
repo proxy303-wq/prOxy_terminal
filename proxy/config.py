@@ -212,7 +212,8 @@ SELECT_BY_DELTA = False         # True = auto-pick the best delta-band
 LOTS_CONSERVATIVE = (1, 2)      # 500-1,000 INR daily profit potential
 LOTS_BALANCED     = (3, 5)      # 1,500-2,500 INR daily profit potential
 LOTS_TARGET       = (10, 10)    # full 5,000 INR daily target (higher risk)
-DEFAULT_LOTS      = 7           # what the terminal actually trades first (user setting)
+DEFAULT_LOTS      = 5           # quality sizing: 2-3 quality trades/day, same ~93% win rate
+                                        # (7 lots = churnier; 10+ = full daily target)
 
 # Option liquidity gates (paper validation)
 MIN_OPTION_VOLUME = 100

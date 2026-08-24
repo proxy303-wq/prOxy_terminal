@@ -188,8 +188,75 @@ def consent_refresh(api_key, secret, client_id=None, ask=input, notify=print):
     return token
 
 
+
+
+# ------------------------------------------------------------
+# TOTP (RFC 6238) - fully automatic 24h tokens, no browser needed
+# ------------------------------------------------------------
+# Set DHAN_PIN (your Dhan trading PIN) + DHAN_TOTP_SECRET (base32 secret
+# from the authenticator app QR) to skip the consent flow entirely:
+# the terminal generates + renews the access token itself.
+
+_B32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
+
+
+def _b32decode(s):
+    s = (s or "").upper().strip().replace(" ", "").replace("-", "")
+    bits = 0
+    value = 0
+    out = bytearray()
+    for ch in s:
+        idx = _B32_ALPHABET.find(ch)
+        if idx < 0:
+            continue
+        value = (value << 5) | idx
+        bits += 5
+        if bits >= 8:
+            bits -= 8
+            out.append((value >> bits) & 0xFF)
+    return bytes(out)
+
+
+def totp(secret, for_time=None, digits=6, period=30):
+    """RFC 6238 TOTP code for a base32 secret (authenticator-app format)."""
+    import hashlib
+    import hmac
+    import struct
+    if for_time is None:
+        for_time = time.time()
+    counter = int(for_time // period)
+    key = _b32decode(secret)
+    msg = struct.pack(">Q", counter)
+    digest = hmac.new(key, msg, hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    code = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+    return str(code % (10 ** digits)).zfill(digits)
+
+
+def generate_access_token(client_id, pin, totp_code):
+    """POST /app/generateAccessToken - programmatic 24h token."""
+    return _http_json(f"{AUTH_BASE}/app/generateAccessToken", method="POST",
+                      params={"dhanClientId": client_id, "pin": pin, "totp": totp_code})
+
+
+def auto_token_from_totp(client_id, pin, totp_secret, notify=print):
+    """Generate a fresh access token from the TOTP secret + trading PIN."""
+    try:
+        code = totp(totp_secret)
+        data = generate_access_token(client_id, pin, code)
+        token = data.get("accessToken", "")
+        if token:
+            save_token(token)
+            notify("access token generated automatically via TOTP (no browser needed)")
+            return token
+        notify(f"TOTP token generation failed: {data}")
+    except Exception as exc:
+        notify(f"TOTP token generation failed: {exc}")
+    return None
+
+
 def resolve_token(client_id, access_token="", api_key=None, api_secret=None,
-                  interactive=True, notify=print):
+                  interactive=True, notify=print, pin=None, totp_secret=None):
     """
     Best-effort token resolution (the replacement for the expiring token):
       1. current access token (from env / saved file) if not expired
@@ -205,6 +272,11 @@ def resolve_token(client_id, access_token="", api_key=None, api_secret=None,
             save_token(renewed)
             return renewed, "renewed via RenewToken"
         notify("access token expired and could not be renewed.")
+    if pin and totp_secret:
+        tok = auto_token_from_totp(client_id, pin, totp_secret, notify=notify)
+        if tok and not token_is_expired(tok):
+            return tok, "TOTP auto-generated"
+        return None, "TOTP token generation failed"
     if api_key and api_secret:
         if interactive:
             token = consent_refresh(api_key, api_secret, client_id=client_id, notify=notify)

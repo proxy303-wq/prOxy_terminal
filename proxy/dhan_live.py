@@ -49,8 +49,10 @@ def dhan_available():
 class DhanLiveFeed:
     """Yields 5-minute NIFTY bars built from Dhan websocket ticks."""
 
+    _SEG_MAP = {"IDX": 0, "NSE": 1, "NSE_FNO": 2, "BSE": 4, "MCX": 5}
+
     def __init__(self, client_id=None, access_token=None, security_id=NIFTY_INDEX_ID,
-                 exchange_segment="IDX", bar_seconds=300, timeout=30):
+                 exchange_segment=0, bar_seconds=300, timeout=30):
         if not dhan_available():
             raise DhanUnavailable("dhanhq SDK not installed - pip install dhanhq")
         self.client_id = client_id or os.getenv("DHAN_CLIENT_ID")
@@ -58,6 +60,9 @@ class DhanLiveFeed:
         if not self.client_id or not self.access_token:
             raise DhanUnavailable("DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN env vars missing")
         self.security_id = security_id
+        # dhanhq wants NUMERIC exchange codes (IDX=0); accept string too
+        if isinstance(exchange_segment, str):
+            exchange_segment = self._SEG_MAP.get(exchange_segment.upper(), 0)
         self.exchange_segment = exchange_segment
         self.bar_seconds = bar_seconds
         self.timeout = timeout
@@ -91,18 +96,15 @@ class DhanLiveFeed:
         ctx = DhanContext(self.client_id, self.access_token)
         self._feed = MarketFeed(
             ctx,
-            [(self.exchange_segment, self.security_id)],
+            [(self.exchange_segment, self.security_id, 17)],   # 17 = Quote mode (LTP/OHLC/vol/OI)
             version="v2",
-            on_connect=self._on_connect,
+            on_connect=lambda *a: None,
             on_ticks=self._on_ticks,
-            on_error=lambda err: self._ticks.put({"error": str(err)}),
-            on_close=lambda: None,
+            on_error=lambda *a: self._ticks.put({"error": str(a[-1]) if a else "ws error"}),
+            on_close=lambda *a: None,
         )
         self._thread = threading.Thread(target=self._feed.run_forever, daemon=True)
         self._thread.start()
-
-    def _on_connect(self):
-        pass
 
     def subscribe_option(self, symbol):
         """Stream LTP for an option symbol (e.g. 'NIFTY 27AUG 24900 CE')."""

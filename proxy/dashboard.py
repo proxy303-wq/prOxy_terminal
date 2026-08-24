@@ -3,18 +3,14 @@ PrOxy Trading Terminal - Dashboard Builder
 ==========================================
 
 Builds a single self-contained HTML dashboard (dark terminal theme,
-pure canvas charts - no CDN, works offline).  Data is embedded as JSON
-at build time:
+pure canvas charts - no CDN, works offline).  Layout is a simple
+TAB-BAR navigation (like the Athenscreed page-radio style):
 
-    KPI cards (P&L, win rate, monthly progress vs 62,500 INR)
-    Candlestick chart of recent bars
-    Equity curve
-    Trade log
-    Rules / plan / lot-size panels
+    Dashboard | Live Market | Chain & Expiries | Backtest | Sweep | Trades | System
 
-Usage:
-    from proxy.dashboard import build_dashboard
-    build_dashboard(snapshot, bars=df)   -> writes reports/dashboard.html
+Data is embedded as JSON at build time; the Live Market tab polls
+/api/board (Dhan WebSocket + real option chain) and /api/state every
+5s when served with the live board enabled.
 """
 
 import html
@@ -51,7 +47,7 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     monthly_pnl = state.get("realized_pnl_month", 0.0)
     monthly_progress = (monthly_pnl / monthly_target * 100.0) if monthly_target else 0.0
 
-    # optional backtest panel values
+    # backtest panel values
     if backtest_report:
         bt_trades = backtest_report.get("trades", 0)
         bt_winrate = backtest_report.get("win_rate", 0.0)
@@ -59,92 +55,46 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
         bt_pf = backtest_report.get("profit_factor", "-")
         bt_dd = backtest_report.get("max_drawdown_pct", 0.0)
         bt_period = backtest_report.get("period", "-") + " | exits " + backtest_report.get("exit_resolution", "5m")
+        daily = backtest_report.get("daily_pnl", {})
+        daily_rows = "".join(
+            f"<tr><td>{html.escape(str(k))}</td><td class=\"{'pos' if v >= 0 else 'neg'}\">{v:+,.2f}</td></tr>"
+            for k, v in list(daily.items())[-30:])
     else:
         bt_trades, bt_winrate, bt_net, bt_pf, bt_dd, bt_period = 0, 0.0, 0.0, "-", 0.0, "-"
+        daily_rows = '<tr><td colspan="2" class="muted">Run a backtest first</td></tr>'
 
-    # stop-loss sweep panel
-    sweep_panel_html = ""
+    # sweep table
     if sweep:
-        rows = "".join(
+        sweep_rows = "".join(
             f"<tr><td>{r['stop_pct']*100:.2f}%</td><td>{r['target_pct']*100:.2f}%</td>"
             f"<td>{'on' if r['lock'] else 'off'}</td><td>{r['trades']}</td>"
             f"<td>{r['win_rate']:.1f}%</td>"
             f"<td class=\"{'pos' if r['net_pnl'] > 0 else 'neg'}\">{r['net_pnl']:+,.0f}</td>"
             f"<td>{r['pf'] if r['pf'] is not None else '-'}</td></tr>"
-            for r in sweep
-        )
-        sweep_panel_html = (
-            '<div class="grid" style="margin-top:14px">'
-            '<div class="panel"><h2>Stop-loss sweep - last 40 trading days (1m exits)</h2>'
-            '<div style="overflow-x:auto"><table>'
-            '<tr><th>Stop</th><th>Target</th><th>Lock</th><th>Trades</th><th>Win%</th><th>Net INR</th><th>PF</th></tr>'
-            + rows +
-            '</table></div>'
-            '<div class="small muted" style="margin-top:6px">Lock-profit ON is the system default and '
-            'is what makes the plan profitable; widening the stop adds margin for winners to run.</div>'
-            '</div></div>'
-        )
+            for r in sweep)
+    else:
+        sweep_rows = '<tr><td colspan="7" class="muted">Run the sweep first</td></tr>'
 
-    # option-chain panel (ATM/ITM, time-decay view)
-    chain_panel_html = ""
+    # chain + expiries tables
+    chain_rows = ""
     if chain and chain.get("rows"):
         best = chain.get("best", {})
         best_key = (best.get("strike"), best.get("option_type"))
-        trs = ""
         for row in sorted(chain["rows"], key=lambda x: (x["strike"], x["option_type"])):
-            mark = "<b>&#9733;</b> " if (row["strike"], row["option_type"]) == best_key else ""
-            trs += (f"<tr><td>{mark}{row['strike']:.0f}</td><td>{row['option_type']}</td>"
-                    f"<td>{row['premium']:.2f}</td><td>{row['delta']:+.2f}</td>"
-                    f"<td>{abs(row['theta_pct_day']):.2f}%</td><td>{row['moneyness']}</td></tr>")
-        # expiries rows (time decay by expiry)
-        exp_rows = ""
-        for e in (chain.get("expiries") or []):
-            mark = "<b>&#9654;</b>" if e.get("bucket") == getattr(cfg_module, "OPTION_EXPIRY_BUCKET", "current_week") else ""
-            exp_rows += (f"<tr><td>{mark} {e['bucket']}</td><td>{e['date']}</td><td>{e['dte']}d</td>"
-                         f"<td>{e['atm_premium']:.2f}</td><td>{e['atm_theta_pct']:.2f}%</td></tr>")
-        chain_panel_html = f'''
-  <div class="grid" style="margin-top:14px">
-    <div class="panel">
-      <h2>Expiries - time decay by expiry (&#9654; = trade default)</h2>
-      <div style="overflow-x:auto">
-      <table>
-        <tr><th>Bucket</th><th>Date</th><th>DTE</th><th>ATM prem</th><th>ATM theta %/day</th></tr>
-        {exp_rows}
-      </table>
-      </div>
-      <div class="small muted" style="margin-top:6px">
-        Shorter expiry = higher theta tax.  Trade a longer expiry to cut
-        decay, at the cost of a higher premium per lot.
-      </div>
-    </div>
-  </div>
+            mark = "&#9733;" if (row["strike"], row["option_type"]) == best_key else ""
+            chain_rows += (f"<tr><td>{mark} {row['strike']:.0f}</td><td>{row['option_type']}</td>"
+                           f"<td>{row['premium']:.2f}</td><td>{row['delta']:+.2f}</td>"
+                           f"<td>{abs(row['theta_pct_day']):.2f}%</td><td>{row['moneyness']}</td></tr>")
+    exp_rows = ""
+    for e in (chain.get("expiries") or []):
+        mark = "&#9654;" if e.get("bucket") == getattr(cfg_module, "OPTION_EXPIRY_BUCKET", "current_week") else ""
+        exp_rows += (f"<tr><td>{mark} {e['bucket']}</td><td>{e['date']}</td><td>{e['dte']}d</td>"
+                     f"<td>{e['atm_premium']:.2f}</td><td>{e['atm_theta_pct']:.2f}%</td></tr>")
 
-  <div class="grid" style="margin-top:14px">
-    <div class="panel">
-      <h2>Option chain - ATM/ITM (lowest time-decay &#9733;)</h2>
-      <div style="overflow-x:auto">
-      <table>
-        <tr><th>Strike</th><th>Type</th><th>Premium</th><th>Delta</th><th>Theta %/day</th><th>Moneyness</th></tr>
-        {trs}
-      </table>
-      </div>
-      <div class="small muted" style="margin-top:6px">
-        Recommended long strike: {best.get('strike', 0):.0f} {best.get('option_type', 'CE')}
-        (theta tax {abs(best.get('theta_pct_day', 0)):.2f}%/day, delta {best.get('delta', 0):.2f}) -
-        ITM strikes decay slower than ATM.  Toggle SELECT_BY_DELTA in config.py to auto-select.
-      </div>
-    </div>
-  </div>'''
-
-    bars_data = []
-    if bars is not None and len(bars) > 0:
-        for _, row in bars.tail(120).iterrows():
-            t = str(row.get("date", row.name)) if "date" in bars.columns else str(row.name)
-            bars_data.append([t, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])])
-
+    # trade log
     trade_rows = "".join(
         f"""<tr>
-          <td>{html.escape(str(t.get('entry_time', ''))[:16])}</td>
+          <td>{html.escape(str(t.get('entry_time', '')))[:16]}</td>
           <td>{html.escape(str(t.get('instrument', '')))}</td>
           <td>{html.escape(str(t.get('direction', '')))}</td>
           <td>{t.get('lots', '')}</td>
@@ -152,12 +102,20 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
           <td>{t.get('exit_premium', '')}</td>
           <td>{html.escape(str(t.get('exit_reason', '')))}</td>
           <td>{html.escape(str(t.get('setup_type', '')))}</td>
-          <td>{t.get('confidence', '')}%</td>
           <td class="{'pos' if (t.get('pnl') or 0) > 0 else 'neg'}">{t.get('pnl', 0):+,.2f}</td>
-        </tr>""" for t in trades[:25])
+        </tr>""" for t in trades[:40])
+    if not trade_rows:
+        trade_rows = '<tr><td colspan="9" class="muted">No trades yet</td></tr>'
+
+    bars_data = []
+    if bars is not None and len(bars) > 0:
+        for _, row in bars.tail(120).iterrows():
+            t = str(row.get("date", row.name)) if "date" in bars.columns else str(row.name)
+            bars_data.append([t, float(row["open"]), float(row["high"]), float(row["low"]), float(row["close"])])
 
     equity_points = json.dumps(equity)
     bars_json = json.dumps(bars_data)
+    mode_tag = "LIVE" if getattr(cfg_module, "LIVE_TRADING", False) else "PAPER"
 
     doc = f"""<!DOCTYPE html>
 <html lang="en">
@@ -166,209 +124,239 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
 <title>{html.escape(title)}</title>
 <style>
   :root {{
-    --bg:#0b0f14; --panel:#111822; --panel2:#0f1520; --line:#1e293b;
-    --text:#dbe4f0; --muted:#7a8ba3; --green:#3ddc84; --red:#f85149;
-    --cyan:#56d4dd; --yellow:#e3b341; --purple:#a78bfa;
+    /* Wealthfolio-inspired warm paper palette */
+    --paper:#faf8f1; --card:#fffdf7; --line:#e7e3d4; --line2:#d8d3c0;
+    --text:#2b2a26; --muted:#8b8778; --faint:#b3af9d;
+    --green:#768d21; --green-soft:#eef0dc;
+    --red:#c03e35; --red-soft:#fbe9e5;
+    --cyan:#2f968d; --cyan-soft:#e0efec;
+    --yellow:#be9207; --blue:#4385be;
   }}
   * {{ box-sizing:border-box; margin:0; padding:0; }}
-  body {{ background:var(--bg); color:var(--text);
-         font-family:'Cascadia Code','Consolas','SF Mono',monospace; padding:20px; }}
-  header {{ display:flex; justify-content:space-between; align-items:center;
-            border-bottom:1px solid var(--line); padding-bottom:14px; margin-bottom:18px; }}
-  .brand {{ font-size:22px; font-weight:700; letter-spacing:1px; color:var(--cyan); }}
-  .brand span {{ color:var(--muted); font-weight:400; }}
-  .tagline {{ color:var(--muted); font-size:12px; margin-top:4px; }}
-  .grid {{ display:grid; gap:14px; }}
-  .kpis {{ grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); }}
-  .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; }}
-  .panel h2 {{ font-size:13px; text-transform:uppercase; letter-spacing:1px;
-               color:var(--muted); margin-bottom:12px; }}
-  .kpi-label {{ font-size:11px; color:var(--muted); text-transform:uppercase; }}
-  .kpi-value {{ font-size:24px; font-weight:700; margin:4px 0; }}
-  .kpi-sub {{ font-size:11px; color:var(--muted); }}
-  .cols {{ grid-template-columns:2fr 1fr; }}
-  @media(max-width:900px) {{ .cols {{ grid-template-columns:1fr; }} }}
+  body {{ background:var(--paper); color:var(--text);
+         font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif; }}
+  .wrap {{ max-width:1080px; margin:0 auto; padding:22px 18px 48px; }}
+  header {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+           padding:16px 2px; margin-bottom:8px; }}
+  .brand {{ font-size:19px; font-weight:700; letter-spacing:-0.2px; color:var(--text); }}
+  .brand span {{ color:var(--muted); font-weight:500; }}
+  .tagline {{ color:var(--muted); font-size:12px; margin-top:3px; }}
+  .chip {{ background:var(--card); border:1px solid var(--line); border-radius:999px;
+          padding:3px 12px; font-size:12px; color:var(--text);
+          font-family:'JetBrains Mono','Consolas',monospace; }}
+  nav.tabs {{ display:flex; gap:2px; flex-wrap:wrap; border-bottom:1px solid var(--line);
+             margin-bottom:20px; }}
+  nav.tabs button {{ background:transparent; border:none; border-bottom:2px solid transparent;
+        color:var(--muted); padding:10px 14px; cursor:pointer; font-size:13px;
+        font-family:inherit; margin-bottom:-1px; }}
+  nav.tabs button:hover {{ color:var(--text); }}
+  nav.tabs button.active {{ color:var(--text); font-weight:600; border-bottom-color:var(--green); }}
+  .tabpanel {{ display:none; }}
+  .tabpanel.active {{ display:block; }}
+  .panel {{ background:var(--card); border:1px solid var(--line); border-radius:10px;
+           padding:18px; margin-bottom:14px; }}
+  .panel h2 {{ font-size:11px; text-transform:uppercase; letter-spacing:1.2px;
+              color:var(--muted); margin-bottom:12px; font-weight:600; }}
+  .cols {{ display:grid; grid-template-columns:2fr 1fr; gap:14px; }}
+  @media(max-width:820px) {{ .cols {{ grid-template-columns:1fr; }} }}
+  .kpis {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }}
+  .kpi {{ background:var(--card); border:1px solid var(--line); border-radius:10px; padding:13px 14px; }}
+  .kpi-label {{ font-size:11px; color:var(--muted); }}
+  .kpi-value {{ font-size:20px; font-weight:700; margin-top:3px; letter-spacing:-0.3px;
+               font-family:'JetBrains Mono','Consolas',monospace; }}
+  .kpi-sub {{ font-size:11px; color:var(--faint); }}
   table {{ width:100%; border-collapse:collapse; font-size:12px; }}
-  th,td {{ text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }}
-  th {{ color:var(--muted); font-weight:600; text-transform:uppercase; font-size:10px; }}
+  th,td {{ text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }}
+  th {{ color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:0.5px; }}
+  tr:last-child td {{ border-bottom:none; }}
   .pos {{ color:var(--green); }} .neg {{ color:var(--red); }}
-  .bar-track {{ background:var(--panel2); height:18px; border-radius:9px; overflow:hidden;
-                border:1px solid var(--line); }}
-  .bar-fill {{ height:100%; background:linear-gradient(90deg,var(--green),var(--cyan));
-               width:{min(100, max(0, monthly_progress)):.1f}%; }}
-  .muted {{ color:var(--muted); }} .small {{ font-size:11px; }}
-  canvas {{ width:100%; display:block; background:var(--panel2); border-radius:8px; }}
-  ul {{ padding-left:18px; font-size:12px; line-height:1.8; color:var(--text); }}
-  .chip {{ display:inline-block; background:var(--panel2); border:1px solid var(--line);
-           border-radius:20px; padding:2px 10px; font-size:11px; margin:2px; color:var(--cyan); }}
-  .lot-answer {{ background:var(--panel2); border-left:3px solid var(--cyan);
-                padding:12px; border-radius:6px; font-size:13px; line-height:1.9; }}
+  canvas {{ width:100%; background:var(--card); border-radius:8px; }}
+  .muted {{ color:var(--muted); }} .small {{ font-size:12px; line-height:1.8; }}
+  .bar-track {{ background:var(--green-soft); height:14px; border-radius:7px; overflow:hidden; }}
+  .bar-fill {{ height:100%; background:var(--green);
+              width:{min(100, max(0, monthly_progress)):.1f}%; }}
+  b {{ font-weight:600; }}
 </style>
 </head>
 <body>
+<div class="wrap">
+
 <header>
   <div>
     <div class="brand">PrOxy <span>TRADING TERMINAL</span></div>
-    <div class="tagline">NIFTY options | 5,00,000 capital | 12.5%/month | 62,500 INR/month</div>
+    <div class="tagline">NIFTY options | 5,00,000 capital | 12.5%/mo | 62,500 INR/month | lot {cfg_module.DEFAULT_LOTS}</div>
   </div>
-  <div class="small muted" style="text-align:right">
-    <div class="live-strip">
-      <span class="chip">NIFTY <b id="liveSpot">--</b></span>
-      <span class="chip" id="liveChange">--</span>
-      <span class="chip" id="liveDir">--</span>
-      <span class="chip" id="liveMode">--</span>
-      <span class="chip" id="liveChainState">--</span>
-    </div>
-    <div style="margin-top:6px">Generated {html.escape(str(snapshot.get('generated_at', '')))} IST</div>
+  <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <span class="chip">NIFTY <b id="liveSpot">--</b></span>
+    <span class="chip" id="liveChange">--</span>
+    <span class="chip" id="liveDir">--</span>
+    <span class="chip" id="liveMode">{mode_tag}</span>
   </div>
 </header>
 
-<div class="grid kpis">
-  {_kpi("NET P&L", f"{stats.get('net_pnl', 0):+,.2f} INR", f"{stats.get('trades', 0)} trades", 'var(--green)' if stats.get('net_pnl', 0) >= 0 else 'var(--red)')}
-  {_kpi("WIN RATE", f"{stats.get('win_rate', 0):.1f}%", f"target 75%", 'var(--cyan)')}
-  {_kpi("PROFIT FACTOR", f"{stats.get('profit_factor', 0):.2f}", "gross win / gross loss", 'var(--purple)')}
-  {_kpi("MONTH P&L", f"{monthly_pnl:+,.2f}", f"target {monthly_target:,.0f} INR", 'var(--green)' if monthly_pnl >= 0 else 'var(--red)')}
-  {_kpi("TODAY", f"{state.get('realized_pnl_today', 0):+,.2f}", f"{state.get('trades_today', 0)} trades", 'var(--yellow)')}
-  {_kpi("EQUITY", f"{capital + state.get('realized_pnl_total', 0):,.0f}", "capital + realized", 'var(--cyan)')}
-</div>
+<nav class="tabs">
+  <button class="tab active" data-tab="overview">Dashboard</button>
+  <button class="tab" data-tab="live">Live Market</button>
+  <button class="tab" data-tab="chain">Chain &amp; Expiries</button>
+  <button class="tab" data-tab="backtest">Backtest</button>
+  <button class="tab" data-tab="sweep">Stop-Loss Sweep</button>
+  <button class="tab" data-tab="trades">Trades</button>
+  <button class="tab" data-tab="system">System</button>
+</nav>
 
-<div class="grid" style="margin-top:14px">
-  <div class="panel">
-    <h2>Portfolio analytics</h2>
-    <div class="small">
-      <span class="chip">Sharpe {pfolio.get('sharpe', '-')}</span>
-      <span class="chip">Sortino {pfolio.get('sortino', '-')}</span>
-      <span class="chip">Calmar {pfolio.get('calmar', '-')}</span>
-      <span class="chip">MaxDD {pfolio.get('max_drawdown_pct', 0)}%</span>
-      <span class="chip">Expectancy {pfolio.get('expectancy', '-')} INR</span>
-      <span class="chip">PF {pfolio.get('profit_factor', '-')}</span>
-      <span class="chip">Kelly {pfolio.get('kelly_fraction', '-')}</span>
-      <span class="chip">Avg hold {pfolio.get('avg_hold_minutes', '-')}m</span>
+<!-- ============ Dashboard ============ -->
+<section id="tab-overview" class="tabpanel active">
+  <div class="kpis">
+    {_kpi("EQUITY", f"{capital + state.get('realized_pnl_total', 0):,.0f}", "capital + realized", 'var(--cyan)')}
+    {_kpi("NET P&L", f"{stats.get('net_pnl', 0):+,.0f} INR", f"{stats.get('trades', 0)} trades", 'var(--green)' if stats.get('net_pnl', 0) >= 0 else 'var(--red)')}
+    {_kpi("WIN RATE", f"{stats.get('win_rate', 0):.1f}%", "target 75%", 'var(--cyan)')}
+    {_kpi("TODAY", f"{state.get('realized_pnl_today', 0):+,.0f} INR", f"{state.get('trades_today', 0)} trades", 'var(--yellow)')}
+    {_kpi("MONTH", f"{monthly_pnl:+,.0f} INR", f"of {monthly_target:,.0f} target", 'var(--green)' if monthly_pnl >= 0 else 'var(--red)')}
+    {_kpi("PROFIT FACTOR", f"{stats.get('profit_factor', 0):.2f}", "gross win / loss", 'var(--purple, #a78bfa)')}
+  </div>
+  <div class="panel" style="margin-top:14px">
+    <h2>Monthly progress vs {monthly_target:,.0f} INR target</h2>
+    <div class="bar-track"><div class="bar-fill"></div></div>
+    <div class="small muted" style="margin-top:6px">{monthly_pnl:+,.2f} / {monthly_target:,.0f} ({monthly_progress:.1f}%)</div>
+  </div>
+  <div class="cols">
+    <div class="panel">
+      <h2>Equity curve</h2>
+      <canvas id="equity" height="260"></canvas>
+    </div>
+    <div class="panel">
+      <h2>Portfolio analytics</h2>
+      <div class="small" style="line-height:2">
+        Sharpe <b>{pfolio.get('sharpe', '-')}</b> &nbsp;·&nbsp; Sortino <b>{pfolio.get('sortino', '-')}</b><br>
+        Calmar <b>{pfolio.get('calmar', '-')}</b> &nbsp;·&nbsp; Max DD <b>{pfolio.get('max_drawdown_pct', 0)}%</b><br>
+        Expectancy <b>{pfolio.get('expectancy', '-')} INR</b> &nbsp;·&nbsp; Kelly <b>{pfolio.get('kelly_fraction', '-')}</b><br>
+        Avg hold <b>{pfolio.get('avg_hold_minutes', '-')}m</b> &nbsp;·&nbsp; W/L <b>{state.get('wins', 0)}/{state.get('losses', 0)}</b>
+      </div>
     </div>
   </div>
-</div>
+</section>
 
-<div class="grid" style="margin-top:14px">
+<!-- ============ Live Market ============ -->
+<section id="tab-live" class="tabpanel">
   <div class="panel">
-    <h2>Live option chain (Dhan WebSocket) - refreshes every 5s</h2>
-    <div class="small muted" style="margin-bottom:8px" id="liveChainInfo">Waiting for live data...</div>
+    <h2>Live market (Dhan WebSocket)</h2>
+    <div class="small muted" id="liveInfo">Waiting for live data...</div>
+    <div class="small" id="liveSpotBig" style="font-size:26px;font-weight:700;margin:10px 0">--</div>
     <div style="overflow-x:auto">
       <table id="liveChainTable">
-        <tr><th>Strike</th><th>CE LTP</th><th>CE OI</th><th>PE LTP</th><th>PE OI</th><th>Spot</th></tr>
-        <tr><td colspan="6" class="muted">Connect with: python run_terminal.py dashboard --serve --live-board</td></tr>
+        <tr><th>Strike</th><th>CE LTP</th><th>CE OI</th><th>PE LTP</th><th>PE OI</th></tr>
+        <tr><td colspan="5" class="muted">Serve with --live-board to stream real Dhan data</td></tr>
       </table>
     </div>
   </div>
-</div>
+</section>
 
-{sweep_panel_html}
-
-<div class="grid" style="margin-top:14px">
+<!-- ============ Chain & Expiries ============ -->
+<section id="tab-chain" class="tabpanel">
   <div class="panel">
-    <h2>Historical backtest (NIFTY 5m)</h2>
-    <div class="small">
-      <span class="chip">{bt_trades} trades</span>
-      <span class="chip">win rate {bt_winrate:.1f}%</span>
-      <span class="chip">net P&L {bt_net:+,.0f} INR</span>
-      <span class="chip">profit factor {bt_pf}</span>
-      <span class="chip">max DD {bt_dd}%</span>
-      <span class="chip">{bt_period}</span>
+    <h2>Expiries - time decay by expiry (&#9654; = trade default)</h2>
+    <div style="overflow-x:auto">
+      <table>
+        <tr><th>Bucket</th><th>Date</th><th>DTE</th><th>ATM prem</th><th>ATM theta %/day</th></tr>
+        {exp_rows or '<tr><td colspan="5" class="muted">No expiry data</td></tr>'}
+      </table>
     </div>
   </div>
-</div>
-
-{chain_panel_html}
-
-<div class="grid" style="margin-top:14px">
   <div class="panel">
-    <h2>Monthly progress vs 62,500 INR target</h2>
-    <div class="bar-track"><div class="bar-fill"></div></div>
-    <div class="small muted" style="margin-top:6px">
-      {monthly_pnl:+,.2f} / {monthly_target:,.0f} INR ({monthly_progress:.1f}%)
-      &nbsp;|&nbsp; wins {state.get('wins', 0)} / losses {state.get('losses', 0)}
+    <h2>Option chain ATM/ITM (&#9733; = lowest time-decay)</h2>
+    <div style="overflow-x:auto">
+      <table>
+        <tr><th>Strike</th><th>Type</th><th>Premium</th><th>Delta</th><th>Theta %/day</th><th>Moneyness</th></tr>
+        {chain_rows or '<tr><td colspan="6" class="muted">No chain data</td></tr>'}
+      </table>
+    </div>
+    {f'<div class="small muted" style="margin-top:6px">Recommended long strike: {chain["best"]["strike"]:.0f} {chain["best"]["option_type"]} (theta {abs(chain["best"]["theta_pct_day"]):.2f}%/day)</div>' if chain and chain.get("best") else ''}
+  </div>
+</section>
+
+<!-- ============ Backtest ============ -->
+<section id="tab-backtest" class="tabpanel">
+  <div class="panel">
+    <h2>Historical backtest</h2>
+    <div class="small" style="line-height:2">
+      {bt_period}<br>
+      Trades <b>{bt_trades}</b> &nbsp;·&nbsp; Win rate <b>{bt_winrate:.1f}%</b> &nbsp;·&nbsp;
+      Net P&L <b class="{'pos' if bt_net >= 0 else 'neg'}">{bt_net:+,.0f}</b> &nbsp;·&nbsp;
+      PF <b>{bt_pf}</b> &nbsp;·&nbsp; Max DD <b>{bt_dd}%</b>
+    </div>
+    <div style="overflow-x:auto;margin-top:10px">
+      <table>
+        <tr><th>Day</th><th>P&L</th></tr>
+        {daily_rows}
+      </table>
     </div>
   </div>
-</div>
+</section>
 
-<div class="grid cols" style="margin-top:14px">
+<!-- ============ Stop-Loss Sweep ============ -->
+<section id="tab-sweep" class="tabpanel">
   <div class="panel">
-    <h2>NIFTY 5-minute candles (last 120 bars)</h2>
-    <canvas id="candles" height="320"></canvas>
+    <h2>Stop-loss sweep - last 40 trading days (1m exits)</h2>
+    <div style="overflow-x:auto">
+      <table>
+        <tr><th>Stop</th><th>Target</th><th>Lock</th><th>Trades</th><th>Win%</th><th>Net INR</th><th>PF</th></tr>
+        {sweep_rows}
+      </table>
+    </div>
+    <div class="small muted" style="margin-top:8px">
+      Lock-profit ON is the default and is what makes the plan profitable; widening the stop adds margin for winners to run.
+    </div>
   </div>
-  <div class="panel">
-    <h2>Equity curve</h2>
-    <canvas id="equity" height="320"></canvas>
-  </div>
-</div>
+</section>
 
-<div class="grid cols" style="margin-top:14px">
+<!-- ============ Trades ============ -->
+<section id="tab-trades" class="tabpanel">
   <div class="panel">
     <h2>Trade log</h2>
     <div style="overflow-x:auto">
-    <table>
-      <tr><th>Time</th><th>Instrument</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Setup</th><th>Conf</th><th>P&L</th></tr>
-      {trade_rows or '<tr><td colspan="10" class="muted">No trades yet</td></tr>'}
-    </table>
+      <table>
+        <tr><th>Time</th><th>Instrument</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Setup</th><th>P&L</th></tr>
+        {trade_rows}
+      </table>
     </div>
   </div>
+</section>
+
+<!-- ============ System ============ -->
+<section id="tab-system" class="tabpanel">
   <div class="panel">
-    <h2>The plan</h2>
-    <ul>
-      <li>Capital 5,00,000 INR | NIFTY lot size <b>65</b></li>
-      <li>Profit target <b>+1%</b> | Stop-loss <b>-0.5%</b> (R:R 2:1)</li>
-      <li>Risk per trade <b>0.5%</b> (2,500 INR) | Max daily loss 1% | Max monthly loss 5%</li>
-      <li>Score = Trend*0.30 + Momentum*0.25 + S/R*0.25 + Volume*0.20</li>
-      <li>BUY &gt; +0.15 (CE) | SELL &lt; -0.15 (PE) | WAIT otherwise</li>
-      <li>Price-action / candlestick confirmation + confidence &ge; 70%</li>
-      <li>Trade window 9:15 - 14:45 | force exit 15:15</li>
-    </ul>
-    <h2 style="margin-top:16px">Lot-size answer (NIFTY 65)</h2>
-    <div class="lot-answer">
-      Risk 2,500 / (65 lots &times; 0.75 stop) &asymp; <b>51 lots max by risk</b><br>
-      Recommended: <span class="chip">1-2 conservative</span>
-      <span class="chip">3-5 balanced (terminal default 3)</span>
-      <span class="chip">10 for full 5,000/day target</span>
-    </div>
-    <div class="small muted" style="margin-top:10px">
-      Win-rate target 75% &rarr; 12.5%/month &rarr; 5,00,000 &rarr; ~20.6L in Year 1
+    <h2>System</h2>
+    <div class="small" style="line-height:2">
+      Mode <b>{mode_tag}</b> &nbsp;·&nbsp; Lots <b>{cfg_module.DEFAULT_LOTS}</b> &nbsp;·&nbsp; Max trades/day <b>{cfg_module.MAX_TRADES_PER_DAY}</b><br>
+      Target <b>{cfg_module.PROFIT_TARGET_PCT*100:.1f}%</b> &nbsp;·&nbsp; Stop <b>{cfg_module.STOP_LOSS_PCT*100:.1f}%</b> &nbsp;·&nbsp;
+      Risk/trade <b>{cfg_module.RISK_PER_TRADE_PCT*100:.1f}%</b> &nbsp;·&nbsp; Daily loss cap <b>{cfg_module.MAX_DAILY_LOSS_PCT*100:.0f}%</b><br>
+      Lock-profit <b>{'ON' if getattr(cfg_module, 'LOCK_PROFIT_ENABLED', False) else 'OFF'}</b> &nbsp;·&nbsp;
+      ML <b>{'ON' if getattr(cfg_module, 'ML_ENABLED', False) else 'OFF'}</b> ({getattr(cfg_module, 'ML_MODEL', '-')}) &nbsp;·&nbsp;
+      Meta-label <b>{'ON' if getattr(cfg_module, 'META_ENABLED', False) else 'OFF'}</b><br>
+      Expiry <b>{getattr(cfg_module, 'OPTION_EXPIRY_BUCKET', 'current_week')}</b> &nbsp;·&nbsp;
+      Score = Trend*0.30 + Momentum*0.25 + S/R*0.25 + Volume*0.20
     </div>
   </div>
+</section>
+
 </div>
 
 <script>
-const BARS = {bars_json};
-const EQUITY = {equity_points};
-
-function drawCandles() {{
-  const cv = document.getElementById('candles');
-  const ctx = cv.getContext('2d');
-  const W = cv.width = cv.clientWidth, H = cv.height;
-  ctx.clearRect(0,0,W,H);
-  if (!BARS.length) {{ ctx.fillStyle='#7a8ba3'; ctx.fillText('no bar data', 10, 20); return; }}
-  let lo = Infinity, hi = -Infinity;
-  BARS.forEach(b => {{ lo = Math.min(lo, b[2], b[3]); hi = Math.max(hi, b[1], b[4]); }});
-  const pad = 12, n = BARS.length, cw = W / n;
-  const y = v => H - pad - (v - lo) / (hi - lo || 1) * (H - pad * 2);
-  const x = i => i * cw + cw / 2;
-  ctx.strokeStyle = '#7a8ba3'; ctx.fillStyle = '#7a8ba3';
-  ctx.font = '10px monospace';
-  for (let g = 0; g <= 4; g++) {{
-    const v = lo + (hi - lo) * g / 4;
-    ctx.beginPath(); ctx.moveTo(0, y(v)); ctx.lineTo(W, y(v));
-    ctx.strokeStyle = 'rgba(122,139,163,0.12)'; ctx.stroke();
-    ctx.fillStyle = '#7a8ba3'; ctx.fillText(v.toFixed(0), 2, y(v) - 2);
-  }}
-  BARS.forEach((b, i) => {{
-    const up = b[4] >= b[1];
-    ctx.strokeStyle = ctx.fillStyle = up ? '#3ddc84' : '#f85149';
-    ctx.beginPath(); ctx.moveTo(x(i), y(b[2])); ctx.lineTo(x(i), y(b[3])); ctx.stroke();
-    const bw = Math.max(2, cw * 0.6);
-    ctx.fillRect(x(i) - bw/2, y(Math.max(b[1], b[4])), bw, Math.max(1, Math.abs(y(b[1]) - y(b[4]))));
+// ---- tabs ----
+document.querySelectorAll('nav.tabs button').forEach(btn => {{
+  btn.addEventListener('click', () => {{
+    document.querySelectorAll('nav.tabs button').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tabpanel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
   }});
-}}
+}});
 
+// ---- equity curve ----
+const EQUITY = {equity_points};
 function drawEquity() {{
   const cv = document.getElementById('equity');
+  if (!cv) return;
   const ctx = cv.getContext('2d');
   const W = cv.width = cv.clientWidth, H = cv.height;
   ctx.clearRect(0,0,W,H);
@@ -381,16 +369,12 @@ function drawEquity() {{
   ctx.strokeStyle = '#56d4dd'; ctx.lineWidth = 2; ctx.beginPath();
   pts.forEach((v, i) => i ? ctx.lineTo(x(i), y(v)) : ctx.moveTo(x(i), y(v)));
   ctx.stroke();
-  ctx.fillStyle = '#7a8ba3'; ctx.font = '10px monospace';
+  ctx.fillStyle = '#7a8ba3'; ctx.font = '10px sans-serif';
   ctx.fillText(lo.toFixed(0), 2, H - 2);
   ctx.fillText(hi.toFixed(0), 2, y(hi) - 2);
 }}
 
-window.addEventListener('resize', () => {{ drawCandles(); drawEquity(); }});
-drawCandles();
-drawEquity();
-
-// ---- live board polling (Dhan WebSocket data + option chain) ----
+// ---- live board polling ----
 async function pollBoard() {{
   try {{
     const r = await fetch('/api/board');
@@ -404,19 +388,20 @@ async function pollBoard() {{
       dir.textContent = b.direction;
       dir.style.color = b.direction === 'BULLISH' ? '#3ddc84' : b.direction === 'BEARISH' ? '#f85149' : '#e3b341';
       document.getElementById('liveMode').textContent = 'LIVE';
+      document.getElementById('liveSpotBig').textContent = 'NIFTY ' + b.spot.toFixed(2);
+      document.getElementById('liveInfo').textContent =
+        (b.day_change_pct >= 0 ? '▲ +' : '▼ ') + b.day_change_pct.toFixed(2) + '% today' +
+        (b.chain_updated ? ' | chain ' + b.chain_updated.replace('T',' ').slice(0,19) : '');
       if (b.chain && b.chain.length) {{
         const rows = b.chain.map(c =>
-          '<tr><td>' + c.strike.toFixed(0) + '</td><td>' + (c.ce_ltp || 0) + '</td><td>' +
-          (c.ce_oi || 0) + '</td><td>' + (c.pe_ltp || 0) + '</td><td>' + (c.pe_oi || 0) +
-          '</td><td>' + b.spot.toFixed(2) + '</td></tr>').join('');
+          '<tr><td>' + c.strike.toFixed(0) + '</td><td>' + (c.ce_ltp || (c.model_premium ? c.model_premium.toFixed(2) : '-')) +
+          '</td><td>' + (c.ce_oi || 0) + '</td><td>' + (c.pe_ltp || '-') + '</td><td>' + (c.pe_oi || 0) + '</td></tr>').join('');
         document.getElementById('liveChainTable').innerHTML =
-          '<tr><th>Strike</th><th>CE LTP</th><th>CE OI</th><th>PE LTP</th><th>PE OI</th><th>Spot</th></tr>' + rows;
-        document.getElementById('liveChainInfo').textContent =
-          'Updated ' + (b.chain_updated || '').replace('T', ' ').slice(0, 19) + ' IST';
+          '<tr><th>Strike</th><th>CE LTP</th><th>CE OI</th><th>PE LTP</th><th>PE OI</th></tr>' + rows;
       }}
     }} else {{
-      document.getElementById('liveChainInfo').textContent =
-        'Live board off (add DHAN creds or use --live-board). Showing modelled chain.';
+      document.getElementById('liveInfo').textContent =
+        'Live board off (add DHAN creds or use --live-board). Pre-market shows modelled chain.';
       document.getElementById('liveMode').textContent = 'PAPER';
     }}
   }} catch (e) {{
@@ -425,23 +410,8 @@ async function pollBoard() {{
 }}
 setInterval(pollBoard, 5000);
 pollBoard();
-
-// ---- live trade/state refresh ----
-async function pollState() {{
-  try {{
-    const r = await fetch('/api/state');
-    const s = await r.json();
-    if (!s || !s.state) return;
-    const st = s.state, pf = s.portfolio || {{}};
-    const upd = (id, txt, color) => {{
-      const el = document.getElementById(id);
-      if (el) {{ el.textContent = txt; if (color) el.style.color = color; }}
-    }};
-    upd('liveMode', s.state && s.state.realized_pnl_today !== undefined ? 'PAPER' : 'PAPER');
-  }} catch (e) {{}}
-}}
-setInterval(pollState, 10000);
-pollState();
+window.addEventListener('resize', drawEquity);
+drawEquity();
 </script>
 </body>
 </html>

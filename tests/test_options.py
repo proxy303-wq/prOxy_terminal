@@ -36,10 +36,31 @@ class TestOptions(unittest.TestCase):
         self.assertEqual(calc["selected_lots"], cfg.DEFAULT_LOTS)
 
     def test_select_leg_buy_ce(self):
-        leg = select_leg("BUY", 24900, cfg)
-        self.assertEqual(leg.option_type, "CE")
-        self.assertEqual(leg.lot_size, 65)
-        self.assertGreater(leg.target_per_unit, leg.stop_per_unit)
+        # flat mode: the classic 1% target > 0.5% stop
+        old_mode = getattr(cfg, "SL_MODE", "flat")
+        try:
+            cfg.SL_MODE = "flat"
+            leg = select_leg("BUY", 24900, cfg)
+            self.assertEqual(leg.option_type, "CE")
+            self.assertEqual(leg.lot_size, 65)
+            self.assertGreater(leg.target_per_unit, leg.stop_per_unit)
+        finally:
+            cfg.SL_MODE = old_mode
+
+    def test_select_leg_buy_ce_maximals(self):
+        # maximals (volatility-distribution) mode: levels come from the
+        # maximum-excursion distribution and the basis is recorded
+        old_mode = getattr(cfg, "SL_MODE", "flat")
+        try:
+            cfg.SL_MODE = "maximals"
+            leg = select_leg("BUY", 24900, cfg, sigma=0.15)
+            self.assertEqual(leg.option_type, "CE")
+            self.assertGreater(leg.stop_per_unit, 0)
+            self.assertGreater(leg.target_per_unit, 0)
+            self.assertTrue(leg.sl_basis.startswith("maximals"), leg.sl_basis)
+            self.assertGreater(leg.rr, 0)
+        finally:
+            cfg.SL_MODE = old_mode
 
     def test_select_leg_sell_pe(self):
         leg = select_leg("SELL", 24900, cfg)

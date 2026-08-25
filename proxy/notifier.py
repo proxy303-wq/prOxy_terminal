@@ -26,6 +26,10 @@ CYAN = "\033[96m"
 GRAY = "\033[90m"
 BOLD = "\033[1m"
 
+# Optional DB persistence hook (set by the worker so paper trades stay
+# visible in the dashboard even when the container stdout is lost).
+PERSIST_HOOK = None
+
 
 def _colorize(text, color):
     if not sys.stdout.isatty():
@@ -54,11 +58,20 @@ class Notifier:
         line = f"[{ts}] {message}"
         if not self.quiet:
             color = { "INFO": CYAN, "TRADE": GREEN, "EXIT": YELLOW, "WARN": RED }[level] if level in ("INFO", "TRADE", "EXIT", "WARN") else RESET
-            print(_colorize(line, color), flush=True)
+            try:
+                print(_colorize(line, color), flush=True)
+            except UnicodeEncodeError:
+                print(_colorize(line.encode("ascii", "replace").decode("ascii"), color), flush=True)
         with open(self.log_path, "a", encoding="utf-8") as fh:
             fh.write(line + "\n")
+        # persist to the dashboard DB when a hook is installed
+        if PERSIST_HOOK is not None:
+            try:
+                PERSIST_HOOK(line, level)
+            except Exception:
+                pass
         # telegram for trade events: explicit levels or ENTRY/EXIT/GATE/LIVE prefixes
-        trade_like = level in ("TRADE", "EXIT", "WARN") or message.startswith(("ENTRY", "EXIT", "GATE", "LIVE", "DAY END"))
+        trade_like = level in ("TRADE", "EXIT", "WARN") or message.startswith(("ENTRY", "EXIT", "GATE", "LIVE", "DAY END", "DAY SUMMARY"))
         if self.telegram_enabled and trade_like:
             self._telegram(message)
 

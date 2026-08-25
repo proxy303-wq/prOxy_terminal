@@ -80,6 +80,9 @@ def check_trade_allowed(state, cfg, signal=None, pending_trade=None):
     if state.get("trades_today", 0) >= cfg.MAX_TRADES_PER_DAY:
         return RiskCheck(False, f"max trades per day reached ({cfg.MAX_TRADES_PER_DAY})")
 
+    if getattr(cfg, "DAILY_TARGET_STOP", True) and daily_target_hit(state, cfg):
+        return RiskCheck(False, "daily profit target reached - trading done for the day")
+
     if state.get("active_trade") is not None:
         return RiskCheck(False, "position already open (max concurrent positions)")
 
@@ -114,6 +117,30 @@ def apply_daily_pnl(state, cfg, realized_pnl):
 
 def daily_target_hit(state, cfg):
     return state.get("realized_pnl_today", 0.0) >= base_capital(state, cfg) * cfg.DAILY_TARGET_PCT
+
+
+def consequential_sl(plan):
+    """Consequential stop-loss that scales with lots.
+
+    Returns (sl_total, sl_per_lot, stop_per_unit, lots, quantity):
+        sl_per_lot    : stop-loss for ONE lot  = stop_per_unit * LOT_SIZE (INR)
+        sl_total      : stop-loss for the position = sl_per_lot * lots (INR),
+                        so 7 lots carry 7x the stop-loss of 1 lot.
+    plan carries entry_premium/stop_premium/quantity/lots (or the computed
+    sl_per_lot/sl_total fields added by the engine)."""
+    try:
+        per_unit = abs(plan["entry_premium"] - plan["stop_premium"])
+        qty = plan.get("quantity", 0) or 0
+        lots = plan.get("lots") or (qty // 65 if qty else 0)
+        sl_per_lot = float(plan.get("sl_per_lot") or 0)
+        if not sl_per_lot:
+            sl_per_lot = per_unit * 65
+        sl_total = float(plan.get("sl_total") or 0)
+        if not sl_total:
+            sl_total = sl_per_lot * lots
+        return round(sl_total, 2), round(sl_per_lot, 2), round(per_unit, 2), lots, qty
+    except Exception:
+        return 0.0, 0.0, 0.0, 0, 0
 
 
 def monthly_progress_pct(state, cfg):

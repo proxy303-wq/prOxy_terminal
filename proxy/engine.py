@@ -28,7 +28,7 @@ from .config import (CAPITAL, LOOP_SECONDS, DEMO_BAR_SECONDS,
 from .indicators import calculate_indicators
 from .scoring import generate_signal
 from .options import select_leg, premium_move_pct, recommend_lots, success_probability
-from .risk import (check_trade_allowed, risk_budget, position_size,
+from .risk import (RiskCheck, check_trade_allowed, risk_budget, position_size,
                    apply_daily_pnl, current_equity, daily_target_hit,
                    monthly_progress_pct, win_rate)
 from .tracker import Tracker
@@ -70,6 +70,8 @@ class PaperEngine:
             }
         self.active_trade = None      # not persisted across runs in v1
         self.bars_processed = 0
+        # strike-once rule: date -> {strike: times_traded} (no averaging)
+        self._strike_trades = {}
         self.cooldown_until = None    # bar time; no new entries before this
         # ML prediction layer (LSTM per the research paper) - advisory/gate
         self.ml_predict = None
@@ -123,19 +125,45 @@ class PaperEngine:
 
     def _plan_entry(self, signal, spot, equity):
         direction = signal.direction
-        leg = select_leg(direction, spot, self.cfg)
+        # realized volatility from the recent bar history (maximals exits)
+        try:
+            from .maximals import annualized_from_per_bar, realized_vol_per_bar
+            window = int(getattr(self.cfg, "MAXIMALS_VOL_WINDOW", 40))
+            closes = [b["close"] for b in self.history[-window:]]
+            _vol_bar = realized_vol_per_bar(closes, window=window)
+            sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
+        except Exception:
+            sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
+        leg = select_leg(direction, spot, self.cfg, sigma=sigma)
         budget = risk_budget(self.state, self.cfg)
-        # risk-based lot cap from the option's stop distance
+        # ---- CONSEQUENTIAL STOP-LOSS (scales with lots) ----
+        # stop_per_unit : GTT stop distance in premium points = premium * STOP_LOSS_PCT
+        # sl_per_lot    : the stop-loss for ONE lot  = stop_per_unit * LOT_SIZE (INR)
+        # sl_total      : the stop-loss for the whole position = sl_per_lot * lots,
+        #                 so 7 lots carry 7x the stop-loss of 1 lot (INR)
         stop_unit = leg.stop_per_unit
         entry = leg.premium
-        lots, qty, actual_risk = position_size(budget, entry, entry - stop_unit, self.cfg)
-        # keep to the operating band (DEFAULT_LOTS) and max position count
-        lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
-        qty = lots * self.cfg.LOT_SIZE
+        if getattr(self.cfg, "SL_MODE", "flat") == "maximals":
+            # The distribution-based SL is WIDE (it sits outside the noise), so
+            # budget-based sizing would crush the size to 1 lot.  Trade the
+            # operating band (DEFAULT_LOTS) instead; the actual risk is computed
+            # and logged, and the daily/monthly loss limits are the hard stop.
+            lots = int(getattr(self.cfg, "DEFAULT_LOTS", 5))
+            qty = lots * self.cfg.LOT_SIZE
+            actual_risk = qty * stop_unit
+        else:
+            lots, qty, actual_risk = position_size(budget, entry, entry - stop_unit, self.cfg)
+            # keep to the operating band (DEFAULT_LOTS) and max position count
+            lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
+            qty = lots * self.cfg.LOT_SIZE
         leg.lots = lots
         leg.quantity = qty
-        leg.risk_per_lot = round(self.cfg.LOT_SIZE * stop_unit, 2)
+        # precise per-lot SL from the UNROUNDED premium:
+        #   premium * STOP_LOSS_PCT * LOT_SIZE  (select_leg already computed it)
+        sl_per_lot = leg.risk_per_lot
+        sl_total = round(sl_per_lot * lots, 2)
         target_unit = leg.target_per_unit
+        target_per_lot = round(self.cfg.LOT_SIZE * target_unit, 2)
         is_long = direction == "BUY"
         # LONG: stop below entry, target above.  SHORT: the mirror.
         stop_premium = entry - stop_unit if is_long else entry + stop_unit
@@ -150,6 +178,11 @@ class PaperEngine:
             "entry_premium": entry,
             "stop_premium": stop_premium,
             "target_premium": target_premium,
+            "stop_per_unit": round(stop_unit, 2),
+            "target_per_unit": round(target_unit, 2),
+            "sl_per_lot": sl_per_lot,
+            "sl_total": sl_total,
+            "target_per_lot": target_per_lot,
             "entry_spot": spot,
             "entry_time": None,
             "signal_score": signal.score,
@@ -161,6 +194,9 @@ class PaperEngine:
             "trend": signal.trend,
             "risk_rs": round(actual_risk, 2),
             "max_lots_avail": leg.max_lots_by_risk,
+            "sl_basis": getattr(leg, "sl_basis", ""),
+            "rr": getattr(leg, "rr", 0.0),
+            "p_target_reach": getattr(leg, "p_target_reach", 0.0),
             "unrealized_pnl": 0.0,
             "pnl_peak": None,
             "peak_pct": 0.0,
@@ -304,6 +340,10 @@ class PaperEngine:
             bars = int(self.cfg.LOSS_COOLDOWN_BARS)
             self.cooldown_until = bar["time"] + timedelta(minutes=BAR_MINUTES * bars)
         self.active_trade = None
+        try:
+            self.tracker.clear_active_trade()
+        except Exception:
+            pass
         self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR", "EXIT")
         return record
 
@@ -352,7 +392,16 @@ class PaperEngine:
                 if signal.direction in ("BUY", "SELL"):
                     equity = current_equity(self.state, self.cfg)
                     plan = self._plan_entry(signal, spot, equity)
-                    gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                    # strike-once rule: never average the SAME strike twice a day
+                    if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
+                        day_strikes = self._strike_trades.setdefault(str(self.trade_date), {})
+                        if day_strikes.get(plan["strike"], 0) >= int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1)):
+                            gate = RiskCheck(False, f"strike {plan['strike']} already traded today (no averaging)")
+                            events["strike_blocked"] = True
+                        else:
+                            gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                    else:
+                        gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
                     ml_ok = True
                     ml_note = ""
                     if gate.allowed and self.ml_predict is not None:
@@ -401,13 +450,29 @@ class PaperEngine:
                             self.active_trade["entry_time"] = bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"])
                             self.active_trade["entry_premium"] = round(self.active_trade["entry_premium"], 2)
                             events["entered"] = dict(self.active_trade)
+                            # strike-once bookkeeping: this strike is now used for the day
+                            try:
+                                _ds = self._strike_trades.setdefault(str(self.trade_date), {})
+                                _ds[plan["strike"]] = _ds.get(plan["strike"], 0) + 1
+                            except Exception:
+                                pass
+                            try:
+                                self.tracker.save_active_trade(plan)
+                            except Exception:
+                                pass
                         pop = success_probability(self.cfg.PROFIT_TARGET_PCT, self.cfg.STOP_LOSS_PCT)
                         pop_str = f"POP {pop*100:.0f}%" if pop is not None else "POP n/a"
+                        _at = self.active_trade
+                        _sl_per_lot = float(_at.get("sl_per_lot") or 0)
+                        _sl_total = float(_at.get("sl_total") or 0)
+                        _tg_per_lot = float(_at.get("target_per_lot") or 0)
+                        _sl_basis = _at.get("sl_basis") or ""
                         self.notify(
-                            f"ENTRY {self.active_trade['instrument']} {self.active_trade['direction']} "
-                            f"{self.active_trade['lots']} lots | premium {self.active_trade['entry_premium']:.2f} "
-                            f"| target {self.active_trade['target_premium']:.2f} | stop {self.active_trade['stop_premium']:.2f} "
-                            f"| score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
+                            f"ENTRY {_at['instrument']} {_at['direction']} "
+                            f"{_at['lots']} lots | premium {_at['entry_premium']:.2f} "
+                            f"| target {_at['target_premium']:.2f} ({_tg_per_lot:.0f} INR/lot) "
+                            f"| stop {_at['stop_premium']:.2f} | SL {_sl_per_lot:.0f} INR/lot x {_at['lots']} lots = {_sl_total:,.0f} INR "
+                            f"| {_sl_basis} | score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
                             "TRADE"
                         )
                     else:

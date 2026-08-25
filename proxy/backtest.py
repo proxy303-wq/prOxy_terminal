@@ -40,7 +40,7 @@ from .indicators import calculate_indicators
 from .scoring import generate_signal
 from .options import select_leg, premium_move_pct
 from .exits import check_exits
-from .risk import (risk_budget, position_size, check_trade_allowed,
+from .risk import (RiskCheck, risk_budget, position_size, check_trade_allowed,
                    apply_daily_pnl, current_equity)
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -74,11 +74,12 @@ def aggregate_5m(bars_1m):
 
 
 class Backtest:
-    def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False):
+    def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False, target_date=None):
         self.cfg = cfg
         self.path = path or CSV_PATH
         self.max_days = max_days if max_days is not None else cfg.BACKTEST_MAX_DAYS
         self.last_days = last_days
+        self.target_date = target_date   # single day as "YYYY-MM-DD"
         self.verbose = verbose
         self.df = load_csv(self.path)
         try:
@@ -146,7 +147,9 @@ class Backtest:
 
     def run(self):
         days = sorted(self.df["date"].dt.date.unique())
-        if self.last_days:
+        if self.target_date:
+            days = [d for d in days if str(d) == str(self.target_date)]
+        elif self.last_days:
             days = days[-self.last_days:]
         elif self.max_days:
             days = days[: self.max_days]
@@ -174,6 +177,7 @@ class Backtest:
             active = None
             cooldown_until = None
             last_signal = None
+            strikes_today = {}   # strike-once rule: strike -> times traded
             theta_per_bar = (BACKTEST_THETA_PER_BAR / 5.0) if self._has_1m else BACKTEST_THETA_PER_BAR
 
             for bi, bar in enumerate(five):
@@ -225,24 +229,48 @@ class Backtest:
                 # ---- 3) fresh entry ----
                 if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and signal is not None and signal.direction in ("BUY", "SELL"):
                     spot = float(bar["close"])
-                    leg = select_leg(signal.direction, spot, self.cfg)
+                    try:
+                        from .maximals import annualized_from_per_bar, realized_vol_per_bar
+                        _window = int(getattr(self.cfg, "MAXIMALS_VOL_WINDOW", 40))
+                        _closes = [b["close"] for b in history[-_window:]]
+                        _vol_bar = realized_vol_per_bar(_closes, window=_window)
+                        _sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
+                    except Exception:
+                        _sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
+                    leg = select_leg(signal.direction, spot, self.cfg, sigma=_sigma)
                     budget = risk_budget(self.state, self.cfg)
                     stop_unit = leg.stop_per_unit
-                    lots, qty, actual_risk = position_size(budget, leg.premium, leg.premium - stop_unit, self.cfg)
-                    lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
+                    if getattr(self.cfg, "SL_MODE", "flat") == "maximals":
+                        # wide distribution-based SL: trade the operating band
+                        # (DEFAULT_LOTS); daily/monthly loss limits protect
+                        lots = int(getattr(self.cfg, "DEFAULT_LOTS", 5))
+                        qty = lots * self.cfg.LOT_SIZE
+                        actual_risk = qty * stop_unit
+                    else:
+                        lots, qty, actual_risk = position_size(budget, leg.premium, leg.premium - stop_unit, self.cfg)
+                        lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
                     is_long = signal.direction == "BUY"
                     stop_p = leg.premium - stop_unit if is_long else leg.premium + stop_unit
                     target_p = leg.premium + leg.target_per_unit if is_long else leg.premium - leg.target_per_unit
+                    sl_per_lot = leg.risk_per_lot  # SL for ONE lot (INR) = premium * STOP_LOSS_PCT * LOT_SIZE (precise)
                     plan = {
                         "instrument": leg.instrument, "direction": "LONG" if is_long else "SHORT",
                         "option_type": leg.option_type, "strike": leg.strike, "lots": lots,
                         "quantity": lots * self.cfg.LOT_SIZE, "entry_premium": leg.premium,
                         "stop_premium": stop_p, "target_premium": target_p,
+                        "stop_per_unit": round(stop_unit, 2),
+                        "target_per_unit": round(leg.target_per_unit, 2),
+                        "sl_per_lot": sl_per_lot,
+                        "sl_total": round(sl_per_lot * lots, 2),
+                        "target_per_lot": round(self.cfg.LOT_SIZE * leg.target_per_unit, 2),
                         "entry_spot": spot, "entry_time": bar["time"].isoformat(),
                         "signal_score": signal.score, "confidence": signal.confidence,
                         "setup_type": signal.setup_type, "setup_strength": signal.setup_strength,
                         "trend": signal.trend, "reason": signal.reason,
                         "risk_rs": round(actual_risk, 2),
+                        "sl_basis": getattr(leg, "sl_basis", ""),
+                        "rr": getattr(leg, "rr", 0.0),
+                        "p_target_reach": getattr(leg, "p_target_reach", 0.0),
                         "pnl_peak": None, "peak_pct": 0.0,
                         "lock_armed": False, "lock_floor_pct": 0.0,
                         "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
@@ -253,9 +281,19 @@ class Backtest:
                         plan.update(features_from_signal(signal, frame, self.cfg))
                     except Exception:
                         pass
-                    gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                    # strike-once rule: never average the SAME strike twice a day
+                    if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
+                        if strikes_today.get(plan["strike"], 0) >= int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1)):
+                            gate = RiskCheck(False, f"strike {plan['strike']} already traded today (no averaging)")
+                            if self.verbose:
+                                print(f"    GATE  {plan['instrument']} blocked: {gate.reason}")
+                        else:
+                            gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                    else:
+                        gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
                     if gate.allowed:
                         active = plan
+                        strikes_today[plan["strike"]] = strikes_today.get(plan["strike"], 0) + 1
                         if self.verbose:
                             print(f"    ENTRY {plan['instrument']} {plan['direction']} {plan['lots']}L "
                                   f"@{plan['entry_premium']:.2f} conf={plan['confidence']:.0f}% {plan['setup_type']}")

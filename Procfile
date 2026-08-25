@@ -1,1 +1,1 @@
-web: python run_terminal.py dashboard --serve
+web: bash start.sh

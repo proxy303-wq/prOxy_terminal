@@ -49,28 +49,26 @@ def _load_athena_env():
 class DhanBroker(Broker):
     live = True   # marker: the engine sends REAL orders through this broker
 
-    def __init__(self, client_id=None, access_token=None, interactive=True, notify=print):
-        from .dhan_auth import (load_api_keypair, load_saved_token, resolve_token,
-                                token_is_expired)
+    def __init__(self, client_id=None, access_token=None, interactive=False, notify=print):
+        # Fully automatic 24-hour token: no API key, no consent codes, no
+        # prompts.  Uses the saved/24-hour access token and auto-renews it
+        # (RenewToken, then TOTP from DHAN_PIN/DHAN_TOTP_SECRET) before it
+        # lapses.  This is the only auth path - the API-key flow is gone.
+        try:
+            from .athena_env import load_athena_env
+            load_athena_env()   # ensure DHAN_PIN / DHAN_TOTP_SECRET are in env
+        except Exception:
+            pass
+        from .dhan_auth import auto_renew_token
         creds = _load_athena_env()
         self.client_id = client_id or creds["client_id"]
-        api_key, api_secret = load_api_keypair()
-        # pick the FIRST VALID token: explicit arg > .env > saved token file
-        candidates = [access_token, creds["access_token"], load_saved_token()]
-        env_token = next((t for t in candidates if t and not token_is_expired(t)), None)
-        if env_token is None:
-            env_token = next((t for t in candidates if t), None)  # first present, even if expired
         if not self.client_id:
             raise RuntimeError("DHAN_CLIENT_ID missing (C:\Athena_X\.env)")
-        # long-lived API key (12-month credentials) replaces the expiring token:
-        # valid token -> renew -> TOTP (automatic) -> consent flow, in that order
-        self.token, self.token_source = resolve_token(
-            self.client_id, access_token=env_token or "",
-            api_key=api_key, api_secret=api_secret,
-            interactive=interactive, notify=notify,
-            pin=os.environ.get("DHAN_PIN"), totp_secret=os.environ.get("DHAN_TOTP_SECRET"))
+        self.token, self.token_source = auto_renew_token(
+            self.client_id, access_token=creds["access_token"], pin=os.environ.get("DHAN_PIN"),
+            totp_secret=os.environ.get("DHAN_TOTP_SECRET"), notify=notify)
         if not self.token:
-            raise RuntimeError("no usable Dhan access token (API key/secret present?)")
+            raise RuntimeError("no usable Dhan access token - set DHAN_ACCESS_TOKEN or DHAN_PIN/DHAN_TOTP_SECRET")
         from dhanhq import DhanContext, dhanhq
         self._ctx = DhanContext(self.client_id, self.token)
         self._api = dhanhq(self._ctx)
@@ -124,16 +122,17 @@ class DhanBroker(Broker):
     # ----------------------------------------------------------
 
     def _ensure_valid_token(self):
-        """Renew the access token before a live order if it is near expiry."""
-        from .dhan_auth import renew_token, token_is_expired
+        """Auto-renew the access token before a live order if it is near expiry."""
+        from .dhan_auth import auto_renew_token, token_is_expired
         if self.token and token_is_expired(self.token, margin_s=300):
-            renewed = renew_token(self.client_id, self.token)
+            renewed, _src = auto_renew_token(
+                self.client_id, access_token=os.environ.get("DHAN_ACCESS_TOKEN"),
+                pin=os.environ.get("DHAN_PIN"),
+                totp_secret=os.environ.get("DHAN_TOTP_SECRET"), notify=print)
             if renewed:
                 self.token = renewed
                 self._ctx = __import__("dhanhq", fromlist=["DhanContext"]).DhanContext(self.client_id, self.token)
                 self._api = __import__("dhanhq", fromlist=["dhanhq"]).dhanhq(self._ctx)
-                from .dhan_auth import save_token
-                save_token(renewed)
 
 
     # ----------------------------------------------------------

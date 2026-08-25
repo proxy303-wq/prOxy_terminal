@@ -12,7 +12,7 @@ the operating plan exactly:
 | Risk per trade | **0.5%** of equity (2,500 INR) — never more |
 | Max daily loss | **1%** (5,000 INR) → halt the day |
 | Max monthly loss | **5%** (25,000 INR) → halt the month |
-| Max positions / day | 1–2 positions, max 3 trades/day |
+| Max positions / day | 1 open position; **each strike traded ONCE per day** (no averaging) — the day chases the 6,000 INR target with 2-4 quality trades |
 | Min risk : reward | 2:1 (1% target / 0.5% stop = 2.0) |
 | Trade window | 9:15 – 14:45 IST entries, force-exit 15:15 |
 | NIFTY lot size | **65** |
@@ -62,10 +62,48 @@ Dependencies: **Python 3.10+**, `numpy`, `pandas` (both already installed here).
 Risk per trade     = 5,00,000 x 0.5%        = 2,500 INR
 ATM premium        ~ 150-200 INR
 Stop per unit      = 150 x 0.5%             ~ 0.75 INR (~1 point)
-Risk per lot       = 65 x 0.75              ~ 48.75 INR
+SL per lot         = 65 x stop-per-unit     ~ 48.75 INR   <- the stop-loss for ONE lot
+SL for N lots     = SL-per-lot x N        e.g. 54.10 x 5 = 270.50 INR,  54.10 x 7 = 378.70 INR
 Max lots by risk   = 2,500 / 48.75          = 51 lots  (capped!)
 Max lots by cap    = 5,00,000 / (65x150)    = 51 lots
 \`\`\`
+
+So **N lots carry Nx the stop-loss of 1 lot** (the "consequential" stop-loss).
+Once a trade is in profit the lock-profit layer trails the stop
+(LOCK_ARM / LOCK_FLOOR / LOCK_TRAIL_STEP in proxy/config.py).
+
+## Maximals exits - volatility-distribution stop-loss & target
+
+Instead of a flat 0.5% of premium, the stop-loss and target are derived from
+the probability distribution of the maximum excursion of the underlying over
+the expected holding window at the current volatility (proxy/maximals.py):
+
+\`\`\`
+P(max excursion >= x) = 2(1 - Phi(x / (sigma*sqrt(n))))     # reflection principle
+stop    = quantile(alpha_stop)    -> pure noise reaches it with P = alpha_stop
+target  = quantile(alpha_target)  -> the target is touched with P = alpha_target
+premium % move = delta * (spot / premium) * underlying %    (delta leverage)
+\`\`\`
+
+A finite-sample correction is applied so the claimed probabilities match a
+discrete random walk (Monte-Carlo verified to ~1%: the continuous formula
+overstates discrete maxima, so the level is shrunk by (1 - k(alpha)/sqrt(n))).
+Volatility is realized from the recent bars (fallback: OPTION_IV_EST).
+Tune in proxy/config.py:
+
+\`\`\`
+SL_MODE = "maximals"            # or "flat" for the old 0.5%/1% levels
+MAXIMALS_HOLDING_BARS = 2       # 10-minute scalp holding window
+MAXIMALS_ALPHA_STOP = 0.10      # 10% chance pure noise hits the SL
+MAXIMALS_ALPHA_TARGET = 0.50    # 50% chance the target is touched
+MAXIMALS_VOL_WINDOW = 40        # bars of history for realized volatility
+\`\`\`
+
+The wide distribution-based SL means the 0.5% risk budget would crush the
+size to 1 lot, so in maximals mode the engine trades the operating band
+(DEFAULT_LOTS, default 5) and the daily/monthly loss limits are the hard
+protection.  Every entry log shows the basis:
+\`maximals sigma 15% ann (10m hold, a_stop 10%, a_tgt 50%, R:R 0.21, P(tgt) 50%)\`.
 
 | Strategy | Lots | Risk/day | Profit potential |
 |---|---|---|---|
@@ -119,26 +157,33 @@ tests/                 unittest suite (47 tests: indicators, PA, scoring, risk, 
 
 ## Deploy
 
-**Railway (always-on terminal + dashboard)** - best for running the actual
-trading loop and serving the dashboard 24/7:
+**Railway (always-on worker + Streamlit dashboard)** - the current setup:
+
+- `streamlit_app.py` is a multi-tab dashboard modelled exactly on Athena's
+  `app.py` (ATHENA-X Wealth Manager): Dashboard / Portfolio / Trading /
+  Wealth / Risk / Analytics / ML / System / Goals / Transactions / Settings.
+- `railway_worker.py` is the always-on PAPER trading loop: each trading day
+  it connects the live Dhan WebSocket feed, runs the engine, and sends
+  Telegram notifications for signals, entries/exits and the DAY SUMMARY.
+- `Procfile` starts both:  `web: streamlit ...`  and  `worker: python railway_worker.py`.
 
 ```bash
-# push this repo, then on Railway: New Project -> Deploy from GitHub
-# railway.json + Procfile already start: python run_terminal.py dashboard --serve
-# ($PORT is honored automatically).  Add env vars in Railway dashboard:
-#   DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN  (for live mode)
-# Note: data/*.csv is gitignored (18MB sample); copy the NIFTY CSVs into
-# data/ before deploying to enable backtests, or backtest locally first.
+# Deploy (Railway CLI, from this directory):
+railway up -y -d --new --name proxy-terminal
+railway domain                       # get the public URL
+# env vars (Railway dashboard or CLI):
+#   DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN  (24-hour token, NO API key needed)
+#   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+railway volume add --mount-path /app/reports   # persist trades across restarts
 ```
 
-**Streamlit (interactive dashboard UI)** - free on Streamlit Community Cloud:
+Live deployment: https://proxy-terminal-production.up.railway.app
+
+**Local run:**
 
 ```bash
-# Streamlit Cloud: New app -> this repo -> main branch -> streamlit_app.py
-# (or locally: pip install -r requirements.txt && streamlit run streamlit_app.py)
-# Shows KPIs, backtest, stop-loss sweep, option chain + expiries, trade log.
-# Cloud apps sleep when idle and cannot run the trading loop - it is a
-# read-only UI host.  Run the terminal on Railway or locally instead.
+streamlit run streamlit_app.py       # the multi-tab dashboard
+python railway_worker.py             # paper trading loop (signals + Telegram)
 ```
 
 ## Paper vs live

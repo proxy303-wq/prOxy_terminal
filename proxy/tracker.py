@@ -50,8 +50,43 @@ class Tracker:
                 key TEXT PRIMARY KEY, value TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT, level TEXT, message TEXT
+            )
+        """)
         conn.commit()
         conn.close()
+
+    # ----------------------------------------------------------
+    # activity log (dashboard-visible, survives Railway stdout loss)
+    # ----------------------------------------------------------
+
+    def log_activity(self, message, level="INFO"):
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5)
+            conn.execute(
+                "INSERT INTO activity_log (ts, level, message) VALUES (?, ?, ?)",
+                (datetime.now(IST).isoformat(), level, str(message)[:2000]),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    def recent_activity(self, limit=100):
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=5)
+            rows = conn.execute(
+                "SELECT ts, level, message FROM activity_log ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+            conn.close()
+            return rows
+        except Exception:
+            return []
+
 
     def add_trade(self, record, state, cfg):
         conn = sqlite3.connect(self.db_path)
@@ -79,6 +114,39 @@ class Tracker:
         conn.close()
         self.save_state(state)
         self.export_csv()
+
+    # ----------------------------------------------------------
+    # active trade (for the dashboard "Current PrOxy State" panel)
+    # ----------------------------------------------------------
+
+    def save_active_trade(self, plan):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS active_trade (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload TEXT, updated_at TEXT
+            )
+        """)
+        conn.execute("DELETE FROM active_trade")
+        conn.execute(
+            "INSERT INTO active_trade (payload, updated_at) VALUES (?, ?)",
+            (json.dumps(plan, default=str), datetime.now(IST).isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+    def clear_active_trade(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS active_trade (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                payload TEXT, updated_at TEXT
+            )
+        """)
+        conn.execute("DELETE FROM active_trade")
+        conn.commit()
+        conn.close()
+
 
     def save_state(self, state):
         conn = sqlite3.connect(self.db_path)

@@ -32,8 +32,14 @@ PROFIT_TARGET_PCT  = 0.0100     # Exit at +1.0% of the option premium
 STOP_LOSS_PCT      = 0.0050     # Exit at -0.5% of the option premium
 MIN_RISK_REWARD    = 2.0        # target / stop must be >= 2  (1% / 0.5% = 2.0)
 MAX_POSITIONS      = 1          # concurrent trades (spec allows 1-2; start at 1)
-MAX_TRADES_PER_DAY = 3          # quality over quantity
+MAX_TRADES_PER_DAY = 6          # absolute ceiling; the strike-once rule keeps it to 2-4 quality trades
 LOSS_COOLDOWN_BARS = 6          # wait N bars (30 min) after a stop-out before re-entering (0 = off)
+
+# Strike-once rule: never trade the SAME strike twice in a day.  This stops
+# "averaging" the same option (July 7 produced 8 trades on the same PE) and
+# cuts brokerage - the daily target is chased with fewer, bigger trades.
+ONE_TRADE_PER_STRIKE_DAY = True
+MAX_TRADES_PER_STRIKE = 1       # how many times one strike may be traded per day
 
 # RSI alignment gate used by the signal engine: BUY needs RSI > BULL,
 # SELL needs RSI < BEAR.  50/50 = neutral momentum (spec default);
@@ -74,6 +80,11 @@ DEMO_BAR_SECONDS = 30                   # synthetic feed: 5-min bar in 30 s of w
 #   TRAIL_SL_TO_ENTRY   : once the lock is armed the GTT stop moves to
 #                         breakeven (entry), so a winner can never become
 #                         a loser after locking profit.
+#
+#   CONSEQUENTIAL SL   : the absolute stop amount = stop-per-unit x quantity,
+#                         so it scales up automatically with lots (1 lot vs 7 lots).
+#                         Once armed, the floor trails the peak (LOCK_TRAIL_STEP_PCT)
+#                         and the stop moves to breakeven.
 
 LOCK_PROFIT_ENABLED = True
 LOCK_ARM_PCT = 0.0030           # arm at +0.3% profit
@@ -84,13 +95,44 @@ TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
 
 
 # ============================================================
+# 2c. MAXIMALS EXITS  (volatility-distribution stop-loss/target)
+# ============================================================
+#
+# "Maximals" technique: the stop-loss and target are derived from the
+# probability distribution of the maximum excursion of the underlying
+# over the expected holding window, at the current volatility:
+#
+#     P(max excursion >= x) = 2(1 - Phi(x / (sigma*sqrt(n))))
+#
+# The stop is placed at the quantile only PURE NOISE can reach with
+# probability MAXIMALS_ALPHA_STOP; the target at the favorable-excursion
+# quantile with probability MAXIMALS_ALPHA_TARGET.  The premium % move is
+# delta-leveraged (delta * spot/premium * underlying%).  The flat
+# STOP_LOSS_PCT / PROFIT_TARGET_PCT levels remain as MINIMUM floors.
+#
+#   SL_MODE = "maximals"  -> distribution-based levels (default)
+#          = "flat"       -> the old flat 0.5% / 1% of premium levels
+
+SL_MODE = "maximals"
+MAXIMALS_HOLDING_BARS = 2        # expected holding window (2 x 5-min bars = 10 min scalp)
+MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
+MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
+MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility
+MAXIMALS_MIN_STOP_PCT = 0.005    # never tighter than the flat 0.5% stop
+MAXIMALS_MIN_TARGET_PCT = 0.010  # never tighter than the flat 1% target
+
+
+# ============================================================
 # 3. RISK RULES (the 3 pillars)
 # ============================================================
 
 RISK_PER_TRADE_PCT = 0.0050     # never risk more than 0.5% of equity per trade
 MAX_DAILY_LOSS_PCT = 0.0100     # 1%  = 5,000 INR  -> stop trading for the day
 MAX_MONTHLY_LOSS_PCT = 0.0500   # 5%  = 25,000 INR -> stop trading for the month
-DAILY_TARGET_PCT  = 0.0100      # 1%  = 5,000 INR  daily profit objective
+DAILY_TARGET_PCT  = 0.0120      # 1.2% = 6,000 INR daily profit objective (user override)
+DAILY_TARGET_STOP  = True       # stop opening new trades once the daily target is hit
+SL_SCALE_WITH_LOTS = True       # consequential SL: absolute stop amount scales with lots
+                                 # (stop-per-unit x quantity); shown in the ENTRY log and dashboard
 MONTHLY_TARGET_PCT = 0.1250     # 12.5% = 62,500 INR monthly objective
 YEARLY_TARGET_PCT = 0.1250      # compounding per month (Year-1 projection uses it)
 WEEKLY_MISS_ALLOWANCE = 2       # 2 missed days/month assumed in the realistic target
@@ -212,7 +254,8 @@ SELECT_BY_DELTA = False         # True = auto-pick the best delta-band
 LOTS_CONSERVATIVE = (1, 2)      # 500-1,000 INR daily profit potential
 LOTS_BALANCED     = (3, 5)      # 1,500-2,500 INR daily profit potential
 LOTS_TARGET       = (10, 10)    # full 5,000 INR daily target (higher risk)
-DEFAULT_LOTS      = 5           # quality sizing: 2-3 quality trades/day, same ~93% win rate
+DEFAULT_LOTS      = 7           # bigger size -> reach the 6,000 INR target in 2-4 trades
+                                 # (fewer trades = less brokerage; tune to 5-10 as you prefer)
                                         # (7 lots = churnier; 10+ = full daily target)
 
 # Option liquidity gates (paper validation)

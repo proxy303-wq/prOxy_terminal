@@ -22,3 +22,7 @@ models/
 .pytest_cache/
 .vscode/
 .idea/
+
+# reference clone (Athena dashboard source)
+_athena_ref/
+

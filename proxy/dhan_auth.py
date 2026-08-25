@@ -1,4 +1,4 @@
-"""
+r"""
 PrOxy Trading Terminal - Dhan auth (long-lived API key)
 =======================================================
 
@@ -64,6 +64,21 @@ def token_expiry(token):
         return float(json.loads(_b64url_decode(payload)).get("exp", 0))
     except Exception:
         return 0.0
+
+
+def token_type(token):
+    """tokenConsumerType from the JWT: 'SELF' (Dhan-Web login - market data OK)
+    vs 'APP' (TOTP/app-generated - NO market data, NOT renewable)."""
+    try:
+        if not token:
+            return None
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        import base64
+        import json as _json
+        return _json.loads(base64.urlsafe_b64decode(payload)).get("tokenConsumerType")
+    except Exception:
+        return None
 
 
 def token_is_expired(token, margin_s=3600):
@@ -255,6 +270,76 @@ def auto_token_from_totp(client_id, pin, totp_secret, notify=print):
     return None
 
 
+def validate_token(client_id, token):
+    """Ask Dhan whether the token is actually accepted (catches corrupted
+    copies that pass structural checks but fail DH-906)."""
+    try:
+        from .dhan_broker import _load_athena_env  # noqa: F401 (env fallback)
+    except Exception:
+        pass
+    try:
+        import urllib.request as _ur
+        req = _ur.Request('https://api.dhan.co/v2/fundlimit',
+                          headers={'access-token': token, 'client-id': client_id,
+                                   'Content-type': 'application/json', 'Accept': 'application/json'})
+        resp = json.loads(_ur.urlopen(req, timeout=15).read())
+        return bool(resp and resp.get('status') == 'success')
+    except Exception:
+        return False
+
+
+def auto_renew_token(client_id, access_token=None, pin=None, totp_secret=None, notify=print, margin_hours=2):
+    """Fully automatic 24-hour token management (no browser, no consent code).
+
+    Candidate priority:
+      1. env DHAN_ACCESS_TOKEN (explicit user intent) if still valid
+      2. saved token file if still valid
+      3. RenewToken on the best candidate (+24h, silent - SELF tokens only)
+      4. TOTP-generate an APP token (funds/portfolio only, NO market data)
+    Returns (token, source) or (None, reason).
+    """
+    margin_s = int(margin_hours * 3600)
+    candidates = []
+    if access_token:
+        candidates.append(("env token", access_token))
+    saved = load_saved_token()
+    if saved:
+        candidates.append(("saved token", saved))
+    # 1) first candidate that is still valid beyond the margin AND passes a
+    #    real API validation (catches corrupted copies - DH-906)
+    for name, tok in candidates:
+        if tok and not token_is_expired(tok, margin_s=margin_s):
+            if validate_token(client_id, tok):
+                return tok, name
+            notify(f"{name} failed Dhan validation (corrupted copy?) - trying the next candidate")
+    # 2) try RenewToken on the best candidate (works ONLY on SELF Dhan-Web
+    #    tokens; preserves the SELF type which market data needs)
+    for name, tok in candidates:
+        if not tok:
+            continue
+        renewed = renew_token(client_id, tok)
+        if renewed and not token_is_expired(renewed, margin_s=margin_s):
+            save_token(renewed)
+            notify(f"access token auto-renewed via RenewToken (+24h, expires "
+                   f"{time.strftime('%d %b %H:%M', time.localtime(token_expiry(renewed)))})")
+            return renewed, f"renewed via RenewToken ({name})"
+        notify(f"{name} could not be renewed via RenewToken "
+               "(SELF tokens only) - a fresh SELF token is needed for market data")
+    # 3) last resort: TOTP generates an APP token.  APP tokens CANNOT access
+    #    market data (WS feed / REST quotes) and cannot be renewed, so only
+    #    use them when nothing else is available - and say so loudly.
+    if pin and totp_secret:
+        tok = auto_token_from_totp(client_id, pin, totp_secret, notify=notify)
+        if tok and not token_is_expired(tok, margin_s=0):
+            notify("WARNING: this is an APP token - funds/portfolio work, but "
+                   "LIVE MARKET DATA (WebSocket/REST quotes) requires a SELF token. "
+                   "Generate a fresh 24h token from Dhan Web (dev.dhan.co) or run "
+                   "'python run_terminal.py dhan-auth' to seed a SELF token.")
+            return tok, "TOTP APP fallback (no market data)"
+        return None, "TOTP token generation failed"
+    return None, "no usable token and no DHAN_PIN/DHAN_TOTP_SECRET configured"
+
+
 def resolve_token(client_id, access_token="", api_key=None, api_secret=None,
                   interactive=True, notify=print, pin=None, totp_secret=None):
     """
@@ -265,7 +350,9 @@ def resolve_token(client_id, access_token="", api_key=None, api_secret=None,
     Returns (token, source) or (None, reason).
     """
     if access_token and not token_is_expired(access_token):
-        return access_token, "env/saved token"
+        if validate_token(client_id, access_token):
+            return access_token, "env/saved token"
+        notify("saved/env token failed Dhan validation (corrupted copy?) - resolving fresh")
     if access_token:
         renewed = renew_token(client_id, access_token)
         if renewed and not token_is_expired(renewed):

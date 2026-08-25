@@ -1,11 +1,25 @@
 # files that must NOT be uploaded to Railway
-reports/
 logs/
 data/
 models/
+__pycache__/
+*.pyc
 .git/
 .railway/
-*.sqlite
+.athena_ref/
 *.env
 .env
 dhan_token.txt
+_dbcheck.py
+_dbcheck2.py
+_tokdiff.py
+_api_dbg.py
+_cap.py
+_cap.txt
+_chain_shape.py
+_chain_shape.txt
+_creds.py
+_creds.txt
+_creds2.py
+_creds2.txt
+_genurl.py

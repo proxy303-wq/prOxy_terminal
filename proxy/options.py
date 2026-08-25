@@ -48,6 +48,9 @@ class OptionLeg:
     delta: float
     theta_day: float = 0.0      # Black-76 theta per calendar day (negative)
     dte: int = 7                # days to expiry used
+    sl_basis: str = ""          # how the stop/target were derived (maximals/flat)
+    rr: float = 0.0             # target / stop ratio (premium terms)
+    p_target_reach: float = 0.0 # probability the target is touched (maximals)
 
 
 def atm_strike(spot, step=50.0):
@@ -149,6 +152,44 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
     theta_day = g["theta"]   # negative for long options
 
     quantity = lots * cfg.LOT_SIZE
+
+    # ---- stop/target: MAXIMALS (volatility distribution) or FLAT ----
+    sl_mode = getattr(cfg, "SL_MODE", "flat")
+    sl_basis = ""
+    rr = 0.0
+    p_target_reach = 0.0
+    if sl_mode == "maximals":
+        from .maximals import sl_target_from_maximals
+        mx = sl_target_from_maximals(
+            spot, premium, abs(delta), sigma,
+            holding_bars=getattr(cfg, "MAXIMALS_HOLDING_BARS", 6),
+            alpha_stop=getattr(cfg, "MAXIMALS_ALPHA_STOP", 0.10),
+            alpha_target=getattr(cfg, "MAXIMALS_ALPHA_TARGET", 0.50),
+            min_stop_pct=getattr(cfg, "MAXIMALS_MIN_STOP_PCT", 0.005),
+            min_target_pct=getattr(cfg, "MAXIMALS_MIN_TARGET_PCT", 0.010),
+        )
+        if mx and mx["stop_premium_pct"] > 0:
+            stop_per_unit = premium * mx["stop_premium_pct"]
+            target_per_unit = premium * mx["target_premium_pct"]
+            rr = mx["rr"]
+            p_target_reach = mx["p_target_reach"]
+            sl_basis = (
+                f"maximals sigma {mx['vol_annual'] * 100:.0f}% ann "
+                f"({mx['holding_bars'] * 5}m hold, a_stop {mx['alpha_stop'] * 100:.0f}%, "
+                f"a_tgt {mx['alpha_target'] * 100:.0f}%, R:R {mx['rr']:.2f}, "
+                f"P(tgt) {mx['p_target_reach'] * 100:.0f}%)"
+            )
+        else:
+            stop_per_unit = premium * cfg.STOP_LOSS_PCT
+            target_per_unit = premium * cfg.PROFIT_TARGET_PCT
+            sl_basis = "maximals unavailable - flat fallback"
+            rr = cfg.PROFIT_TARGET_PCT / cfg.STOP_LOSS_PCT if cfg.STOP_LOSS_PCT > 0 else 0.0
+    else:
+        stop_per_unit = premium * cfg.STOP_LOSS_PCT
+        target_per_unit = premium * cfg.PROFIT_TARGET_PCT
+        rr = cfg.PROFIT_TARGET_PCT / cfg.STOP_LOSS_PCT if cfg.STOP_LOSS_PCT > 0 else 0.0
+        sl_basis = f"flat {cfg.STOP_LOSS_PCT * 100:.1f}% / {cfg.PROFIT_TARGET_PCT * 100:.1f}%"
+
     # Dhan-style instrument symbol: "NIFTY 27AUG 25600 CE"
     if dte and getattr(cfg, "OPTION_EXPIRY_BUCKET", None):
         try:
@@ -166,15 +207,22 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
         lot_size=cfg.LOT_SIZE,
         lots=lots,
         quantity=quantity,
-        stop_per_unit=round(premium * cfg.STOP_LOSS_PCT, 2),
-        target_per_unit=round(premium * cfg.PROFIT_TARGET_PCT, 2),
-        risk_per_lot=round(cfg.LOT_SIZE * premium * cfg.STOP_LOSS_PCT, 2),
-        target_per_lot=round(cfg.LOT_SIZE * premium * cfg.PROFIT_TARGET_PCT, 2),
+        # keep FULL precision here; round only at display time.  The GTT
+        # levels (stop_premium/target_premium) and the per-lot SL must all
+        # derive from the SAME unrounded values so the math is consistent:
+        #   sl_per_lot = stop_per_unit * LOT_SIZE  exactly.
+        stop_per_unit=stop_per_unit,
+        target_per_unit=target_per_unit,
+        risk_per_lot=round(cfg.LOT_SIZE * stop_per_unit, 2),
+        target_per_lot=round(cfg.LOT_SIZE * target_per_unit, 2),
         max_lots_by_risk=calc["max_lots_by_risk"],
         max_lots_by_capital=calc["max_lots_by_capital"],
         delta=delta,
         theta_day=theta_day,
         dte=dte,
+        sl_basis=sl_basis,
+        rr=rr,
+        p_target_reach=p_target_reach,
     )
 
 

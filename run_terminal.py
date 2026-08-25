@@ -219,8 +219,10 @@ def cmd_live(args):
 def cmd_backtest(args):
     banner()
     from proxy.backtest import Backtest
-    bt = Backtest(cfg, max_days=args.days, last_days=args.last, verbose=args.verbose)
-    label = f"last {args.last} days" if args.last else (f"{args.days} days" if args.days else "all days")
+    bt = Backtest(cfg, max_days=args.days, last_days=args.last, verbose=args.verbose,
+                  target_date=getattr(args, "date", None))
+    label = (f"date {args.date}" if getattr(args, "date", None)
+             else (f"last {args.last} days" if args.last else (f"{args.days} days" if args.days else "all days")))
     print(f"{MG}Backtesting on {bt.path} ({label}){R}\n")
     report = bt.run()
     paths = bt.save_report(report)
@@ -650,6 +652,7 @@ def main():
     p = sub.add_parser("backtest")
     p.add_argument("--days", type=int, default=None)
     p.add_argument("--last", type=int, default=None)
+    p.add_argument("--date", type=str, default=None, help="backtest a single day, e.g. 2026-07-07")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(func=cmd_backtest)
 

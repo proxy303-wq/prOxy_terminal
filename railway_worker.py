@@ -167,27 +167,47 @@ def run_trading_day(notifier, trade_date):
             last_bar = bar
             engine.process_bar(bar)
     else:
-        # live feed: poll bars; fall back to synthetic if the feed dies
+        # live feed: poll bars; RECONNECT fast when the socket dies (Dhan drops
+        # connections from non-whitelisted egress IPs - retrying until a
+        # whitelisted IP is hit keeps the feed alive), then fall back to
+        # synthetic only after several failed reconnects.
         started = now_ist()
         last_bar_time = time.time()
-        last_hb = 0.0
+        reconnect_attempts = 0
         while now_ist().time() <= dt_time(15, 31) and (now_ist() - started).total_seconds() < 6 * 3600:
             bar = feed._next_5m_bar(block=False)
             if bar is not None:
                 last_bar = bar
                 last_bar_time = time.time()
+                reconnect_attempts = 0
                 engine.process_bar(bar)
             else:
-                if time.time() - last_bar_time > NO_BAR_FALLBACK_SECONDS:
-                    notifier.log(
-                        f"No live bars for {NO_BAR_FALLBACK_SECONDS}s - switching to synthetic replay",
-                        "WARN",
-                    )
-                    feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
-                    for b in feed:
-                        last_bar = b
-                        engine.process_bar(b)
-                    break
+                dead = feed._thread is None or not feed._thread.is_alive()
+                if dead and time.time() - last_bar_time > 15:
+                    if reconnect_attempts < 8:
+                        reconnect_attempts += 1
+                        notifier.log(f"LIVE feed socket died - reconnecting (attempt {reconnect_attempts}/8)", "WARN")
+                        try:
+                            feed.close()
+                        except Exception:
+                            pass
+                        try:
+                            from proxy.dhan_live import DhanLiveFeed
+                            feed = DhanLiveFeed()
+                            feed.connect()
+                        except Exception as exc:
+                            notifier.log(f"LIVE reconnect failed ({exc})", "WARN")
+                        last_bar_time = time.time()  # give the new socket time
+                    elif time.time() - last_bar_time > NO_BAR_FALLBACK_SECONDS:
+                        notifier.log(
+                            f"No live bars after {NO_BAR_FALLBACK_SECONDS}s and {reconnect_attempts} reconnects - switching to synthetic replay",
+                            "WARN",
+                        )
+                        feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
+                        for b in feed:
+                            last_bar = b
+                            engine.process_bar(b)
+                        break
                 time.sleep(1)
 
     summary = engine.finish_day(last_bar) if last_bar is not None else None

@@ -158,7 +158,9 @@ def _worker(client_id, access_token):
         except Exception as exc:
             with _lock:
                 _error = str(exc)
-        time.sleep(1.2)  # Dhan REST marketfeed rate limit = 1 req/s
+        # 2.5s poll (0.4 req/s): the worker feed shares the same client-id,
+        # so stay comfortably under Dhan's 1 req/s rate limit
+        time.sleep(2.5)
 
 
 def start_live_feed():

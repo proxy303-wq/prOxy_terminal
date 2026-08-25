@@ -129,7 +129,9 @@ def run_trading_day(notifier, trade_date):
     feed = None
     try:
         from proxy.dhan_rest_feed import DhanRestFeed
-        feed = DhanRestFeed()
+        # 1.8s poll (0.56 req/s): the dashboard poller shares the same
+        # client-id, so stay comfortably under Dhan's 1 req/s limit
+        feed = DhanRestFeed(poll_interval=1.8)
         feed.connect()
         time.sleep(3)
         if feed._thread is None or not feed._thread.is_alive():
@@ -211,7 +213,7 @@ def run_trading_day(notifier, trade_date):
                             pass
                         try:
                             from proxy.dhan_rest_feed import DhanRestFeed
-                            feed = DhanRestFeed()
+                            feed = DhanRestFeed(poll_interval=1.8)
                             feed.connect()
                         except Exception as exc:
                             notifier.log(f"LIVE reconnect failed ({exc})", "WARN")

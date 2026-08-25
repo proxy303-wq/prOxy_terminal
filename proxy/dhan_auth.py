@@ -155,7 +155,7 @@ def renew_token(client_id, token):
 def api_key_consent(api_key, secret, client_id=None):
     """POST /app/generate-consent?client_id=... -> {consentAppId}.
 
-    The credentials in C:\Athena_X\dhan API KKEY.txt are Dhan APP
+    The credentials in C:/Athena_X/dhan API KKEY.txt are Dhan APP
     credentials (app_id/app_secret) - the APP flow is the one Dhan
     accepts (verified: consentAppId GENERATED).  Headers app_id/app_secret.
     """

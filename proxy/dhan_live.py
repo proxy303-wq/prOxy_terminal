@@ -53,7 +53,7 @@ class DhanLiveFeed:
     _SEG_MAP = {"IDX": 0, "NSE": 1, "NSE_FNO": 2, "BSE": 4, "MCX": 5}
 
     def __init__(self, client_id=None, access_token=None, security_id=NIFTY_INDEX_ID,
-                 exchange_segment=0, bar_seconds=300, timeout=30):
+                 exchange_segment=0, bar_seconds=300, timeout=30, max_idle_seconds=300):
         if not dhan_available():
             raise DhanUnavailable("dhanhq SDK not installed - pip install dhanhq")
         self.client_id = client_id or os.getenv("DHAN_CLIENT_ID")
@@ -132,6 +132,7 @@ class DhanLiveFeed:
     def _next_5m_bar(self, block=True):
         """Accumulate ticks until a 5-minute bar closes; return the bar."""
         deadline = time.time() + self.timeout if not block else None
+        idle_since = time.time()
         while not self._closed:
             # enforce the wall-clock deadline even while ticks are flowing,
             # otherwise a busy queue never lets this call return None
@@ -140,7 +141,14 @@ class DhanLiveFeed:
             try:
                 tick = self._ticks.get(timeout=5)
             except queue.Empty:
+                # blocking callers (engine.run_feed) must not hang forever if
+                # the socket dies silently - raise after max_idle_seconds
+                if block and time.time() - idle_since > self.max_idle_seconds:
+                    raise RuntimeError(
+                        f"Dhan WS feed idle for >{self.max_idle_seconds}s - no market data"
+                    )
                 continue
+            idle_since = time.time()
             if "error" in tick:
                 raise RuntimeError("Dhan WS error: " + str(tick["error"]))
             ltp = tick.get("ltp")

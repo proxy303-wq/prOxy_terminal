@@ -108,10 +108,12 @@ class DhanRestFeed:
     """
 
     def __init__(self, client_id=None, access_token=None, security_id=NIFTY_INDEX_ID,
-                 poll_interval=_POLL_INTERVAL, timeout=30, notify=print):
+                 poll_interval=_POLL_INTERVAL, timeout=30, max_idle_seconds=300,
+                 notify=print):
         self.client_id = client_id or os.getenv("DHAN_CLIENT_ID")
         self.access_token = access_token or os.getenv("DHAN_ACCESS_TOKEN")
         self.security_id = security_id
+        self.max_idle_seconds = max_idle_seconds
         if not self.client_id or not self.access_token:
             # token file fallback (reports/dhan_token.txt)
             try:
@@ -195,6 +197,7 @@ class DhanRestFeed:
 
     def _next_5m_bar(self, block=True):
         deadline = time.time() + self.timeout if not block else None
+        idle_since = time.time()
         while not self._closed:
             # enforce the wall-clock deadline even while ticks are flowing,
             # otherwise a busy queue never lets this call return None
@@ -203,7 +206,14 @@ class DhanRestFeed:
             try:
                 tick = self._ticks.get(timeout=5)
             except queue.Empty:
+                # blocking callers (engine.run_feed) must not hang forever if
+                # the feed dies silently - raise after max_idle_seconds
+                if block and time.time() - idle_since > self.max_idle_seconds:
+                    raise RuntimeError(
+                        f"Dhan REST feed idle for >{self.max_idle_seconds}s - no market data"
+                    )
                 continue
+            idle_since = time.time()
             ltp = tick.get("ltp")
             if ltp is None:
                 continue

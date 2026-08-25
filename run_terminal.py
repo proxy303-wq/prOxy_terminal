@@ -116,6 +116,42 @@ def cmd_rules(args=None):
     TRADING 9:15-15:15 | POST-MARKET 15:15-15:30 (P&L, tracking, report)""")
 
 
+def _connect_live_feed():
+    """Try Dhan WebSocket, then Dhan REST marketfeed; return (feed, name).
+
+    The WebSocket is egress-whitelist gated (Dhan drops it from foreign IPs)
+    while the REST marketfeed works from anywhere.  Each candidate gets ~5s
+    to prove it delivers ticks before the next is tried.  Returns (None, None)
+    if neither works."""
+    import time
+    candidates = []
+    try:
+        from proxy.dhan_live import DhanLiveFeed
+        candidates.append(("Dhan WebSocket", lambda: DhanLiveFeed()))
+    except Exception:
+        pass
+    try:
+        from proxy.dhan_rest_feed import DhanRestFeed
+        candidates.append(("Dhan REST marketfeed", lambda: DhanRestFeed()))
+    except Exception:
+        pass
+    for name, maker in candidates:
+        try:
+            feed = maker()
+            feed.connect()
+            time.sleep(5)
+            if feed.live_ltps:
+                return feed, name
+            try:
+                feed.close()
+            except Exception:
+                pass
+            print(f"{YE}{name}: connected but no ticks in 5s - trying next{R}")
+        except Exception as exc:
+            print(f"{YE}{name} failed ({exc}) - trying next{R}")
+    return None, None
+
+
 def cmd_live(args):
     banner()
     from proxy.data import SyntheticLiveFeed, FastForwardFeed, yfinance_available
@@ -161,33 +197,21 @@ def cmd_live(args):
         except Exception as exc:
             print(f"{RED}Dhan live broker error: {exc}{R}")
             return
-        from proxy.dhan_live import DhanLiveFeed, DhanUnavailable
-        try:
-            feed = DhanLiveFeed()
-            feed.connect()
-            print(f"{GR}Dhan WebSocket connected - streaming live 5m bars{R}")
-        except DhanUnavailable as exc:
-            print(f"{YE}Dhan feed unavailable ({exc}) - synthetic bars, real orders still live.{R}")
-            feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
-        except Exception as exc:
-            print(f"{YE}Dhan feed error ({exc}) - synthetic bars, real orders still live.{R}")
+        feed, feed_name = _connect_live_feed()
+        if feed is not None:
+            print(f"{GR}{feed_name} connected - streaming live 5m bars{R}")
+        else:
+            print(f"{YE}No live Dhan feed - synthetic bars, real orders still live.{R}")
             feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
 
     # ---- --dhan: paper orders, live Dhan market data ----
     elif getattr(args, "dhan", False):
         broker = PaperBroker(cfg.CAPITAL)
-        from proxy.dhan_live import DhanLiveFeed, DhanUnavailable
-        try:
-            feed = DhanLiveFeed()
-            feed.connect()
-            print(f"{GR}Dhan WebSocket connected - streaming live 5m bars (paper orders){R}")
-        except DhanUnavailable as exc:
-            print(f"{RED}Dhan feed unavailable: {exc}{R}")
-            print(f"{YE}Falling back to synthetic feed.{R}")
-            feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
-        except Exception as exc:
-            print(f"{RED}Dhan feed error: {exc}{R}")
-            print(f"{YE}Falling back to synthetic feed.{R}")
+        feed, feed_name = _connect_live_feed()
+        if feed is not None:
+            print(f"{GR}{feed_name} connected - streaming live 5m bars (paper orders){R}")
+        else:
+            print(f"{RED}No live Dhan feed - falling back to synthetic feed.{R}")
             feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
 
     # ---- default: synthetic paper demo ----
@@ -201,7 +225,13 @@ def cmd_live(args):
     live_capital = balance["cash"] if live_orders and balance else None
     engine = PaperEngine(cfg, broker=broker, tracker=tracker, notifier=notifier,
                          trade_date=trade_date, capital=live_capital)
-    summary = engine.run_feed(feed, live=False)
+    try:
+        summary = engine.run_feed(feed, live=False)
+    except RuntimeError as exc:
+        # live feed died (idle watchdog) - do not hang silently
+        print(f"{RED}Feed stopped: {exc}{R}")
+        print(f"{YE}Closing the day on the last known bar.{R}")
+        summary = engine.finish_day(None)
     mode_tag = "LIVE (real orders)" if live_orders else "PAPER"
     print(f"""
   {B}DAY SUMMARY - {mode_tag}{R}

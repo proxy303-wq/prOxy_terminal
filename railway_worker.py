@@ -118,6 +118,25 @@ def run_trading_day(notifier, trade_date):
         trade_date=trade_date,
     )
 
+    # warm-up: seed indicators with recent history so signals start on the
+    # first live bar instead of waiting ~30 bars (2.5 hours).  Prior-day bars
+    # are used only for indicator warm-up - entries still require today's date.
+    try:
+        from proxy.data import load_csv, csv_bars_for_day
+        import os as _os
+        _warm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "warmup_5m.csv")
+        _csv_path = cfg.CSV_PATH if _os.path.exists(cfg.CSV_PATH) else _warm_path
+        _df = load_csv(_csv_path)
+        _days = sorted(_df["date"].dt.date.unique())
+        _warm = []
+        for _d in _days[-3:]:
+            _warm.extend(csv_bars_for_day(_df, _d))
+        for _b in _warm[-160:]:
+            engine.history.append(_b)
+        notifier.log(f"LIVE warm-up: seeded {len(_warm[-160:])} history bars for indicators", "INFO")
+    except Exception as _exc:
+        notifier.log(f"LIVE warm-up skipped ({_exc}) - indicators will warm up naturally", "INFO")
+
     last_bar = None
     if getattr(feed, "fast", False):
         # synthetic instant replay: consume every bar, then finish the day

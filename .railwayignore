@@ -1,6 +1,7 @@
 # files that must NOT be uploaded to Railway
 logs/
-data/
+data/*.csv
+!data/warmup_5m.csv
 models/
 __pycache__/
 *.pyc

@@ -14,6 +14,7 @@ __pycache__/
 
 # large sample market data (get from the Athena sample; see README)
 data/*.csv
+!data/warmup_5m.csv
 
 # trained ML models (regenerate with: python run_terminal.py ml-train)
 models/

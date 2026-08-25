@@ -59,14 +59,13 @@ class DhanBroker(Broker):
             load_athena_env()   # ensure DHAN_PIN / DHAN_TOTP_SECRET are in env
         except Exception:
             pass
-        from .dhan_auth import auto_renew_token
+        from .dhan_auth import resolve_token_safe
         creds = _load_athena_env()
         self.client_id = client_id or creds["client_id"]
         if not self.client_id:
             raise RuntimeError("DHAN_CLIENT_ID missing (C:\Athena_X\.env)")
-        self.token, self.token_source = auto_renew_token(
-            self.client_id, access_token=creds["access_token"], pin=os.environ.get("DHAN_PIN"),
-            totp_secret=os.environ.get("DHAN_TOTP_SECRET"), notify=notify)
+        # single-generator rule (container consumes, local machine generates)
+        self.token, self.token_source = resolve_token_safe(self.client_id, notify=notify)
         if not self.token:
             raise RuntimeError("no usable Dhan access token - set DHAN_ACCESS_TOKEN or DHAN_PIN/DHAN_TOTP_SECRET")
         from dhanhq import DhanContext, dhanhq

@@ -213,19 +213,15 @@ def get_dhan_client():
     """Create a Dhan client for read-only dashboard queries using the
     24-hour access token.  Never touches the API-key consent flow."""
     try:
-        from .dhan_auth import auto_renew_token
+        from .dhan_auth import resolve_token_safe
         from dhanhq import DhanContext, dhanhq
     except Exception:
         return None
     client_id = os.getenv("DHAN_CLIENT_ID")
     if not client_id:
         return None
-    # fully automatic 24-hour token: renews (RenewToken -> TOTP) before expiry
-    token, _src = auto_renew_token(
-        client_id, access_token=os.getenv("DHAN_ACCESS_TOKEN"), pin=os.environ.get("DHAN_PIN"),
-        totp_secret=os.environ.get("DHAN_TOTP_SECRET"), notify=lambda *a: None,
-        margin_hours=2,
-    )
+    # single-generator rule: container consumes, local machine generates
+    token, _src = resolve_token_safe(client_id, notify=lambda *a: None)
     if not token:
         return None
     try:

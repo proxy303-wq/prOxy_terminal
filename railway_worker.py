@@ -252,22 +252,19 @@ def ensure_token(notifier):
     """Fully automatic 24-hour Dhan token: renew (RenewToken -> TOTP) before expiry."""
     try:
         import os
-        from proxy.dhan_auth import auto_renew_token, token_type, token_expiry
-        tok, src = auto_renew_token(
-            os.environ.get("DHAN_CLIENT_ID"), access_token=os.environ.get("DHAN_ACCESS_TOKEN"),
-            pin=os.environ.get("DHAN_PIN"),
-            totp_secret=os.environ.get("DHAN_TOTP_SECRET"), notify=lambda *a: None)
+        from proxy.dhan_auth import resolve_token_safe, token_type, token_expiry
+        tok, src = resolve_token_safe(os.environ.get("DHAN_CLIENT_ID"), notify=lambda *a: None)
         if tok:
             import time
             ttype = token_type(tok) or "?"
             hours = round((token_expiry(tok) - time.time()) / 3600, 1)
             notifier.log(f"LIVE Dhan token: {src} | type {ttype} | expires in {hours}h", "INFO")
         else:
-            # fall back to the env/saved token without validation - better a
-            # possibly-working token than MISSING (the feed validates anyway)
+            # fall back to the env/saved token without validation - never
+            # generate on the container (one generator only)
             tok = (os.environ.get("DHAN_ACCESS_TOKEN") or
                    __import__("proxy.dhan_auth", fromlist=["load_saved_token"]).load_saved_token())
-            notifier.log("LIVE Dhan token: renewal failed - using existing token", "WARN")
+            notifier.log("LIVE Dhan token: renewal failed - using existing token (no generation on container)", "WARN")
         return tok
     except Exception as exc:
         notifier.log(f"LIVE Dhan token check failed: {exc}", "WARN")

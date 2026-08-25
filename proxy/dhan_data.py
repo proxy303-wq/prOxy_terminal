@@ -31,14 +31,11 @@ INSTRUMENT_INDEX = "INDEX"
 def _client():
     """Validated token via the auto-renew path (env -> saved -> RenewToken -> TOTP)."""
     from dhanhq import DhanContext, dhanhq
-    from .dhan_auth import auto_renew_token
+    from .dhan_auth import resolve_token_safe
     cid = os.environ.get("DHAN_CLIENT_ID")
     if not cid:
         return None
-    tok, _src = auto_renew_token(
-        cid, access_token=os.environ.get("DHAN_ACCESS_TOKEN"),
-        pin=os.environ.get("DHAN_PIN"), totp_secret=os.environ.get("DHAN_TOTP_SECRET"),
-        notify=lambda *a: None)
+    tok, _src = resolve_token_safe(cid, notify=lambda *a: None)
     if not tok:
         return None
     return dhanhq(DhanContext(cid, tok))

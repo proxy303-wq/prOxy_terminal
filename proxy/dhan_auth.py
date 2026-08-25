@@ -334,6 +334,30 @@ def auto_renew_token(client_id, access_token=None, pin=None, totp_secret=None, n
     return None, "no usable token and no DHAN_PIN/DHAN_TOTP_SECRET configured"
 
 
+def is_token_generator():
+    """Only ONE process should generate tokens: every TOTP generateAccessToken
+    call invalidates the previous token, so multiple generators (local machine
+    + Railway container) keep killing each other's tokens.
+
+    Default TRUE (local = generator).  The deployed container sets
+    PROXY_AUTO_GENERATE_TOKEN=false and only CONSUMES."""
+    return os.environ.get("PROXY_AUTO_GENERATE_TOKEN", "true").lower() == "true"
+
+
+def resolve_token_safe(client_id, notify=print):
+    """Token resolution that respects the generator/consumer split.
+
+    Generator (local): auto_renew_token (validate -> RenewToken -> TOTP).
+    Consumer (container): env/saved token AS-IS, never generates."""
+    if is_token_generator():
+        return auto_renew_token(
+            client_id, access_token=os.environ.get("DHAN_ACCESS_TOKEN"),
+            pin=os.environ.get("DHAN_PIN"), totp_secret=os.environ.get("DHAN_TOTP_SECRET"),
+            notify=notify)
+    tok = os.environ.get("DHAN_ACCESS_TOKEN") or load_saved_token()
+    return (tok, "env/saved token (container, no generation)") if tok else (None, "no token available")
+
+
 def resolve_token(client_id, access_token="", api_key=None, api_secret=None,
                   interactive=True, notify=print, pin=None, totp_secret=None):
     """

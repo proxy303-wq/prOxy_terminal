@@ -286,11 +286,13 @@ def ensure_token(notifier):
 
 
 def probe_dhan_feed(notifier):
-    """One-shot Dhan REST marketfeed probe (works from ANY region).
+    """Dhan REST marketfeed probe (works from ANY region), with retries.
 
     The WebSocket feed is egress-whitelist gated (only a handful of Railway
     IPs stay connected), so the worker now uses the REST marketfeed, which
     returns live index values over plain HTTPS - no socket, no whitelist.
+    Retries 3x: at startup the Streamlit dashboard poller can collide with
+    Dhan's 1 req/s marketfeed limit (429).
     """
     import time
     try:
@@ -298,7 +300,16 @@ def probe_dhan_feed(notifier):
         from proxy.dhan_auth import resolve_token_safe
         cid = os.environ.get("DHAN_CLIENT_ID")
         tok, src = resolve_token_safe(cid, notify=lambda *a: None)
-        prices = fetch_ltp(cid, tok, [("IDX_I", 13), ("IDX_I", 25)])
+        prices = {}
+        last_err = None
+        for attempt in range(3):
+            try:
+                prices = fetch_ltp(cid, tok, [("IDX_I", 13), ("IDX_I", 25)])
+                if prices:
+                    break
+            except Exception as exc:
+                last_err = str(exc)[:150]
+            time.sleep(3)
         if prices:
             nifty = prices.get(("IDX_I", "13"))
             bn = prices.get(("IDX_I", "25"))
@@ -306,8 +317,26 @@ def probe_dhan_feed(notifier):
                 f"LIVE Dhan REST probe: OK ({src} token) - NIFTY {nifty:,.2f} / BANKNIFTY {bn:,.2f} - real market data from this region",
                 "INFO",
             )
+            # prove the continuous poller path too (the session feed uses it)
+            try:
+                feed = DhanRestFeed(poll_interval=1.8, timeout=8)
+                feed.connect()
+                time.sleep(9)
+                nifty_live = feed.live_ltps.get("13")
+                bn_live = feed.live_ltps.get("25")
+                alive = feed._thread is not None and feed._thread.is_alive()
+                feed.close()
+                if nifty_live:
+                    notifier.log(
+                        f"LIVE Dhan REST poller: ALIVE after 9s - NIFTY {nifty_live:,.2f} / BANKNIFTY {bn_live:,.2f} (thread {'OK' if alive else 'DEAD'})",
+                        "INFO",
+                    )
+                else:
+                    notifier.log("LIVE Dhan REST poller: no ticks in 9s - check rate limit", "WARN")
+            except Exception as exc:
+                notifier.log(f"LIVE Dhan REST poller check failed: {exc}", "WARN")
         else:
-            notifier.log("LIVE Dhan REST probe: empty response - check token/segment", "WARN")
+            notifier.log(f"LIVE Dhan REST probe: empty response after 3 tries (last: {last_err or 'no data'})", "WARN")
     except Exception as exc:
         notifier.log(f"LIVE Dhan REST probe failed: {exc}", "WARN")
 

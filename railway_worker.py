@@ -111,8 +111,9 @@ def _fetch_today_bars(trade_date):
 def run_trading_day(notifier, trade_date):
     """Run one paper session; send the daily summary afterwards.
 
-    Live Dhan WebSocket first, synthetic fallback after NO_BAR_FALLBACK_SECONDS
-    without any bar so the day always completes and notifications fire."""
+    Live Dhan REST marketfeed first, synthetic fallback after
+    NO_BAR_FALLBACK_SECONDS without any bar so the day always completes
+    and notifications fire."""
     import proxy.config as cfg
     from proxy.broker import PaperBroker
     from proxy.data import FastForwardFeed

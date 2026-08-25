@@ -62,7 +62,7 @@ def position_size(risk_budget_amount, entry, stop, cfg, lot_size=None):
     return lots, quantity, actual_risk
 
 
-def check_trade_allowed(state, cfg, signal=None, pending_trade=None):
+def check_trade_allowed(state, cfg, signal=None, pending_trade=None, live=False):
     """
     Every entry gate in one place:
       - trading day / market window
@@ -77,11 +77,14 @@ def check_trade_allowed(state, cfg, signal=None, pending_trade=None):
     if state.get("trading_halted_day"):
         return RiskCheck(False, "daily loss limit reached (-1%) - trading halted")
 
-    if state.get("trades_today", 0) >= cfg.MAX_TRADES_PER_DAY:
-        return RiskCheck(False, f"max trades per day reached ({cfg.MAX_TRADES_PER_DAY})")
-
-    if getattr(cfg, "DAILY_TARGET_STOP", True) and daily_target_hit(state, cfg):
-        return RiskCheck(False, "daily profit target reached - trading done for the day")
+    # trade-count cap and the daily-target stop apply to LIVE (real-money)
+    # trading only.  PAPER trades freely so the strategy's full behavior is
+    # visible; the daily/monthly loss limits still protect both modes.
+    if live:
+        if state.get("trades_today", 0) >= cfg.MAX_TRADES_PER_DAY:
+            return RiskCheck(False, f"max trades per day reached ({cfg.MAX_TRADES_PER_DAY}) [LIVE]")
+        if getattr(cfg, "DAILY_TARGET_STOP", True) and daily_target_hit(state, cfg):
+            return RiskCheck(False, "daily profit target reached - trading done for the day [LIVE]")
 
     if state.get("active_trade") is not None:
         return RiskCheck(False, "position already open (max concurrent positions)")

@@ -405,9 +405,11 @@ class PaperEngine:
                             gate = RiskCheck(False, f"strike {plan['strike']} already traded today (no averaging)")
                             events["strike_blocked"] = True
                         else:
-                            gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                            gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan,
+                                                       live=bool(getattr(self.broker, "live", False)))
                     else:
-                        gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                        gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan,
+                                                   live=bool(getattr(self.broker, "live", False)))
                     ml_ok = True
                     ml_note = ""
                     if gate.allowed and self.ml_predict is not None:

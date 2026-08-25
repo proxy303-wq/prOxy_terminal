@@ -300,9 +300,9 @@ class Backtest:
                             if self.verbose:
                                 print(f"    GATE  {plan['instrument']} blocked: {gate.reason}")
                         else:
-                            gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                            gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan, live=False)
                     else:
-                        gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan)
+                        gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan, live=False)
                     if gate.allowed:
                         active = plan
                         strikes_today[plan["strike"]] = strikes_today.get(plan["strike"], 0) + 1

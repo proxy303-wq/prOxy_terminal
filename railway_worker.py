@@ -85,6 +85,48 @@ def _write_heartbeat(status, trade_date=None):
         pass
 
 
+def _fetch_today_bars(trade_date):
+    """Today's 5-min NIFTY bars from Dhan's REST charts API (works from any
+    region).  fromDate/toDate MUST carry the time (YYYY-MM-DD HH:MM:SS) or
+    the API returns empty.  Skips the in-progress bar - the WS feed owns it."""
+    try:
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        from dhanhq import DhanContext, dhanhq
+        from proxy.dhan_auth import load_saved_token
+        _IST = _ZI("Asia/Kolkata")
+        tok = load_saved_token()
+        if not tok:
+            return None
+        client = dhanhq(DhanContext(os.environ.get("DHAN_CLIENT_ID"), tok))
+        f = f"{trade_date} 09:15:00"
+        t = f"{trade_date} 15:30:00"
+        res = client.intraday_minute_data("13", "IDX_I", "INDEX", f, t, interval="5")
+        data = (res or {}).get("data") or {}
+        opens = data.get("open") or []
+        highs = data.get("high") or []
+        lows = data.get("low") or []
+        closes = data.get("close") or []
+        vols = data.get("volume") or []
+        ts = data.get("timestamp") or []
+        now = _dt.now(_IST)
+        cur_bucket = (now.hour * 60 + now.minute) // 5 * 5
+        bars = []
+        for i in range(min(len(opens), len(ts))):
+            bdt = _dt.fromtimestamp(float(ts[i]), tz=_IST)
+            if (bdt.hour * 60 + bdt.minute) >= cur_bucket:
+                continue
+            bars.append({
+                "time": bdt,
+                "open": float(opens[i]), "high": float(highs[i]),
+                "low": float(lows[i]), "close": float(closes[i]),
+                "volume": float(vols[i]) if i < len(vols) else 0.0,
+            })
+        return bars if bars else None
+    except Exception:
+        return None
+
+
 def run_trading_day(notifier, trade_date):
     """Run one paper session; send the daily summary afterwards.
 
@@ -118,24 +160,29 @@ def run_trading_day(notifier, trade_date):
         trade_date=trade_date,
     )
 
-    # warm-up: seed indicators with recent history so signals start on the
-    # first live bar instead of waiting ~30 bars (2.5 hours).  Prior-day bars
-    # are used only for indicator warm-up - entries still require today's date.
-    try:
-        from proxy.data import load_csv, csv_bars_for_day
-        import os as _os
-        _warm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "warmup_5m.csv")
-        _csv_path = cfg.CSV_PATH if _os.path.exists(cfg.CSV_PATH) else _warm_path
-        _df = load_csv(_csv_path)
-        _days = sorted(_df["date"].dt.date.unique())
-        _warm = []
-        for _d in _days[-3:]:
-            _warm.extend(csv_bars_for_day(_df, _d))
-        for _b in _warm[-160:]:
-            engine.history.append(_b)
-        notifier.log(f"LIVE warm-up: seeded {len(_warm[-160:])} history bars for indicators", "INFO")
-    except Exception as _exc:
-        notifier.log(f"LIVE warm-up skipped ({_exc}) - indicators will warm up naturally", "INFO")
+    # warm-up: seed indicators so signals start on the first live bar.
+    # Preferred: TODAY's bars from Dhan's REST charts API (accurate current-day
+    # context).  Fallback: recent bars from the shipped warmup CSV.
+    _warm = _fetch_today_bars(trade_date)
+    if _warm:
+        engine.history.extend(_warm)
+        notifier.log(f"LIVE warm-up: seeded {len(_warm)} of today's bars from Dhan REST", "INFO")
+    else:
+        try:
+            from proxy.data import load_csv, csv_bars_for_day
+            import os as _os
+            _warm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "warmup_5m.csv")
+            _csv_path = cfg.CSV_PATH if _os.path.exists(cfg.CSV_PATH) else _warm_path
+            _df = load_csv(_csv_path)
+            _days = sorted(_df["date"].dt.date.unique())
+            _warm = []
+            for _d in _days[-3:]:
+                _warm.extend(csv_bars_for_day(_df, _d))
+            for _b in _warm[-160:]:
+                engine.history.append(_b)
+            notifier.log(f"LIVE warm-up: seeded {len(_warm[-160:])} history bars from CSV", "INFO")
+        except Exception as _exc:
+            notifier.log(f"LIVE warm-up skipped ({_exc}) - indicators will warm up naturally", "INFO")
 
     last_bar = None
     if getattr(feed, "fast", False):

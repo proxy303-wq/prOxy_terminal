@@ -272,18 +272,15 @@ def auto_token_from_totp(client_id, pin, totp_secret, notify=print):
 
 def validate_token(client_id, token):
     """Ask Dhan whether the token is actually accepted (catches corrupted
-    copies that pass structural checks but fail DH-906)."""
+    copies that pass structural checks but fail DH-906).
+
+    Uses the official dhanhq SDK (get_fund_limits) - the raw REST call can
+    false-negative on valid tokens, so the SDK is the source of truth."""
     try:
-        from .dhan_broker import _load_athena_env  # noqa: F401 (env fallback)
-    except Exception:
-        pass
-    try:
-        import urllib.request as _ur
-        req = _ur.Request('https://api.dhan.co/v2/fundlimit',
-                          headers={'access-token': token, 'client-id': client_id,
-                                   'Content-type': 'application/json', 'Accept': 'application/json'})
-        resp = json.loads(_ur.urlopen(req, timeout=15).read())
-        return bool(resp and resp.get('status') == 'success')
+        from dhanhq import DhanContext, dhanhq
+        client = dhanhq(DhanContext(client_id, token))
+        r = client.get_fund_limits()
+        return bool(r and r.get('status') == 'success')
     except Exception:
         return False
 

@@ -183,10 +183,17 @@ def run_trading_day(notifier, trade_date):
                 engine.process_bar(bar)
             else:
                 dead = feed._thread is None or not feed._thread.is_alive()
-                if dead and time.time() - last_bar_time > 15:
+                if dead and time.time() - last_bar_time > 20:
                     if reconnect_attempts < 8:
                         reconnect_attempts += 1
-                        notifier.log(f"LIVE feed socket died - reconnecting (attempt {reconnect_attempts}/8)", "WARN")
+                        # gentle backoff: 30s, 60s, 90s... (Dhan rate-limits
+                        # rapid reconnects, so do NOT hammer the socket)
+                        wait = 30 * reconnect_attempts
+                        notifier.log(f"LIVE feed socket died - reconnecting in {wait}s (attempt {reconnect_attempts}/8)", "WARN")
+                        for _w in range(wait):
+                            time.sleep(1)
+                            if now_ist().time() > dt_time(15, 31):
+                                break
                         try:
                             feed.close()
                         except Exception:
@@ -208,7 +215,7 @@ def run_trading_day(notifier, trade_date):
                             last_bar = b
                             engine.process_bar(b)
                         break
-                time.sleep(1)
+                time.sleep(2)
 
     summary = engine.finish_day(last_bar) if last_bar is not None else None
 
@@ -256,7 +263,11 @@ def ensure_token(notifier):
             hours = round((token_expiry(tok) - time.time()) / 3600, 1)
             notifier.log(f"LIVE Dhan token: {src} | type {ttype} | expires in {hours}h", "INFO")
         else:
-            notifier.log("LIVE Dhan token: MISSING", "WARN")
+            # fall back to the env/saved token without validation - better a
+            # possibly-working token than MISSING (the feed validates anyway)
+            tok = (os.environ.get("DHAN_ACCESS_TOKEN") or
+                   __import__("proxy.dhan_auth", fromlist=["load_saved_token"]).load_saved_token())
+            notifier.log("LIVE Dhan token: renewal failed - using existing token", "WARN")
         return tok
     except Exception as exc:
         notifier.log(f"LIVE Dhan token check failed: {exc}", "WARN")

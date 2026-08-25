@@ -6,14 +6,17 @@ Runs the PAPER trading engine every trading day, forwards signals +
 trades to Telegram (via Notifier), and sends a daily summary after the
 close.  Loops forever; safe to restart.
 
+Live index data comes from Dhan's REST marketfeed (no WebSocket), which
+works from any region/egress IP.
+
     web:    streamlit run streamlit_app.py   (Procfile web -> start.sh)
     worker: python railway_worker.py          (supervised inside start.sh)
 
 Resilience:
-- Live Dhan WebSocket is tried first.  If the feed delivers no bars for
-  3 minutes (Dhan closes foreign connections), the day automatically
-  falls back to a synthetic replay so signals/trades/notifications still
-  flow.
+- Live market data comes from Dhan's REST marketfeed (POST /v2/marketfeed/ltp,
+  1 req/s) which works from ANY region - no egress-IP whitelist needed.
+  If the REST feed stops delivering bars, the day falls back to a
+  synthetic replay so signals/trades/notifications still flow.
 - A heartbeat is written to reports/worker_heartbeat.json on the volume
   every minute (visible in Railway's volume browser / dashboard).
 
@@ -125,12 +128,15 @@ def run_trading_day(notifier, trade_date):
 
     feed = None
     try:
-        from proxy.dhan_live import DhanLiveFeed
-        feed = DhanLiveFeed()
+        from proxy.dhan_rest_feed import DhanRestFeed
+        feed = DhanRestFeed()
         feed.connect()
-        notifier.log(f"LIVE Dhan feed connected - paper session {trade_date}", "INFO")
+        time.sleep(3)
+        if feed._thread is None or not feed._thread.is_alive():
+            raise RuntimeError("REST feed thread died at startup")
+        notifier.log(f"LIVE Dhan REST feed connected - paper session {trade_date}", "INFO")
     except Exception as exc:
-        notifier.log(f"LIVE Dhan feed unavailable ({exc}) - synthetic replay", "WARN")
+        notifier.log(f"LIVE Dhan REST feed unavailable ({exc}) - synthetic replay", "WARN")
         feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
 
     engine = PaperEngine(
@@ -161,7 +167,12 @@ def run_trading_day(notifier, trade_date):
     notifier.log(f"LIVE warm-up: seeded {len(_warm)} bars (Dhan REST history + CSV top-up)", "INFO")
 
     last_bar = None
-    if getattr(feed, "fast", False):
+    # synthetic feeds expose `fast` as a bool attribute; live feeds expose it
+    # as a method returning False - call it so the live branch is chosen.
+    _fast = getattr(feed, "fast", False)
+    if callable(_fast):
+        _fast = _fast()
+    if _fast:
         # synthetic instant replay: consume every bar, then finish the day
         for bar in feed:
             last_bar = bar
@@ -187,9 +198,9 @@ def run_trading_day(notifier, trade_date):
                     if reconnect_attempts < 8:
                         reconnect_attempts += 1
                         # gentle backoff: 30s, 60s, 90s... (Dhan rate-limits
-                        # rapid reconnects, so do NOT hammer the socket)
+                        # data requests, so do NOT hammer the API)
                         wait = 30 * reconnect_attempts
-                        notifier.log(f"LIVE feed socket died - reconnecting in {wait}s (attempt {reconnect_attempts}/8)", "WARN")
+                        notifier.log(f"LIVE REST feed died - reconnecting in {wait}s (attempt {reconnect_attempts}/8)", "WARN")
                         for _w in range(wait):
                             time.sleep(1)
                             if now_ist().time() > dt_time(15, 31):
@@ -199,12 +210,12 @@ def run_trading_day(notifier, trade_date):
                         except Exception:
                             pass
                         try:
-                            from proxy.dhan_live import DhanLiveFeed
-                            feed = DhanLiveFeed()
+                            from proxy.dhan_rest_feed import DhanRestFeed
+                            feed = DhanRestFeed()
                             feed.connect()
                         except Exception as exc:
                             notifier.log(f"LIVE reconnect failed ({exc})", "WARN")
-                        last_bar_time = time.time()  # give the new socket time
+                        last_bar_time = time.time()  # give the new feed time
                     elif time.time() - last_bar_time > NO_BAR_FALLBACK_SECONDS:
                         notifier.log(
                             f"No live bars after {NO_BAR_FALLBACK_SECONDS}s and {reconnect_attempts} reconnects - switching to synthetic replay",
@@ -271,31 +282,31 @@ def ensure_token(notifier):
         return None
 
 
-def probe_dhan_ws(notifier):
-    """Connect the Dhan WebSocket and report whether it stays up.
+def probe_dhan_feed(notifier):
+    """One-shot Dhan REST marketfeed probe (works from ANY region).
 
-    Region test: from the sfo region Dhan closed the socket ~1s after connect
-    ("no close frame received or sent").  From Singapore it should stay alive.
-    Runs at worker start and before each session.
+    The WebSocket feed is egress-whitelist gated (only a handful of Railway
+    IPs stay connected), so the worker now uses the REST marketfeed, which
+    returns live index values over plain HTTPS - no socket, no whitelist.
     """
     import time
     try:
-        from proxy.dhan_live import DhanLiveFeed
-        feed = DhanLiveFeed()
-        feed.connect()
-        time.sleep(12)
-        thread_alive = feed._thread is not None and feed._thread.is_alive()
-        ticks = feed._ticks.qsize()
-        try:
-            feed.close()
-        except Exception:
-            pass
-        if thread_alive:
-            notifier.log(f"LIVE Dhan WS probe: CONNECTED + ALIVE after 12s (ticks queued: {ticks}) - live market feed OK", "INFO")
+        from proxy.dhan_rest_feed import DhanRestFeed, fetch_ltp
+        from proxy.dhan_auth import resolve_token_safe
+        cid = os.environ.get("DHAN_CLIENT_ID")
+        tok, src = resolve_token_safe(cid, notify=lambda *a: None)
+        prices = fetch_ltp(cid, tok, [("IDX_I", 13), ("IDX_I", 25)])
+        if prices:
+            nifty = prices.get(("IDX_I", "13"))
+            bn = prices.get(("IDX_I", "25"))
+            notifier.log(
+                f"LIVE Dhan REST probe: OK ({src} token) - NIFTY {nifty:,.2f} / BANKNIFTY {bn:,.2f} - real market data from this region",
+                "INFO",
+            )
         else:
-            notifier.log("LIVE Dhan WS probe: connection DROPPED after 12s - Dhan may be closing sockets from this region (falling back to synthetic)", "WARN")
+            notifier.log("LIVE Dhan REST probe: empty response - check token/segment", "WARN")
     except Exception as exc:
-        notifier.log(f"LIVE Dhan WS probe failed: {exc}", "WARN")
+        notifier.log(f"LIVE Dhan REST probe failed: {exc}", "WARN")
 
 
 def main():
@@ -304,7 +315,7 @@ def main():
     notifier = Notifier(quiet=False)
     notifier.log("LIVE PAPER-LIVE worker started - runs paper trades on the LIVE market feed every morning (9:15 IST); signals, trades and the daily summary are posted here", "INFO")
     ensure_token(notifier)
-    probe_dhan_ws(notifier)
+    probe_dhan_feed(notifier)
 
     while True:
         try:

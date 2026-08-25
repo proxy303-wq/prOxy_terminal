@@ -4,10 +4,11 @@ PrOxy Trading Terminal - Live Market Feed (dashboard)
 
 Read-only live NIFTY + BANKNIFTY index data for the Streamlit dashboard.
 
-Mirrors Athena's live_market.py:
-- DhanHQ MarketFeed WebSocket in a background daemon thread.
-- Only ONE WebSocket worker per Python process.
-- NEVER places orders; WS failures never stop the dashboard.
+- Dhan REST marketfeed (POST /v2/marketfeed/ltp) polled in a background
+  daemon thread - works from ANY region (the Dhan WebSocket is gated to
+  whitelisted egress IPs, REST is not).
+- Only ONE poller worker per Python process.
+- NEVER places orders; feed failures never stop the dashboard.
 
 Auth uses the 24-hour access token ONLY (DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN,
 with a fallback to reports/dhan_token.txt).  No API-key consent flow.
@@ -108,31 +109,56 @@ def _update_from_fields(sid, fields):
 
 
 def _worker(client_id, access_token):
-    """Background websocket loop.  Reconnects forever; never raises out."""
+    """Background REST marketfeed poller.  Works from ANY region - Dhan's
+    WebSocket is egress-whitelist gated, the REST marketfeed is not.
+    Reconnects forever; never raises out."""
     global _error
-    from .dhan_live import RawDhanFeed
+    from .dhan_rest_feed import fetch_ltp
 
     instruments = [
         ("IDX_I", NIFTY_INDEX_ID),
         ("IDX_I", BANKNIFTY_INDEX_ID),
     ]
 
-    def on_tick(sid, fields):
-        _update_from_fields(sid, fields)
+    def seed_prev_close():
+        """Previous trading-day close from Dhan's REST charts (cosmetic)."""
+        try:
+            from .dhan_data import fetch_intraday_last_days
+            from datetime import date
+            df = fetch_intraday_last_days(days=2)
+            if df is not None and not df.empty:
+                rows = df[df["date"].dt.date < date.today()]
+                if not rows.empty:
+                    return float(rows.iloc[-1]["close"])
+        except Exception:
+            pass
+        return None
+
+    prev = seed_prev_close()
+    if prev:
+        with _lock:
+            for sym in _state:
+                if _state[sym]["previous_close"] is None:
+                    _state[sym]["previous_close"] = prev
 
     while True:
         try:
-            feed = RawDhanFeed(client_id, access_token, instruments, on_tick=on_tick, notify=lambda *a: None)
-            feed.start()
-            # block until the connection drops
-            while True:
-                time.sleep(5)
-                if feed._thread is None or not feed._thread.is_alive():
-                    break
+            prices = fetch_ltp(client_id, access_token, instruments)
+            if prices:
+                with _lock:
+                    _error = None
+                    for (_seg, sid), price in prices.items():
+                        symbol = _normalise_symbol(sid)
+                        if symbol:
+                            _state[symbol]["ltp"] = price
+                            _state[symbol]["timestamp"] = _now()
+            else:
+                with _lock:
+                    _error = "empty marketfeed response"
         except Exception as exc:
             with _lock:
                 _error = str(exc)
-        time.sleep(10)  # reconnect backoff
+        time.sleep(1.2)  # Dhan REST marketfeed rate limit = 1 req/s
 
 
 def start_live_feed():

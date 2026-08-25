@@ -45,12 +45,19 @@ class TestRisk(unittest.TestCase):
         self.assertTrue(self.state["trading_halted_month"])
         self.assertFalse(check_trade_allowed(self.state, cfg).allowed)
 
-    def test_max_trades_per_day(self):
+    def test_max_trades_per_day_live(self):
+        # LIVE trading is capped at MAX_TRADES_PER_DAY (user requirement)
         for _ in range(cfg.MAX_TRADES_PER_DAY):
             apply_daily_pnl(self.state, cfg, 500.0)
-        check = check_trade_allowed(self.state, cfg)
+        check = check_trade_allowed(self.state, cfg, live=True)
         self.assertFalse(check.allowed)
         self.assertIn("max trades", check.reason)
+
+    def test_paper_has_no_trade_cap(self):
+        # PAPER trading has NO daily trade cap (user requirement)
+        for _ in range(cfg.MAX_TRADES_PER_DAY + 3):
+            apply_daily_pnl(self.state, cfg, 500.0)
+        self.assertTrue(check_trade_allowed(self.state, cfg).allowed)
 
     def test_active_position_blocks_new_entry(self):
         self.state["active_trade"] = {"instrument": "X"}

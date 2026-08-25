@@ -133,11 +133,13 @@ class DhanLiveFeed:
         """Accumulate ticks until a 5-minute bar closes; return the bar."""
         deadline = time.time() + self.timeout if not block else None
         while not self._closed:
+            # enforce the wall-clock deadline even while ticks are flowing,
+            # otherwise a busy queue never lets this call return None
+            if deadline is not None and time.time() > deadline:
+                return None
             try:
                 tick = self._ticks.get(timeout=5)
             except queue.Empty:
-                if deadline is not None and time.time() > deadline:
-                    return None
                 continue
             if "error" in tick:
                 raise RuntimeError("Dhan WS error: " + str(tick["error"]))
@@ -146,7 +148,11 @@ class DhanLiveFeed:
                 continue
             ts = tick.get("tick_time") or datetime.now(IST)
             if isinstance(ts, (int, float)):
-                ts = datetime.fromtimestamp(ts / 1000.0, tz=IST)
+                # index packets carry epoch SECONDS, ticker packets ms
+                if ts > 1e12:
+                    ts = datetime.fromtimestamp(ts / 1000.0, tz=IST)
+                else:
+                    ts = datetime.fromtimestamp(ts, tz=IST)
             now = ts if isinstance(ts, datetime) else datetime.now(IST)
             if now.tzinfo is None:
                 now = now.replace(tzinfo=IST)
@@ -212,6 +218,10 @@ def _parse_packet(raw):
         return None
     code, _length, seg, sid = _FEED_HEADER.unpack_from(raw, 0)
     payload = raw[8:]
+    if code == _INDEX and len(payload) >= 8:
+        # Index Packet (annexure): float32 index value + int32 last update time
+        val, ts = struct.unpack("<fi", payload[:8])
+        return (code, seg, sid, {"ltp": val, "tick_time": ts})
     if code == _TICKER and len(payload) >= 8:
         ltp, ltt = struct.unpack("<fi", payload[:8])
         return (code, seg, sid, {"ltp": ltp, "ltt": ltt})
@@ -280,13 +290,19 @@ class RawDhanFeed:
     async def _subscribe(self, ws):
         for i in range(0, len(self.instruments), 100):
             chunk = self.instruments[i:i + 100]
-            msg = {
-                "RequestCode": 17,   # Quote mode: LTP + OHLC + volume (+ OI)
-                "InstrumentCount": len(chunk),
-                # SecurityId MUST be a STRING per the DhanHQ API doc
-                "InstrumentList": [{"ExchangeSegment": seg, "SecurityId": str(sid)} for seg, sid in chunk],
-            }
-            await ws.send(json.dumps(msg))
+            # Annexure feed request codes: 14 = Subscribe - Index Packet
+            # (documented for indices), 17 = Quote mode (empirically delivers
+            # index quotes too).  Subscribe BOTH for indices so ticks flow
+            # regardless of which mode Dhan serves; duplicates are harmless.
+            codes = [14, 17] if all(str(seg).upper() == "IDX_I" for seg, _ in chunk) else [17]
+            for code in codes:
+                msg = {
+                    "RequestCode": code,
+                    "InstrumentCount": len(chunk),
+                    # SecurityId MUST be a STRING per the DhanHQ API doc
+                    "InstrumentList": [{"ExchangeSegment": seg, "SecurityId": str(sid)} for seg, sid in chunk],
+                }
+                await ws.send(json.dumps(msg))
 
     def close(self):
         self._stop.set()

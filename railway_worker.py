@@ -163,26 +163,24 @@ def run_trading_day(notifier, trade_date):
     # warm-up: seed indicators so signals start on the first live bar.
     # Preferred: TODAY's bars from Dhan's REST charts API (accurate current-day
     # context).  Fallback: recent bars from the shipped warmup CSV.
-    _warm = _fetch_today_bars(trade_date)
-    if _warm:
-        engine.history.extend(_warm)
-        notifier.log(f"LIVE warm-up: seeded {len(_warm)} of today's bars from Dhan REST", "INFO")
-    else:
-        try:
-            from proxy.data import load_csv, csv_bars_for_day
-            import os as _os
-            _warm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "warmup_5m.csv")
-            _csv_path = cfg.CSV_PATH if _os.path.exists(cfg.CSV_PATH) else _warm_path
-            _df = load_csv(_csv_path)
-            _days = sorted(_df["date"].dt.date.unique())
-            _warm = []
-            for _d in _days[-3:]:
-                _warm.extend(csv_bars_for_day(_df, _d))
-            for _b in _warm[-160:]:
-                engine.history.append(_b)
-            notifier.log(f"LIVE warm-up: seeded {len(_warm[-160:])} history bars from CSV", "INFO")
-        except Exception as _exc:
-            notifier.log(f"LIVE warm-up skipped ({_exc}) - indicators will warm up naturally", "INFO")
+    # warm-up: today's real bars (REST) for accurate context, topped up with
+    # recent CSV bars so the 30-bar indicator window is satisfied instantly.
+    _warm = _fetch_today_bars(trade_date) or []
+    try:
+        from proxy.data import load_csv, csv_bars_for_day
+        import os as _os
+        _warm_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "data", "warmup_5m.csv")
+        _csv_path = cfg.CSV_PATH if _os.path.exists(cfg.CSV_PATH) else _warm_path
+        _df = load_csv(_csv_path)
+        _days = sorted(_df["date"].dt.date.unique())
+        for _d in _days[-3:]:
+            _warm.extend(csv_bars_for_day(_df, _d))
+    except Exception:
+        pass
+    _warm = _warm[-160:]
+    for _b in _warm:
+        engine.history.append(_b)
+    notifier.log(f"LIVE warm-up: seeded {len(_warm)} bars (REST today + CSV top-up)", "INFO")
 
     last_bar = None
     if getattr(feed, "fast", False):

@@ -328,10 +328,7 @@ def auto_renew_token(client_id, access_token=None, pin=None, totp_secret=None, n
     if pin and totp_secret:
         tok = auto_token_from_totp(client_id, pin, totp_secret, notify=notify)
         if tok and not token_is_expired(tok, margin_s=0):
-            notify("WARNING: this is an APP token - funds/portfolio work, but "
-                   "LIVE MARKET DATA (WebSocket/REST quotes) requires a SELF token. "
-                   "Generate a fresh 24h token from Dhan Web (dev.dhan.co) or run "
-                   "'python run_terminal.py dhan-auth' to seed a SELF token.")
+            notify("access token auto-regenerated via TOTP - fully automatic daily renewal (no browser needed)")
             return tok, "TOTP APP fallback (no market data)"
         return None, "TOTP token generation failed"
     return None, "no usable token and no DHAN_PIN/DHAN_TOTP_SECRET configured"

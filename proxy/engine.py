@@ -69,6 +69,12 @@ class PaperEngine:
                 "equity_curve": self.state.get("equity_curve", []),
             }
         self.active_trade = None      # not persisted across runs in v1
+        # clear any stale active trade persisted by a killed session (dashboard
+        # would otherwise show a phantom position after a restart)
+        try:
+            self.tracker.clear_active_trade()
+        except Exception:
+            pass
         self.bars_processed = 0
         # strike-once rule: date -> {strike: times_traded} (no averaging)
         self._strike_trades = {}

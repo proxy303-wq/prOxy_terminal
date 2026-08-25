@@ -95,7 +95,7 @@ def _fetch_today_bars(trade_date):
         from dhanhq import DhanContext, dhanhq
         from proxy.dhan_auth import load_saved_token
         _IST = _ZI("Asia/Kolkata")
-        tok = load_saved_token()
+        tok = os.environ.get("DHAN_ACCESS_TOKEN") or load_saved_token()
         if not tok:
             return None
         client = dhanhq(DhanContext(os.environ.get("DHAN_CLIENT_ID"), tok))

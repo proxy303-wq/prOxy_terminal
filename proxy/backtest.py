@@ -74,20 +74,32 @@ def aggregate_5m(bars_1m):
 
 
 class Backtest:
-    def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False, target_date=None):
+    def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False,
+                 target_date=None, df=None, df1m=None):
         self.cfg = cfg
         self.path = path or CSV_PATH
         self.max_days = max_days if max_days is not None else cfg.BACKTEST_MAX_DAYS
         self.last_days = last_days
         self.target_date = target_date   # single day as "YYYY-MM-DD"
         self.verbose = verbose
-        self.df = load_csv(self.path)
-        try:
-            self.df1m = load_csv(CSV_PATH_1M)
+        # df can be supplied directly (e.g. from Dhan's charts API via --dhan)
+        if df is not None:
+            self.df = df
+        else:
+            self.df = load_csv(self.path)
+        if df1m is not None:
+            self.df1m = df1m
             self._has_1m = True
-        except Exception:
+        elif df is not None:
             self.df1m = None
             self._has_1m = False
+        else:
+            try:
+                self.df1m = load_csv(CSV_PATH_1M)
+                self._has_1m = True
+            except Exception:
+                self.df1m = None
+                self._has_1m = False
         self.state = None
         self.trades = []
         self.daily_pnl = {}

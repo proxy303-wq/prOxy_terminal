@@ -86,45 +86,23 @@ def _write_heartbeat(status, trade_date=None):
 
 
 def _fetch_today_bars(trade_date):
-    """Today's 5-min NIFTY bars from Dhan's REST charts API (works from any
-    region).  fromDate/toDate MUST carry the time (YYYY-MM-DD HH:MM:SS) or
-    the API returns empty.  Skips the in-progress bar - the WS feed owns it."""
+    """Recent NIFTY 5-min bars from Dhan's REST charts API (works from any
+    region - the user has a historical-data subscription)."""
     try:
-        from datetime import datetime as _dt
-        from zoneinfo import ZoneInfo as _ZI
-        from dhanhq import DhanContext, dhanhq
-        from proxy.dhan_auth import load_saved_token
-        _IST = _ZI("Asia/Kolkata")
-        tok = os.environ.get("DHAN_ACCESS_TOKEN") or load_saved_token()
-        if not tok:
+        from proxy.dhan_data import fetch_intraday_last_days
+        df = fetch_intraday_last_days(days=5, end=trade_date)
+        if df is None or df.empty:
             return None
-        client = dhanhq(DhanContext(os.environ.get("DHAN_CLIENT_ID"), tok))
-        f = f"{trade_date} 09:15:00"
-        t = f"{trade_date} 15:30:00"
-        res = client.intraday_minute_data("13", "IDX_I", "INDEX", f, t, interval="5")
-        data = (res or {}).get("data") or {}
-        opens = data.get("open") or []
-        highs = data.get("high") or []
-        lows = data.get("low") or []
-        closes = data.get("close") or []
-        vols = data.get("volume") or []
-        ts = data.get("timestamp") or []
-        now = _dt.now(_IST)
-        cur_bucket = (now.hour * 60 + now.minute) // 5 * 5
-        bars = []
-        for i in range(min(len(opens), len(ts))):
-            bdt = _dt.fromtimestamp(float(ts[i]), tz=_IST)
-            if (bdt.hour * 60 + bdt.minute) >= cur_bucket:
-                continue
-            bars.append({
-                "time": bdt,
-                "open": float(opens[i]), "high": float(highs[i]),
-                "low": float(lows[i]), "close": float(closes[i]),
-                "volume": float(vols[i]) if i < len(vols) else 0.0,
-            })
-        return bars if bars else None
+        bars = [{
+            "time": row["date"].to_pydatetime(),
+            "open": float(row["open"]), "high": float(row["high"]),
+            "low": float(row["low"]), "close": float(row["close"]),
+            "volume": float(row["volume"]),
+        } for _, row in df.iterrows()]
+        return bars
     except Exception:
         return None
+
 
 
 def run_trading_day(notifier, trade_date):
@@ -180,7 +158,7 @@ def run_trading_day(notifier, trade_date):
     _warm = _warm[-160:]
     for _b in _warm:
         engine.history.append(_b)
-    notifier.log(f"LIVE warm-up: seeded {len(_warm)} bars (REST today + CSV top-up)", "INFO")
+    notifier.log(f"LIVE warm-up: seeded {len(_warm)} bars (Dhan REST history + CSV top-up)", "INFO")
 
     last_bar = None
     if getattr(feed, "fast", False):

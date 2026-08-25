@@ -219,8 +219,16 @@ def cmd_live(args):
 def cmd_backtest(args):
     banner()
     from proxy.backtest import Backtest
+    dhan_df = None
+    if getattr(args, "dhan", False):
+        from proxy.dhan_data import fetch_intraday_last_days
+        dhan_df = fetch_intraday_last_days(days=args.last or 5)
+        if dhan_df.empty:
+            print(f"{RED}No Dhan data returned - check the token/history subscription.{R}")
+            return
+        print(f"{MG}Using Dhan historical data ({len(dhan_df)} x 5-min bars){R}")
     bt = Backtest(cfg, max_days=args.days, last_days=args.last, verbose=args.verbose,
-                  target_date=getattr(args, "date", None))
+                  target_date=getattr(args, "date", None), df=dhan_df)
     label = (f"date {args.date}" if getattr(args, "date", None)
              else (f"last {args.last} days" if args.last else (f"{args.days} days" if args.days else "all days")))
     print(f"{MG}Backtesting on {bt.path} ({label}){R}\n")
@@ -653,6 +661,7 @@ def main():
     p.add_argument("--days", type=int, default=None)
     p.add_argument("--last", type=int, default=None)
     p.add_argument("--date", type=str, default=None, help="backtest a single day, e.g. 2026-07-07")
+    p.add_argument("--dhan", action="store_true", help="use Dhan historical data (REST) instead of the local CSV")
     p.add_argument("--verbose", action="store_true")
     p.set_defaults(func=cmd_backtest)
 

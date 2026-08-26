@@ -75,8 +75,9 @@ def aggregate_5m(bars_1m):
 
 class Backtest:
     def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False,
-                 target_date=None, df=None, df1m=None):
+                 target_date=None, df=None, df1m=None, regime_fn=None):
         self.cfg = cfg
+        self.regime_fn = regime_fn   # optional callable(history) -> 'trend'|'flat'
         self.path = path or CSV_PATH
         self.max_days = max_days if max_days is not None else cfg.BACKTEST_MAX_DAYS
         self.last_days = last_days
@@ -249,10 +250,28 @@ class Backtest:
                         _sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
                     except Exception:
                         _sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
-                    leg = select_leg(signal.direction, spot, self.cfg, sigma=_sigma)
+                    leg_cfg = self.cfg
+                    regime = "trend"
+                    if self.regime_fn is not None:
+                        try:
+                            regime = self.regime_fn(history) or "trend"
+                        except Exception:
+                            regime = "trend"
+                        if regime == "skip":
+                            # trend-only mode: no entries in chop
+                            continue
+                        if regime == "flat":
+                            # regime-adaptive: strict stop on choppy days -
+                            # the lock layer's breakeven trail would override
+                            # the tight stop, so disable it for flat trades
+                            import types as _types
+                            leg_cfg = _types.SimpleNamespace(**vars(self.cfg))
+                            leg_cfg.SL_MODE = "flat"
+                            leg_cfg.LOCK_PROFIT_ENABLED = False
+                    leg = select_leg(signal.direction, spot, leg_cfg, sigma=_sigma)
                     budget = risk_budget(self.state, self.cfg)
                     stop_unit = leg.stop_per_unit
-                    if getattr(self.cfg, "SL_MODE", "flat") == "maximals":
+                    if getattr(leg_cfg, "SL_MODE", "flat") == "maximals":
                         # wide distribution-based SL: trade the operating band
                         # (DEFAULT_LOTS); daily/monthly loss limits protect
                         lots = int(getattr(self.cfg, "DEFAULT_LOTS", 5))
@@ -286,6 +305,8 @@ class Backtest:
                         "pnl_peak": None, "peak_pct": 0.0,
                         "lock_armed": False, "lock_floor_pct": 0.0,
                         "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
+                        "regime": regime,
+                        "lock_enabled": regime != "flat",
                     }
                     # entry-time features for the meta-label precision layer
                     try:

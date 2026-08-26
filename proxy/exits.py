@@ -33,7 +33,7 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
     stop_p = trade["stop_premium"]
     target_p = trade["target_premium"]
     is_long = trade["direction"] == "LONG"
-    lock_on = bool(getattr(cfg, "LOCK_PROFIT_ENABLED", False))
+    lock_on = bool(getattr(cfg, "LOCK_PROFIT_ENABLED", False)) and bool(trade.get("lock_enabled", True))
 
     if lock_on:
         prior_peak = trade.get("pnl_peak") or entry_premium

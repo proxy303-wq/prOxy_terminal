@@ -253,8 +253,8 @@ SELECT_BY_DELTA = False         # True = auto-pick the best delta-band
 # Lot recommendation bands (lot size 65, premium ~150-200)
 LOTS_CONSERVATIVE = (1, 2)      # 500-1,000 INR daily profit potential
 LOTS_BALANCED     = (3, 5)      # 1,500-2,500 INR daily profit potential
-LOTS_TARGET       = (10, 10)    # full 5,000 INR daily target (higher risk)
-DEFAULT_LOTS      = 7           # bigger size -> reach the 6,000 INR target in 2-4 trades
+LOTS_TARGET       = (5, 5)      # the 5-lot operating band for the 6k daily target
+DEFAULT_LOTS      = 5           # 5 lots: stop ~5.4k INR (1.8% of 3L) vs 7-lot ~7.5k; needs 4-5 wins for the 6k target (10-trade cap covers it)
                                  # (fewer trades = less brokerage; tune to 5-10 as you prefer)
                                         # (7 lots = churnier; 10+ = full daily target)
 

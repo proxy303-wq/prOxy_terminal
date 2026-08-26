@@ -32,7 +32,7 @@ class TestOptions(unittest.TestCase):
         self.assertEqual(calc["bands"]["conservative"]["hi"], 2)
         self.assertEqual(calc["bands"]["balanced"]["lo"], 3)
         self.assertEqual(calc["bands"]["balanced"]["hi"], 5)
-        self.assertEqual(calc["bands"]["full_target"]["lots"], 10)
+        self.assertEqual(calc["bands"]["full_target"]["lots"], 5)   # 5-lot operating band
         self.assertEqual(calc["selected_lots"], cfg.DEFAULT_LOTS)
 
     def test_select_leg_buy_ce(self):

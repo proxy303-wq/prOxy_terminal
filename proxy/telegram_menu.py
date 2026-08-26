@@ -347,4 +347,6 @@ class TelegramMenu:
         from .mode import set_mode
         set_mode(mode)
         badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
-        _send(chat_id, f"✅ Mode switched to <b>{badge}</b>.", MENU_KEYBOARD)
+        note = ("\n\n⚠️ REAL orders start from the NEXT session (9:15 IST). "
+                "Make sure only ONE engine runs live.") if mode == "live" else ""
+        _send(chat_id, f"✅ Mode switched to <b>{badge}</b>.{note}", MENU_KEYBOARD)

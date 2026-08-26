@@ -20,8 +20,10 @@ Resilience:
 - A heartbeat is written to reports/worker_heartbeat.json on the volume
   every minute (visible in Railway's volume browser / dashboard).
 
-Only PaperBroker is ever used here - this process NEVER places real
-orders, regardless of reports/mode.json.
+The broker follows the mode selected via the Telegram menu:
+  - paper (default) -> PaperBroker, no real orders
+  - live            -> DhanBroker, REAL orders with live risk gates and
+                        loud Telegram warnings on every session.
 """
 
 import json
@@ -115,12 +117,32 @@ def run_trading_day(notifier, trade_date):
     NO_BAR_FALLBACK_SECONDS without any bar so the day always completes
     and notifications fire."""
     import proxy.config as cfg
-    from proxy.broker import PaperBroker
     from proxy.data import FastForwardFeed
     from proxy.engine import PaperEngine
     from proxy.tracker import Tracker
+    from proxy.mode import get_mode
 
-    broker = PaperBroker(cfg.CAPITAL)
+    # the Telegram mode toggle is the master switch for the engines
+    mode = get_mode()
+    capital = None
+    if mode == "live":
+        try:
+            from proxy.dhan_broker import DhanBroker
+            broker = DhanBroker()
+            capital = float((broker.get_balance() or {}).get("cash") or cfg.CAPITAL)
+            notifier.log(
+                f"LIVE MODE ACTIVE - REAL ORDERS on the Dhan account "
+                f"(balance {capital:,.2f} INR, mode from Telegram menu)", "WARN")
+            notifier.log("LIVE MODE ACTIVE - REAL ORDERS (selected via Telegram)", "TRADE")
+        except Exception as exc:
+            notifier.log(
+                f"LIVE mode: DhanBroker init FAILED ({exc}) - session SKIPPED, "
+                f"NO orders placed. Fix the token/connection before going live.", "WARN")
+            return None
+    else:
+        from proxy.broker import PaperBroker
+        broker = PaperBroker(cfg.CAPITAL)
+        notifier.log("PAPER mode - no real orders (toggle LIVE from the Telegram menu)", "INFO")
     tracker = Tracker(cfg)
     # every notifier line lands in the DB so the dashboard shows paper
     # trades/signals even if the container stdout stream is lost
@@ -144,7 +166,7 @@ def run_trading_day(notifier, trade_date):
 
     engine = PaperEngine(
         cfg, broker=broker, tracker=tracker, notifier=notifier,
-        trade_date=trade_date,
+        trade_date=trade_date, capital=capital,
     )
 
     # REAL option chain from Dhan: entries then use live premiums + IV

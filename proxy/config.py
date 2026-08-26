@@ -32,14 +32,14 @@ PROFIT_TARGET_PCT  = 0.0100     # Exit at +1.0% of the option premium
 STOP_LOSS_PCT      = 0.0050     # Exit at -0.5% of the option premium
 MIN_RISK_REWARD    = 2.0        # target / stop must be >= 2  (1% / 0.5% = 2.0)
 MAX_POSITIONS      = 1          # concurrent trades (spec allows 1-2; start at 1)
-MAX_TRADES_PER_DAY = 6          # absolute ceiling; the strike-once rule keeps it to 2-4 quality trades
+MAX_TRADES_PER_DAY = 10         # ceiling; the strike gate still keeps it to quality trades
 LOSS_COOLDOWN_BARS = 6          # wait N bars (30 min) after a stop-out before re-entering (0 = off)
 
 # Strike-once rule: never trade the SAME strike twice in a day.  This stops
 # "averaging" the same option (July 7 produced 8 trades on the same PE) and
 # cuts brokerage - the daily target is chased with fewer, bigger trades.
 ONE_TRADE_PER_STRIKE_DAY = True
-MAX_TRADES_PER_STRIKE = 1       # how many times one strike may be traded per day
+MAX_TRADES_PER_STRIKE = 2       # allow ONE re-entry on the same strike (trending days)
 
 # RSI alignment gate used by the signal engine: BUY needs RSI > BULL,
 # SELL needs RSI < BEAR.  50/50 = neutral momentum (spec default);
@@ -129,7 +129,7 @@ MAXIMALS_MIN_TARGET_PCT = 0.010  # never tighter than the flat 1% target
 RISK_PER_TRADE_PCT = 0.0050     # never risk more than 0.5% of equity per trade
 MAX_DAILY_LOSS_PCT = 0.0100     # 1%  = 5,000 INR  -> stop trading for the day
 MAX_MONTHLY_LOSS_PCT = 0.0500   # 5%  = 25,000 INR -> stop trading for the month
-DAILY_TARGET_PCT  = 0.0120      # 1.2% = 6,000 INR daily profit objective (user override)
+DAILY_TARGET_PCT  = 0.0200      # 2.0% = 6,000 INR/day on the live 3L balance (user override)
 DAILY_TARGET_STOP  = True       # stop opening new trades once the daily target is hit
 SL_SCALE_WITH_LOTS = True       # consequential SL: absolute stop amount scales with lots
                                  # (stop-per-unit x quantity); shown in the ENTRY log and dashboard

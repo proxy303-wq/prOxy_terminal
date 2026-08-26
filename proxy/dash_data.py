@@ -51,13 +51,33 @@ def _db_exists():
 
 
 def ensure_dash_tables():
-    """Create wealth/transactions/ml-history tables if they do not exist."""
-    if not _db_exists():
-        return
+    """Create the tracker + dashboard tables if they do not exist.
+
+    Also creates the DB FILE itself: on a fresh volume no proxy_state.sqlite
+    exists until the first session runs, which made the System page report
+    Database UNAVAILABLE.  Keeping this idempotent and safe to call from
+    any process (worker or dashboard)."""
     connection = sqlite3.connect(DATABASE_PATH, timeout=5)
     try:
         connection.executescript(
             """
+            CREATE TABLE IF NOT EXISTS trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT, instrument TEXT, direction TEXT, option_type TEXT,
+                strike REAL, lots INTEGER, quantity INTEGER,
+                entry_premium REAL, exit_premium REAL, stop_premium REAL,
+                target_premium REAL, entry_spot REAL, entry_time TEXT,
+                exit_time TEXT, exit_reason TEXT, setup_type TEXT,
+                confidence REAL, trend TEXT, reason TEXT, pnl REAL, pnl_pct REAL
+            );
+            CREATE TABLE IF NOT EXISTS state (
+                key TEXT PRIMARY KEY, value TEXT
+            );
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts TEXT, level TEXT, message TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS ml_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 trade_id INTEGER,

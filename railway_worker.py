@@ -368,6 +368,15 @@ def main():
     notifier.log("LIVE PAPER-LIVE worker started - runs paper trades on the LIVE market feed every morning (9:15 IST); signals, trades and the daily summary are posted here", "INFO")
     ensure_token(notifier)
     probe_dhan_feed(notifier)
+    # create the tracker DB + schema on the volume at startup (not only
+    # during sessions) so the dashboard never reports Database UNAVAILABLE
+    try:
+        import proxy.config as _cfg
+        from proxy.tracker import Tracker
+        Tracker(_cfg)
+        notifier.log("LIVE tracker DB ready (reports/proxy_state.sqlite)", "INFO")
+    except Exception as exc:
+        notifier.log(f"LIVE tracker DB init failed: {exc}", "WARN")
 
     while True:
         try:

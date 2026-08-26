@@ -1586,10 +1586,17 @@ elif page == "System":
     banknifty_ok = _feed_ok(banknifty)
     websocket_ok = nifty_ok or banknifty_ok
 
+    # ensure the DB + schema exist (fresh volumes have no DB until the
+    # first session runs - otherwise this page reports UNAVAILABLE)
     db_ok = db_path.exists()
     db_size = db_path.stat().st_size if db_ok else 0
     trade_count = 0
     db_error = ""
+    try:
+        dd.ensure_dash_tables()
+    except Exception as exc:
+        db_error = f"schema init: {exc}"
+    db_ok = db_path.exists()
     try:
         if db_ok:
             with sqlite3.connect(str(db_path), timeout=5) as conn:
@@ -1598,6 +1605,8 @@ elif page == "System":
     except Exception as exc:
         db_ok = False
         db_error = str(exc)
+    if db_error:
+        db_error = f"{db_error} | {db_path}"
 
     model_ok = model_path.exists() and model_path.stat().st_size > 0
     ml_history = dd.read_dash_table("ml_history")

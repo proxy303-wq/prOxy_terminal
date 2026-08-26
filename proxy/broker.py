@@ -26,6 +26,9 @@ class Broker:
 
 class PaperBroker(Broker):
     def __init__(self, initial_capital):
+        # explicit: paper broker NEVER places real orders (engine checks
+        # broker.live before every order / live risk gate)
+        self.live = False
         self.cash = float(initial_capital)
         self.positions = []   # list of open position dicts
         self.fills = []

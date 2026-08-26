@@ -73,6 +73,10 @@ class DhanBroker(Broker):
         self._api = dhanhq(self._ctx)
         self._lock = threading.Lock()
         self._security_cache = {}
+        # CRITICAL: the engine only places REAL orders and enforces the LIVE
+        # risk gates (6-trade cap, daily-target stop) when broker.live is
+        # truthy.  PaperBroker stays live=False; this is the real-money path.
+        self.live = True
         notify(f"Dhan auth: {self.token_source}")
 
     # ----------------------------------------------------------
@@ -99,22 +103,69 @@ class DhanBroker(Broker):
     # security resolution
     # ----------------------------------------------------------
 
+    def _security_df(self):
+        """Dhan's security master (compact CSV), cached 6h.
+
+        fetch_security_list is a STATIC CSV downloader (returns a pandas
+        DataFrame, not a dict) - never call it with per-instance args."""
+        import time as _t
+        now = _t.time()
+        if getattr(self, "_sec_df", None) is None or now - getattr(self, "_sec_df_ts", 0) > 6 * 3600:
+            from dhanhq import dhanhq as _d
+            csv_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "reports", "security_id_list.csv")
+            df = _d.fetch_security_list(mode="compact", filename=csv_path)
+            if df is None or df.empty:
+                raise RuntimeError("security master download failed")
+            self._sec_df = df
+            self._sec_df_ts = now
+        return self._sec_df
+
     def resolve_security_id(self, symbol, segment="NSE_FNO"):
         """Look up the Dhan security id for an option symbol like
-        'NIFTY 27AUG 24900 CE'.  Cached."""
+        'NIFTY 27AUG 24900 CE'.  Matches by expiry + strike + type against
+        Dhan's master CSV (symbol format: 'NIFTY-Sep2026-24350-CE').
+        Cached."""
         if symbol in self._security_cache:
             return self._security_cache[symbol]
-        with self._lock:
-            res = self._api.fetch_security_list(segment)
-        rows = res.get("data") or []
-        wanted = symbol.upper().replace(" ", "")
-        found = None
-        for row in rows:
-            if str(row.get("tradingSymbol", "")).upper().replace(" ", "") == wanted:
-                found = row.get("securityId")
-                break
-        self._security_cache[symbol] = found
-        return found
+        try:
+            parts = symbol.upper().split()
+            if len(parts) < 4:
+                self._security_cache[symbol] = None
+                return None
+            name, _exp, strike_str, otype = parts[0], parts[1], parts[2], parts[3]
+            strike = float(strike_str.replace(",", ""))
+            expiry = self.resolve_expiry(0)
+            if not expiry:
+                return None
+            exp_day = str(expiry).split(" ")[0]
+            df = self._security_df()
+            try:
+                mask = (
+                    df["SEM_EXPIRY_DATE"].astype(str).str.startswith(exp_day)
+                    & (df["SEM_STRIKE_PRICE"].astype(float).round(2) == round(strike, 2))
+                    & (df["SEM_OPTION_TYPE"].astype(str).str.upper() == otype)
+                    & df["SEM_TRADING_SYMBOL"].astype(str).str.startswith(name)
+                )
+                m = df[mask]
+                if m.empty:
+                    # fallback: any expiry for this strike/type
+                    m = df[
+                        (df["SEM_STRIKE_PRICE"].astype(float).round(2) == round(strike, 2))
+                        & (df["SEM_OPTION_TYPE"].astype(str).str.upper() == otype)
+                        & df["SEM_TRADING_SYMBOL"].astype(str).str.startswith(name)
+                    ]
+                if m.empty:
+                    self._security_cache[symbol] = None
+                    return None
+                sid = int(m.iloc[0]["SEM_SMST_SECURITY_ID"])
+                self._security_cache[symbol] = sid
+                return sid
+            except Exception:
+                return None
+        except Exception:
+            return None
 
     # ----------------------------------------------------------
     # orders
@@ -140,10 +191,14 @@ class DhanBroker(Broker):
     # ----------------------------------------------------------
 
     def resolve_expiry(self, index=0):
-        """Nearest Dhan expiry date string (YYYY-MM-DD), cached."""
+        """Nearest Dhan expiry date string (YYYY-MM-DD), cached.
+
+        Uses the IDX_I segment (index underlying) - NSE_FNO returns an
+        empty failure envelope for the expirylist API."""
         if not hasattr(self, "_expiries") or not self._expiries:
             with self._lock:
-                res = self._api.expiry_list(NIFTY_INDEX_ID, "NSE_FNO")
+                res = self._api.expiry_list(NIFTY_INDEX_ID, "IDX_I")
+            # the SDK nests twice: data -> {"data": [...]}
             data = res.get("data") or {}
             rows = data.get("data") if isinstance(data, dict) else data
             self._expiries = rows if isinstance(rows, list) else []

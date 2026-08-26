@@ -102,9 +102,6 @@ st.markdown(
 # Session state
 # ------------------------------------------------------------
 
-if "dashboard_mode" not in st.session_state:
-    st.session_state.dashboard_mode = "PAPER"
-
 if "transactions" not in st.session_state:
     try:
         st.session_state.transactions = dd.read_dash_table("transactions")
@@ -129,20 +126,16 @@ with col1:
     st.write("Command Center")
 
 with col2:
-    from proxy.mode import get_mode as _get_mode, set_mode as _set_mode
+    # Mode is controlled ONLY via the Telegram bot menu (🎛 Mode).
+    # A dashboard selectbox used to write reports/mode.json and reset it
+    # to PAPER on every refresh - which silently killed a LIVE engine.
+    from proxy.mode import get_mode as _get_mode
     _real_mode = _get_mode().upper()
-    mode = st.selectbox(
+    st.metric(
         "Trading Mode",
-        ["PAPER", "LIVE"],
-        index=0 if _real_mode != "LIVE" else 1,
-        key="dashboard_mode",
+        "🔴 LIVE" if _real_mode == "LIVE" else "🟡 PAPER",
+        help="Controlled ONLY via the Telegram bot (🎛 Mode). The dashboard is read-only.",
     )
-    if mode != _real_mode:
-        try:
-            _set_mode(mode.lower())
-            st.success(f"Mode switched to {mode} - saved to reports/mode.json.")
-        except Exception:
-            st.error("Could not write reports/mode.json (read-only filesystem?)")
 
 with col3:
     st.metric(
@@ -152,13 +145,9 @@ with col3:
     )
 
 if _get_mode().upper() == "LIVE":
-    st.warning(
-        "LIVE mode is ON (reports/mode.json). "
-        "The dashboard only records the mode - real orders are placed "
-        "only when the trading engine runs with the live flag."
-    )
+    st.warning("🔴 LIVE mode is ON - the engine places REAL orders. Toggle via the Telegram bot only (🎛 Mode).")
 else:
-    st.info("PAPER mode - dashboard only; no orders are placed. Switch to LIVE above to arm the engine for real Dhan orders.")
+    st.info("🟡 PAPER mode - no real orders. To go LIVE use the Telegram bot: 🎛 Mode -> 🟢 GO LIVE -> CONFIRM-LIVE.")
 
 
 # ------------------------------------------------------------

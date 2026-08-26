@@ -344,16 +344,64 @@ def is_token_generator():
     return os.environ.get("PROXY_AUTO_GENERATE_TOKEN", "true").lower() == "true"
 
 
+def _push_token_to_railway(token, notify=print):
+    """Optional: push the fresh local token into Railway's DHAN_ACCESS_TOKEN.
+
+    Enabled ONLY on the local generator machine via
+    PROXY_PUSH_TOKEN_TO_RAILWAY=true (never set it on the container, or the
+    container would redeploy itself in a loop).  Throttled by a marker file
+    so a redeploy happens at most once per token change (once a day, after
+    market close).  Never raises.
+    """
+    if os.environ.get("PROXY_PUSH_TOKEN_TO_RAILWAY", "").lower() != "true":
+        return False
+    if not token:
+        return False
+    marker = os.path.abspath(os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "reports",
+        "railway_pushed_token.txt"))
+    try:
+        if os.path.exists(marker) and open(marker, encoding="ascii").read().strip() == token:
+            return False  # this exact token was already pushed
+        import shutil
+        import subprocess
+        cli = shutil.which("railway")
+        if not cli:
+            notify("Railway token push skipped - 'railway' CLI not found on PATH")
+            return False
+        result = subprocess.run(
+            [cli, "variables", "--set", f"DHAN_ACCESS_TOKEN={token}"],
+            capture_output=True, text=True, timeout=180,
+            cwd=os.path.dirname(marker))
+        ok = result.returncode == 0
+        if ok:
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            with open(marker, "w", encoding="ascii") as fh:
+                fh.write(token)
+            notify("Railway token auto-refreshed (+24h) - redeploy triggered")
+        else:
+            notify(f"Railway token push failed: {(result.stderr or result.stdout or '')[:120]}")
+        return ok
+    except Exception as exc:
+        notify(f"Railway token push error: {exc}")
+        return False
+
+
 def resolve_token_safe(client_id, notify=print):
     """Token resolution that respects the generator/consumer split.
 
-    Generator (local): auto_renew_token (validate -> RenewToken -> TOTP).
+    Generator (local): auto_renew_token (validate -> RenewToken -> TOTP),
+    then pushes the fresh token to Railway when PROXY_PUSH_TOKEN_TO_RAILWAY
+    is set, so the container's env token auto-refreshes daily too.
     Consumer (container): env/saved token AS-IS, never generates."""
     if is_token_generator():
-        return auto_renew_token(
+        tok, src = auto_renew_token(
             client_id, access_token=os.environ.get("DHAN_ACCESS_TOKEN"),
             pin=os.environ.get("DHAN_PIN"), totp_secret=os.environ.get("DHAN_TOTP_SECRET"),
             notify=notify)
+        if tok:
+            _push_token_to_railway(tok, notify=notify)
+        return tok, src
     tok = os.environ.get("DHAN_ACCESS_TOKEN") or load_saved_token()
     return (tok, "env/saved token (container, no generation)") if tok else (None, "no token available")
 

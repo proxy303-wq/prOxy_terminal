@@ -328,7 +328,8 @@ class TelegramMenu:
             badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
             _send(chat_id,
                   f"🎛 <b>Mode: {badge}</b>\n\n"
-                  f"Tap GO LIVE to switch (a confirm step follows).",
+                  f"Tap GO LIVE to switch NOW (a confirm step follows, "
+                  f"then the engine restarts live today).",
                   MODE_KEYBOARD)
         except Exception as exc:
             _send(chat_id, f"⚠️ mode unavailable: {exc}", MENU_KEYBOARD)
@@ -344,9 +345,22 @@ class TelegramMenu:
         self._set_mode(chat_id, "paper")
 
     def _set_mode(self, chat_id, mode):
-        from .mode import set_mode
+        from .mode import get_mode, set_mode
+        already_live = get_mode() == "live"
         set_mode(mode)
         badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
-        note = ("\n\n⚠️ REAL orders start from the NEXT session (9:15 IST). "
-                "Make sure only ONE engine runs live.") if mode == "live" else ""
-        _send(chat_id, f"✅ Mode switched to <b>{badge}</b>.{note}", MENU_KEYBOARD)
+        if mode == "live":
+            if already_live:
+                _send(chat_id,
+                      "✅ Already in <b>LIVE</b> - engine is trading real money. "
+                      "(no restart needed)", MENU_KEYBOARD)
+                return
+            _send(chat_id,
+                  "✅ <b>LIVE MODE ON</b> - real orders start NOW.\n\n"
+                  "🔄 Restarting the engine session (~40s)...\n"
+                  "⚠️ Run live on ONE engine only (Railway worker or your PC, "
+                  "not both).", MENU_KEYBOARD)
+            time.sleep(1.5)          # let the confirmations flush to Telegram
+            os._exit(1)              # supervisor restarts -> fresh LIVE session today
+        else:
+            _send(chat_id, f"✅ Mode switched to <b>{badge}</b>. No real orders.", MENU_KEYBOARD)

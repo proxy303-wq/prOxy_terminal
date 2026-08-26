@@ -159,7 +159,7 @@ def run_trading_day(notifier, trade_date):
         time.sleep(3)
         if feed._thread is None or not feed._thread.is_alive():
             raise RuntimeError("REST feed thread died at startup")
-        notifier.log(f"LIVE Dhan REST feed connected - paper session {trade_date}", "INFO")
+        notifier.log(f"LIVE Dhan REST feed connected - {mode.upper()} session {trade_date}", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE Dhan REST feed unavailable ({exc}) - synthetic replay", "WARN")
         feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)

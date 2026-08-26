@@ -3,7 +3,7 @@ PrOxy Trading Terminal - Dhan live broker
 =========================================
 
 Real order execution on Dhan (dhanhq SDK) using credentials from
-C:\Athena_X\.env  (DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN).
+C:/Athena_X/.env  (DHAN_CLIENT_ID / DHAN_ACCESS_TOKEN).
 
     - get_balance()          -> funds available (get_fund_limits)
     - place_order(...)       -> real MARKET/LIMIT order on NSE FNO
@@ -23,7 +23,7 @@ from .dhan_live import NIFTY_INDEX_ID
 
 
 def _load_athena_env():
-    """Load DHAN_* credentials from C:\Athena_X\.env (falls back to env vars)."""
+    """Load DHAN_* credentials from C:/Athena_X/.env (falls back to env vars)."""
     creds = {
         "client_id": os.getenv("DHAN_CLIENT_ID"),
         "access_token": os.getenv("DHAN_ACCESS_TOKEN"),
@@ -63,7 +63,7 @@ class DhanBroker(Broker):
         creds = _load_athena_env()
         self.client_id = client_id or creds["client_id"]
         if not self.client_id:
-            raise RuntimeError("DHAN_CLIENT_ID missing (C:\Athena_X\.env)")
+            raise RuntimeError("DHAN_CLIENT_ID missing (C:/Athena_X/.env)")
         # single-generator rule (container consumes, local machine generates)
         self.token, self.token_source = resolve_token_safe(self.client_id, notify=notify)
         if not self.token:

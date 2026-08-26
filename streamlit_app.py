@@ -1534,6 +1534,44 @@ elif page == "System":
     st.subheader("PrOxy System Health")
     st.caption("Read-only diagnostics. This page never places, modifies or cancels orders.")
 
+    # ----------------------------------------------------------
+    # daily Dhan access-token entry (pasted every morning)
+    # ----------------------------------------------------------
+    with st.expander("🔑 Dhan Access Token (paste daily)", expanded=False):
+        try:
+            from proxy.dhan_auth import (token_type as _toktype, token_expiry as _tokexp,
+                                         validate_token as _tokval, load_saved_token as _loadtok,
+                                         save_token as _savetok)
+            from datetime import datetime as _dt
+            _tok = _loadtok()
+            _now = _dt.now().astimezone()
+            if _tok:
+                _tt = _toktype(_tok)
+                _exp = _tokexp(_tok)
+                _exp_s = _dt.fromtimestamp(_exp).astimezone().strftime("%d %b %H:%M") if _exp > 0 else "?"
+                _valid = _tokval(os.getenv("DHAN_CLIENT_ID"), _tok)
+                st.write(f"Current: **{_tt}** | expires **{_exp_s}** | "
+                         f"{'🟢 valid' if _valid else '🔴 INVALID/EXPIRED'}")
+            else:
+                st.write("No saved token yet.")
+            _newtok = st.text_input("Paste today's access token", type="password",
+                                    placeholder="eyJ0eXAiOi...", key="sys_token_input")
+            if st.button("Save & Validate", key="sys_token_save"):
+                if _newtok and len(_newtok) > 50:
+                    try:
+                        _savetok(_newtok.strip())
+                        _ok = _tokval(os.getenv("DHAN_CLIENT_ID"), _newtok.strip())
+                        _tt = _toktype(_newtok.strip())
+                        if _ok:
+                            st.success(f"✅ Token saved & VALID ({_tt}) - worker picks it up at the next session.")
+                        else:
+                            st.error("⚠️ Token saved but Dhan REJECTS it - check you copied the full token.")
+                    except Exception as _exc:
+                        st.error(f"Could not save token: {_exc}")
+                else:
+                    st.warning("Paste the full token first (starts with eyJ0eXAi...).")
+            st.caption("The worker reads this token at each 9:15 session. Paste the fresh 24h token every morning.")
+
     now = datetime.now().astimezone()
 
     from proxy import config as cfg

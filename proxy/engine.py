@@ -436,8 +436,10 @@ class PaperEngine:
                 if signal.direction in ("BUY", "SELL"):
                     equity = current_equity(self.state, self.cfg)
                     plan = self._plan_entry(signal, spot, equity)
-                    # strike-once rule: never average the SAME strike twice a day
-                    if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
+                    # strike-once rule: never average the SAME strike twice a day.
+                    # LIVE only - paper trading is UNHINGED (no strike cap,
+                    # no trade-count cap, no daily-target stop).
+                    if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True) and getattr(self.broker, "live", False):
                         day_strikes = self._strike_trades.setdefault(str(self.trade_date), {})
                         if day_strikes.get(plan["strike"], 0) >= int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1)):
                             gate = RiskCheck(False, f"strike {plan['strike']} already traded today (no averaging)")

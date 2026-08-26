@@ -114,7 +114,7 @@ TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
 #          = "flat"       -> the old flat 0.5% / 1% of premium levels
 
 SL_MODE = "maximals"
-MAXIMALS_HOLDING_BARS = 2        # expected holding window (2 x 5-min bars = 10 min scalp)
+MAXIMALS_HOLDING_BARS = 4        # expected holding window (4 x 5-min bars; sweep: hold 4 best)
 MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

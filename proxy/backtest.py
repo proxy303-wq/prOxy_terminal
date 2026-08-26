@@ -269,6 +269,12 @@ class Backtest:
                             leg_cfg.SL_MODE = "flat"
                             leg_cfg.LOCK_PROFIT_ENABLED = False
                     leg = select_leg(signal.direction, spot, leg_cfg, sigma=_sigma)
+                    short_options = bool(getattr(leg_cfg, "SHORT_OPTIONS", False))
+                    if short_options:
+                        # SELL the option instead of buying it (collect premium):
+                        # BUY signal -> short a PE, SELL signal -> short a CE
+                        leg.option_type = "PE" if signal.direction == "BUY" else "CE"
+                        leg.instrument = leg.instrument.rsplit(" ", 1)[0] + " " + leg.option_type
                     budget = risk_budget(self.state, self.cfg)
                     stop_unit = leg.stop_per_unit
                     if getattr(leg_cfg, "SL_MODE", "flat") == "maximals":
@@ -280,7 +286,7 @@ class Backtest:
                     else:
                         lots, qty, actual_risk = position_size(budget, leg.premium, leg.premium - stop_unit, self.cfg)
                         lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
-                    is_long = signal.direction == "BUY"
+                    is_long = (signal.direction == "BUY") and not short_options
                     stop_p = leg.premium - stop_unit if is_long else leg.premium + stop_unit
                     target_p = leg.premium + leg.target_per_unit if is_long else leg.premium - leg.target_per_unit
                     sl_per_lot = leg.risk_per_lot  # SL for ONE lot (INR) = premium * STOP_LOSS_PCT * LOT_SIZE (precise)

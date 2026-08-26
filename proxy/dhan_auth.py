@@ -402,7 +402,12 @@ def resolve_token_safe(client_id, notify=print):
         if tok:
             _push_token_to_railway(tok, notify=notify)
         return tok, src
-    tok = os.environ.get("DHAN_ACCESS_TOKEN") or load_saved_token()
+    # consumer (container): the token pasted via the dashboard System tab
+    # (reports/dhan_token.txt) takes priority - it is refreshed daily
+    saved = load_saved_token()
+    if saved:
+        return saved, "saved token (pasted via dashboard)"
+    tok = os.environ.get("DHAN_ACCESS_TOKEN")
     return (tok, "env/saved token (container, no generation)") if tok else (None, "no token available")
 
 

@@ -126,14 +126,20 @@ class TestChain(unittest.TestCase):
 
     def test_select_leg_delta_band(self):
         from proxy.options import select_leg
-        leg = select_leg("BUY", 24900, cfg)  # SELECT_BY_DELTA defaults off -> ATM
-        self.assertEqual(leg.strike, 24900)
-        cfg.SELECT_BY_DELTA = True
+        # SELECT_BY_DELTA is ON by default -> picks an ITM strike (delta band)
+        leg = select_leg("BUY", 24900, cfg)
+        self.assertLessEqual(leg.strike, 24900)                       # ITM or ATM
+        self.assertGreaterEqual(leg.strike, 24900 - 4 * cfg.OPTION_STRIKE_STEP)
+        self.assertGreaterEqual(abs(leg.delta), cfg.OPTION_DELTA_MIN)
+        self.assertLessEqual(abs(leg.delta), cfg.OPTION_DELTA_MAX)
+        # ATM when SELECT_BY_DELTA is off
+        old = cfg.SELECT_BY_DELTA
         try:
-            leg2 = select_leg("BUY", 24900, cfg)
-            self.assertLessEqual(leg2.strike, 24900)  # ITM or ATM
-        finally:
             cfg.SELECT_BY_DELTA = False
+            leg2 = select_leg("BUY", 24900, cfg)
+            self.assertEqual(leg2.strike, 24900)
+        finally:
+            cfg.SELECT_BY_DELTA = old
 
 
 if __name__ == "__main__":

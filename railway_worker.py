@@ -377,6 +377,12 @@ def main():
         notifier.log("LIVE tracker DB ready (reports/proxy_state.sqlite)", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE tracker DB init failed: {exc}", "WARN")
+    # Telegram command menu (balance / prices / sentiment / report / mode)
+    try:
+        from proxy.telegram_menu import TelegramMenu
+        TelegramMenu(notify=notifier.log).start()
+    except Exception as exc:
+        notifier.log(f"Telegram menu failed to start: {exc}", "WARN")
 
     while True:
         try:

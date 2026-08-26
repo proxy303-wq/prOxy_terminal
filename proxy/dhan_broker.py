@@ -122,50 +122,57 @@ class DhanBroker(Broker):
             self._sec_df_ts = now
         return self._sec_df
 
-    def resolve_security_id(self, symbol, segment="NSE_FNO"):
-        """Look up the Dhan security id for an option symbol like
+    def _resolve_row(self, symbol):
+        """Return (security_id, trading_symbol) for an option symbol like
         'NIFTY 27AUG 24900 CE'.  Matches by expiry + strike + type against
-        Dhan's master CSV (symbol format: 'NIFTY-Sep2026-24350-CE').
-        Cached."""
+        Dhan's master CSV (trading symbol format: 'NIFTY-Sep2026-24350-CE').
+        Cached.  Dhan's ORDER API requires BOTH securityId and tradingSymbol."""
         if symbol in self._security_cache:
             return self._security_cache[symbol]
+        row = (None, None)
         try:
             parts = symbol.upper().split()
             if len(parts) < 4:
-                self._security_cache[symbol] = None
-                return None
+                self._security_cache[symbol] = row
+                return row
             name, _exp, strike_str, otype = parts[0], parts[1], parts[2], parts[3]
             strike = float(strike_str.replace(",", ""))
             expiry = self.resolve_expiry(0)
             if not expiry:
-                return None
+                return row
             exp_day = str(expiry).split(" ")[0]
             df = self._security_df()
-            try:
-                mask = (
-                    df["SEM_EXPIRY_DATE"].astype(str).str.startswith(exp_day)
-                    & (df["SEM_STRIKE_PRICE"].astype(float).round(2) == round(strike, 2))
+            mask = (
+                df["SEM_EXPIRY_DATE"].astype(str).str.startswith(exp_day)
+                & (df["SEM_STRIKE_PRICE"].astype(float).round(2) == round(strike, 2))
+                & (df["SEM_OPTION_TYPE"].astype(str).str.upper() == otype)
+                & df["SEM_TRADING_SYMBOL"].astype(str).str.startswith(name)
+            )
+            m = df[mask]
+            if m.empty:
+                # fallback: any expiry for this strike/type
+                m = df[
+                    (df["SEM_STRIKE_PRICE"].astype(float).round(2) == round(strike, 2))
                     & (df["SEM_OPTION_TYPE"].astype(str).str.upper() == otype)
                     & df["SEM_TRADING_SYMBOL"].astype(str).str.startswith(name)
-                )
-                m = df[mask]
-                if m.empty:
-                    # fallback: any expiry for this strike/type
-                    m = df[
-                        (df["SEM_STRIKE_PRICE"].astype(float).round(2) == round(strike, 2))
-                        & (df["SEM_OPTION_TYPE"].astype(str).str.upper() == otype)
-                        & df["SEM_TRADING_SYMBOL"].astype(str).str.startswith(name)
-                    ]
-                if m.empty:
-                    self._security_cache[symbol] = None
-                    return None
-                sid = int(m.iloc[0]["SEM_SMST_SECURITY_ID"])
-                self._security_cache[symbol] = sid
-                return sid
-            except Exception:
-                return None
+                ]
+            if not m.empty:
+                r0 = m.iloc[0]
+                row = (int(r0["SEM_SMST_SECURITY_ID"]), str(r0["SEM_TRADING_SYMBOL"]))
         except Exception:
-            return None
+            pass
+        self._security_cache[symbol] = row
+        return row
+
+    def resolve_security_id(self, symbol, segment="NSE_FNO"):
+        """Dhan security id for an option symbol (see _resolve_row)."""
+        sid, _tsym = self._resolve_row(symbol)
+        return sid
+
+    def resolve_trading_symbol(self, symbol):
+        """Dhan trading symbol (e.g. 'NIFTY-Sep2026-24350-CE') for orders."""
+        _sid, tsym = self._resolve_row(symbol)
+        return tsym
 
     # ----------------------------------------------------------
     # orders
@@ -230,23 +237,37 @@ class DhanBroker(Broker):
         return symbol
 
     def place_order(self, side, instrument, quantity, price=None, order_type="MARKET", tag="PrOxy"):
-        """side: 'BUY'|'SELL'.  Returns the broker response dict."""
+        """side: 'BUY'|'SELL'.  Returns the broker response dict.
+
+        Posts the COMPLETE payload to /orders: Dhan requires BOTH securityId
+        AND tradingSymbol, and productType must be 'INTRADAY'.  The SDK's
+        place_order omits tradingSymbol and would send 'INTRA' -> DH-905
+        Input_Exception (this caused the live-entry rejections)."""
         self._ensure_valid_token()
         instrument = self.normalize_symbol(instrument)
-        security_id = self.resolve_security_id(instrument)
-        if not security_id:
-            return {"status": "REJECTED", "reason": f"security id not found for {instrument}"}
+        security_id, trading_symbol = self._resolve_row(instrument)
+        if not security_id or not trading_symbol:
+            return {"status": "REJECTED",
+                    "reason": f"security id/trading symbol not found for {instrument}"}
+        otype = (order_type or "MARKET").upper()
         with self._lock:
-            res = self._api.place_order(
-                security_id=security_id,
-                exchange_segment="NSE_FNO",
-                transaction_type=side,
-                quantity=int(quantity),
-                order_type=order_type if order_type == "MARKET" else "LIMIT",
-                product_type="INTRA",
-                price=0.0 if order_type == "MARKET" else float(price or 0),
-                tag=tag,
-            )
+            payload = {
+                "dhanClientId": self.client_id,
+                "transactionType": side.upper(),
+                "exchangeSegment": "NSE_FNO",
+                "productType": "INTRADAY",
+                "orderType": otype if otype in ("MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_MARKET") else "MARKET",
+                "validity": "DAY",
+                "tradingSymbol": trading_symbol,
+                "securityId": int(security_id),
+                "quantity": int(quantity),
+                "disclosedQuantity": 0,
+                "price": 0.0 if otype == "MARKET" else float(price or 0),
+                "triggerPrice": 0.0,
+                "afterMarketOrder": False,
+                "correlationId": tag or "PrOxy",
+            }
+            res = self._api.dhan_http.post("/orders", payload)
         return res
 
     def cancel_order(self, order_id):

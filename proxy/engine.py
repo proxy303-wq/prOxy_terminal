@@ -506,21 +506,25 @@ class PaperEngine:
                                 self.tracker.save_active_trade(plan)
                             except Exception:
                                 pass
-                        pop = success_probability(self.cfg.PROFIT_TARGET_PCT, self.cfg.STOP_LOSS_PCT)
-                        pop_str = f"POP {pop*100:.0f}%" if pop is not None else "POP n/a"
-                        _at = self.active_trade
-                        _sl_per_lot = float(_at.get("sl_per_lot") or 0)
-                        _sl_total = float(_at.get("sl_total") or 0)
-                        _tg_per_lot = float(_at.get("target_per_lot") or 0)
-                        _sl_basis = _at.get("sl_basis") or ""
-                        self.notify(
-                            f"ENTRY {_at['instrument']} {_at['direction']} "
-                            f"{_at['lots']} lots | premium {_at['entry_premium']:.2f} "
-                            f"| target {_at['target_premium']:.2f} ({_tg_per_lot:.0f} INR/lot) "
-                            f"| stop {_at['stop_premium']:.2f} | SL {_sl_per_lot:.0f} INR/lot x {_at['lots']} lots = {_sl_total:,.0f} INR "
-                            f"| {_sl_basis} | score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
-                            "TRADE"
-                        )
+                            # ENTRY log ONLY when the trade was actually taken
+                            # (a rejected live order leaves active_trade None)
+                            pop = success_probability(self.cfg.PROFIT_TARGET_PCT, self.cfg.STOP_LOSS_PCT)
+                            pop_str = f"POP {pop*100:.0f}%" if pop is not None else "POP n/a"
+                            _at = self.active_trade
+                            _sl_per_lot = float(_at.get("sl_per_lot") or 0)
+                            _sl_total = float(_at.get("sl_total") or 0)
+                            _tg_per_lot = float(_at.get("target_per_lot") or 0)
+                            _sl_basis = _at.get("sl_basis") or ""
+                            self.notify(
+                                f"ENTRY {_at['instrument']} {_at['direction']} "
+                                f"{_at['lots']} lots | premium {_at['entry_premium']:.2f} "
+                                f"| target {_at['target_premium']:.2f} ({_tg_per_lot:.0f} INR/lot) "
+                                f"| stop {_at['stop_premium']:.2f} | SL {_sl_per_lot:.0f} INR/lot x {_at['lots']} lots = {_sl_total:,.0f} INR "
+                                f"| {_sl_basis} | score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
+                                "TRADE"
+                            )
+                        else:
+                            self.notify(f"LIVE entry SKIPPED - order rejected (no position taken, engine continues)", "WARN")
                     else:
                         self.notify(f"GATE  signal={signal.direction} blocked: {gate.reason}")
 

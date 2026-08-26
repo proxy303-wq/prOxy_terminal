@@ -147,6 +147,26 @@ def run_trading_day(notifier, trade_date):
         trade_date=trade_date,
     )
 
+    # REAL option chain from Dhan: entries then use live premiums + IV
+    # for the chosen strike instead of the model estimate.  One POST at
+    # session start (rate limit is 1 req/s; a single chain call is fine).
+    try:
+        from proxy.dhan_data import fetch_option_chain
+        chain = fetch_option_chain(underlying_id=13)
+        if chain and chain.get("rows"):
+            engine.set_chain(chain)
+            atm = min(chain["rows"], key=lambda r: abs(r["strike"] - chain["spot"]))
+            notifier.log(
+                f"LIVE option chain: {chain['expiry']} expiry, spot {chain['spot']:,.2f}, "
+                f"ATM {atm['strike']:g} {atm['option_type']} LTP {atm['ltp']:.2f} (IV {atm['iv'] * 100:.1f}%) - "
+                f"{len(chain['rows'])} strikes loaded",
+                "INFO",
+            )
+        else:
+            notifier.log("LIVE option chain: unavailable - entries use the model premium", "WARN")
+    except Exception as exc:
+        notifier.log(f"LIVE option chain failed ({exc}) - entries use the model premium", "WARN")
+
     # warm-up: seed indicators so signals start on the first live bar.
     # Preferred: TODAY's bars from Dhan's REST charts API (accurate current-day
     # context).  Fallback: recent bars from the shipped warmup CSV.

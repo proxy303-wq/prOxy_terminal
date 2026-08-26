@@ -190,15 +190,18 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
         rr = cfg.PROFIT_TARGET_PCT / cfg.STOP_LOSS_PCT if cfg.STOP_LOSS_PCT > 0 else 0.0
         sl_basis = f"flat {cfg.STOP_LOSS_PCT * 100:.1f}% / {cfg.PROFIT_TARGET_PCT * 100:.1f}%"
 
-    # Dhan-style instrument symbol: "NIFTY 27AUG 25600 CE"
+    # Dhan-style instrument symbol: "NIFTY 27AUG 25600 CE" (or BANKNIFTY
+    # when cfg.OPTION_SYMBOL is overridden - the engine/backtest are index
+    # agnostic and the same strategy runs on either underlying)
+    sym_name = getattr(cfg, "OPTION_SYMBOL", "NIFTY")
     if dte and getattr(cfg, "OPTION_EXPIRY_BUCKET", None):
         try:
             exp_date = expiry_for_bucket(getattr(cfg, "OPTION_EXPIRY_BUCKET", "current_week"))["date"]
-            symbol = f"NIFTY {exp_date.strftime('%d%b').upper()} {strike:g} {opt_type}"
+            symbol = f"{sym_name} {exp_date.strftime('%d%b').upper()} {strike:g} {opt_type}"
         except Exception:
-            symbol = f"NIFTY {strike:g} {opt_type}"
+            symbol = f"{sym_name} {strike:g} {opt_type}"
     else:
-        symbol = f"NIFTY {strike:g} {opt_type}"
+        symbol = f"{sym_name} {strike:g} {opt_type}"
     return OptionLeg(
         instrument=symbol,
         strike=strike,

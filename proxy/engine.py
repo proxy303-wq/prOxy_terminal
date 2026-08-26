@@ -79,6 +79,10 @@ class PaperEngine:
         # strike-once rule: date -> {strike: times_traded} (no averaging)
         self._strike_trades = {}
         self.cooldown_until = None    # bar time; no new entries before this
+        # REAL option chain from Dhan (optional): set via set_chain() so
+        # entries use live premiums/IV instead of the model estimate
+        self.chain = None
+        self._chain_lookup = {}
         # ML prediction layer (LSTM per the research paper) - advisory/gate
         self.ml_predict = None
         self.ml_meta = None
@@ -129,6 +133,31 @@ class PaperEngine:
     # entry planning
     # ----------------------------------------------------------
 
+    def set_chain(self, chain):
+        """Feed the engine a real Dhan option chain {rows: [{strike,
+        option_type, ltp, iv, ...}]}.  Entries then use the LIVE premium
+        and IV for the chosen strike instead of the model estimate."""
+        self.chain = chain
+        self._chain_lookup = {}
+        for row in (chain or {}).get("rows") or []:
+            key = (float(row["strike"]), str(row["option_type"]).upper())
+            self._chain_lookup[key] = row
+
+    def _chain_premium(self, strike, option_type, sigma):
+        """Return (premium, sigma, basis) from the real chain, or the
+        model estimate when the chain has no usable row for that strike."""
+        row = self._chain_lookup.get((float(strike), str(option_type).upper()))
+        if row and row.get("ltp", 0) > 0:
+            prem = float(row["ltp"])
+            iv = float(row.get("iv") or 0.0)
+            # clamp a sane annualised-vol range for the maximals math
+            sig = min(max(iv, 0.05), 0.60) if iv > 0 else sigma
+            basis = f"real Dhan chain LTP {prem:.2f}"
+            if iv > 0:
+                basis += f" | IV {iv * 100:.1f}%"
+            return prem, sig, basis
+        return None, sigma, ""
+
     def _plan_entry(self, signal, spot, equity):
         direction = signal.direction
         # realized volatility from the recent bar history (maximals exits)
@@ -141,6 +170,14 @@ class PaperEngine:
         except Exception:
             sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
         leg = select_leg(direction, spot, self.cfg, sigma=sigma)
+        # ---- REAL Dhan chain premium/IV for the chosen strike ----
+        chain_prem, chain_sigma, chain_basis = self._chain_premium(
+            leg.strike, leg.option_type, sigma
+        )
+        if chain_prem is not None:
+            leg = select_leg(direction, spot, self.cfg, sigma=chain_sigma,
+                             premium=chain_prem)
+            sigma = chain_sigma
         budget = risk_budget(self.state, self.cfg)
         # ---- CONSEQUENTIAL STOP-LOSS (scales with lots) ----
         # stop_per_unit : GTT stop distance in premium points = premium * STOP_LOSS_PCT
@@ -200,9 +237,10 @@ class PaperEngine:
             "trend": signal.trend,
             "risk_rs": round(actual_risk, 2),
             "max_lots_avail": leg.max_lots_by_risk,
-            "sl_basis": getattr(leg, "sl_basis", ""),
+            "sl_basis": getattr(leg, "sl_basis", "") + (f" | {chain_basis}" if chain_basis else ""),
             "rr": getattr(leg, "rr", 0.0),
             "p_target_reach": getattr(leg, "p_target_reach", 0.0),
+            "chain_premium": chain_prem,
             "unrealized_pnl": 0.0,
             "pnl_peak": None,
             "peak_pct": 0.0,

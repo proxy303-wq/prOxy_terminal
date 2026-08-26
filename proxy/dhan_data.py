@@ -90,6 +90,90 @@ def fetch_intraday_last_days(days=5, interval=5, end=None):
     return fetch_intraday(start.date(), end.date(), interval=interval)
 
 
+def fetch_option_chain(underlying_id=NIFTY_INDEX_ID, expiry=None):
+    """Real-time Dhan option chain for an index underlying.
+
+    POST /v2/optionchain -> {"last_price": spot, "oc": {strike: {ce: {...}, pe: {...}}}}
+    Each leg carries security_id, last_price, oi, volume, implied_volatility,
+    top_bid/top_ask, greeks.  Uses the raw REST endpoint (the SDK swallows
+    errors).  Returns:
+
+        {"underlying": "13", "expiry": "YYYY-MM-DD", "spot": float,
+         "rows": [{"strike", "option_type", "security_id", "ltp", "oi",
+                   "volume", "iv", "bid", "ask"}, ...]}
+
+    expiry: "YYYY-MM-DD" or None (auto-picks the nearest expiry >= today).
+    Returns None on any failure (never raises).
+    """
+    import json as _json
+    import urllib.request as _ur
+    import urllib.error as _ure
+    from .dhan_auth import resolve_token_safe
+
+    cid = os.environ.get("DHAN_CLIENT_ID")
+    if not cid:
+        return None
+    tok, _src = resolve_token_safe(cid, notify=lambda *a: None)
+    if not tok:
+        return None
+
+    def _post(path, payload):
+        req = _ur.Request(
+            "https://api.dhan.co/v2" + path,
+            data=_json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "access-token": tok, "client-id": cid},
+            method="POST",
+        )
+        with _ur.urlopen(req, timeout=20) as resp:
+            return _json.loads(resp.read().decode())
+
+    try:
+        # 1) pick the expiry (nearest >= today, else nearest)
+        if not expiry:
+            exp = _post("/optionchain/expirylist",
+                        {"UnderlyingScrip": int(underlying_id), "UnderlyingSeg": IDX_SEGMENT})
+            dates = sorted((exp or {}).get("data") or [])
+            today = pd.Timestamp.now(IST).date()
+            candidates = [d for d in dates if pd.Timestamp(d).date() >= today]
+            expiry = (candidates or dates)[0]
+        # 2) the chain itself
+        body = _post("/optionchain",
+                     {"UnderlyingScrip": int(underlying_id), "UnderlyingSeg": IDX_SEGMENT,
+                      "Expiry": str(expiry)})
+        data = body.get("data") or {}
+        spot = float(data.get("last_price") or 0.0)
+        oc = data.get("oc") or {}
+        rows = []
+        for strike_str, legs in oc.items():
+            strike = float(strike_str)
+            for otype in ("ce", "pe"):
+                leg = legs.get(otype) or {}
+                ltp = leg.get("last_price")
+                if not ltp:
+                    continue
+                iv_raw = float(leg.get("implied_volatility") or 0.0)
+                # Dhan reports IV in PERCENT (e.g. 8.998 = 8.998%): normalise
+                # to a decimal.  Values > 1.0 are always percent-scale.
+                if iv_raw > 1.0:
+                    iv_raw = iv_raw / 100.0
+                rows.append({
+                    "strike": strike,
+                    "option_type": otype.upper(),
+                    "security_id": leg.get("security_id"),
+                    "ltp": float(ltp),
+                    "oi": int(leg.get("oi") or 0),
+                    "volume": int(leg.get("volume") or 0),
+                    "iv": iv_raw,
+                    "bid": float(leg.get("top_bid_price") or 0.0),
+                    "ask": float(leg.get("top_ask_price") or 0.0),
+                })
+        return {"underlying": str(underlying_id), "expiry": str(expiry),
+                "spot": spot, "rows": rows}
+    except Exception:
+        return None
+
+
 def fetch_daily(from_date, to_date, security_id=NIFTY_INDEX_ID,
                 segment=IDX_SEGMENT, instrument=INSTRUMENT_INDEX):
     """Daily OHLCV back to inception (historical subscription)."""

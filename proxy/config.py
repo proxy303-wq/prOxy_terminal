@@ -244,9 +244,9 @@ EXPIRY_BUCKETS = ["current_week", "next_week", "current_month", "next_month"]
 OPTION_EXPIRY_BUCKET = "current_week"   # expiry used for trade selection
 WEEKLY_EXPIRY_WEEKDAY = 3               # 3 = Thursday
 MONTHLY_EXPIRY_LAST_WEEKDAY = 3         # monthly expiry = last Thursday
-OPTION_DELTA_MIN = 0.50         # preferred long-leg delta band (ATM/ITM)
+OPTION_DELTA_MIN = 0.55         # preferred long-leg delta band (ITM bias)
 OPTION_DELTA_MAX = 0.80
-SELECT_BY_DELTA = False         # True = auto-pick the best delta-band
+SELECT_BY_DELTA = True          # True = auto-pick the best delta-band (ITM bias)
                                 # strike (ITM, lower theta) instead of ATM
                                 # (False keeps the spec's ATM default)
 

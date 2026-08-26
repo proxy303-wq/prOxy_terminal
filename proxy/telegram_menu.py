@@ -33,7 +33,8 @@ API = "https://api.telegram.org/bot"
 MENU_KEYBOARD = [
     ["💰 Balance", "📈 Prices"],
     ["🌡 Sentiment", "📊 Daily Report"],
-    ["🎛 Mode", "❓ Help"],
+    ["🚀 BTST Picks", "🎛 Mode"],
+    ["❓ Help"],
 ]
 
 MODE_KEYBOARD = [
@@ -168,6 +169,7 @@ class TelegramMenu:
             "mode": self._mode,
             "switch_live": self._ask_live, "live": self._ask_live,
             "switch_paper": self._switch_paper, "paper": self._switch_paper,
+            "btst": self._btst,
         }
         handler = dispatch.get(cmd)
         if handler:
@@ -179,6 +181,7 @@ class TelegramMenu:
             "🌡 sentiment": self._sentiment, "📊 daily report": self._report,
             "🎛 mode": self._mode, "❓ help": self._help,
             "🟢 go live": self._ask_live, "⚪ paper": self._switch_paper,
+            "🚀 btst picks": self._btst,
             "🔙 main menu": self._help,
         }
         handler = btn.get(text.lower())
@@ -320,6 +323,31 @@ class TelegramMenu:
             _send(chat_id, "\n".join(lines), MENU_KEYBOARD)
         except Exception as exc:
             _send(chat_id, f"⚠️ report unavailable: {exc}", MENU_KEYBOARD)
+
+    def _btst(self, chat_id):
+        _send(chat_id,
+              "🚀 Scanning ~38 liquid stocks for BTST (3 PM buy, sell "
+              "tomorrow)... takes ~30s.", MENU_KEYBOARD)
+        try:
+            from .btst_screener import screen_btst
+            result = screen_btst(top_n=6)
+            picks = result.get("picks") or []
+            if not picks:
+                _send(chat_id,
+                      "No BTST candidates passed the filters right now "
+                      "(need +1.5% 5d momentum, 1.2x volume, RSI 55-75). "
+                      "Try again near 3 PM.", MENU_KEYBOARD)
+                return
+            lines = ["🚀 <b>BTST Picks</b>  (scanned "
+                     f"{result.get('scanned', 0)} stocks)",
+                     "Buy today ~3 PM, sell tomorrow."]
+            for p in picks:
+                lines.append(
+                    f"• <b>{p['symbol']}</b> ₹{p['ltp']:,.2f} "
+                    f"[{' '.join(p['reasons'])}]")
+            _send(chat_id, "\n".join(lines), MENU_KEYBOARD)
+        except Exception as exc:
+            _send(chat_id, f"⚠️ BTST screener failed: {exc}", MENU_KEYBOARD)
 
     def _mode(self, chat_id):
         try:

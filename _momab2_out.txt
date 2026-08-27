@@ -1,0 +1,5 @@
+﻿=== 30D MOMENTUM QUALITY A/B ===
+current: trades 157 | win 96.2% | P&L +200,298 | PF 34.23 | worst -1,956
+ADX >= 20: trades 157 | win 96.2% | P&L +200,298 | PF 34.23 | worst -1,956
+persist 3 bars: trades 157 | win 96.2% | P&L +200,298 | PF 34.23 | worst -1,956
+ADX20 + persist3: trades 157 | win 96.2% | P&L +200,298 | PF 34.23 | worst -1,956

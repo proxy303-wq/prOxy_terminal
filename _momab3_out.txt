@@ -1,0 +1,5 @@
+﻿=== 30D MOMENTUM QUALITY A/B (fixed gate flow) ===
+current: trades 157 | win 96.2% | P&L +200,298 | PF 34.23 | worst -1,956
+ADX >= 20: trades 113 | win 97.3% | P&L +157,155 | PF 42.85 | worst -1,956
+persist 3 bars: trades 85 | win 94.1% | P&L +119,186 | PF 30.28 | worst -1,624
+ADX20 + persist3: trades 64 | win 96.9% | P&L +97,407 | PF 55.13 | worst -1,624

@@ -355,13 +355,29 @@ class Backtest:
                         plan.update(features_from_signal(signal, frame, self.cfg))
                     except Exception:
                         pass
-                    # LOW-PREMIUM GUARD: %-based exit model breaks on tiny premiums
+                    # entry-quality gates: low premium, ADX trend floor,
+                    # momentum persistence (all accumulate into one block)
+                    _blocked = None
                     min_prem = float(getattr(leg_cfg, "MIN_PREMIUM_ENTRY", 60.0))
                     if plan.get("entry_premium", 0) < min_prem:
-                        gate = RiskCheck(False,
-                                         f"premium {plan.get('entry_premium', 0):.2f} too low (< {min_prem:.0f})")
+                        _blocked = f"premium {plan.get('entry_premium', 0):.2f} too low (< {min_prem:.0f})"
+                    adx_min = float(getattr(leg_cfg, "MOMENTUM_ADX_MIN", 0.0))
+                    if _blocked is None and adx_min > 0 and "adx" in frame.columns:
+                        adx_now = float(frame["adx"].iloc[-1])
+                        if adx_now != adx_now or adx_now < adx_min:
+                            _blocked = f"ADX {adx_now:.1f} < {adx_min:.0f} (no real trend)"
+                    persist = int(getattr(leg_cfg, "MOMENTUM_PERSIST_BARS", 0))
+                    if _blocked is None and persist > 0:
+                        closes = [b["close"] for b in history[-persist - 1:]]
+                        if len(closes) >= persist + 1:
+                            rising = all(closes[i] >= closes[i - 1] for i in range(1, len(closes)))
+                            want_up = signal.direction == "BUY"
+                            if (rising and not want_up) or (not rising and want_up):
+                                _blocked = f"momentum not persistent ({persist} bars)"
+                    if _blocked:
+                        gate = RiskCheck(False, _blocked)
                     # strike-once rule: never average the SAME strike twice a day
-                    if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
+                    elif getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
                         if strikes_today.get(plan["strike"], 0) >= int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1)):
                             gate = RiskCheck(False, f"strike {plan['strike']} already traded today (no averaging)")
                             if self.verbose:

@@ -178,6 +178,14 @@ class PaperEngine:
             leg = select_leg(direction, spot, self.cfg, sigma=chain_sigma,
                              premium=chain_prem)
             sigma = chain_sigma
+        # ---- SURESHOT: scale up on high-confidence, trend-aligned signals ----
+        from .options import directional_efficiency, sureshot_lots
+        _closes = [b["close"] for b in self.history[-20:]]
+        _eff = directional_efficiency(_closes)
+        lots, _sureshot = sureshot_lots(
+            self.cfg, float(signal.confidence or 0), _eff, direction,
+            default_lots=int(getattr(self.cfg, "DEFAULT_LOTS", 5)),
+            closes=_closes)
         budget = risk_budget(self.state, self.cfg)
         # ---- CONSEQUENTIAL STOP-LOSS (scales with lots) ----
         # stop_per_unit : GTT stop distance in premium points = premium * STOP_LOSS_PCT
@@ -191,7 +199,8 @@ class PaperEngine:
             # budget-based sizing would crush the size to 1 lot.  Trade the
             # operating band (DEFAULT_LOTS) instead; the actual risk is computed
             # and logged, and the daily/monthly loss limits are the hard stop.
-            lots = int(getattr(self.cfg, "DEFAULT_LOTS", 5))
+            # SURESHOT tier (confidence + trend-aligned) may scale lots up.
+            lots = max(lots, int(getattr(self.cfg, "DEFAULT_LOTS", 5)))
             qty = lots * self.cfg.LOT_SIZE
             actual_risk = qty * stop_unit
         else:
@@ -241,6 +250,9 @@ class PaperEngine:
             "rr": getattr(leg, "rr", 0.0),
             "p_target_reach": getattr(leg, "p_target_reach", 0.0),
             "chain_premium": chain_prem,
+            "sureshot": _sureshot,
+            "lock_arm_pct": float(getattr(self.cfg, "SURESHOT_ARM_PCT", 0.008)) if _sureshot else None,
+            "lock_trail_step_pct": float(getattr(self.cfg, "SURESHOT_TRAIL_PCT", 0.004)) if _sureshot else None,
             "unrealized_pnl": 0.0,
             "pnl_peak": None,
             "peak_pct": 0.0,

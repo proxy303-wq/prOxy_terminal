@@ -115,6 +115,14 @@ TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
 
 SL_MODE = "maximals"
 MAXIMALS_HOLDING_BARS = 4        # expected holding window (4 x 5-min bars; sweep: hold 4 best)
+
+# ---- SURESHOT MODE: scale up on high-confidence, trend-aligned signals ----
+SURESHOT_ENABLED = True
+SURESHOT_LOTS_90 = 9         # lots when confidence >= 90 AND trend-aligned
+SURESHOT_LOTS_80 = 7         # lots when confidence >= 80 AND trend-aligned
+SURESHOT_ARM_PCT = 0.008     # sureshot lock arms later (+0.8%) so winners run
+SURESHOT_TRAIL_PCT = 0.004   # sureshot floor trails at peak - 0.4%
+SURESHOT_EFF_THRESHOLD = 0.25  # min 20-bar directional efficiency to count as "trendy"
 MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

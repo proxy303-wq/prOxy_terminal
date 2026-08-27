@@ -46,13 +46,17 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
         trade["pnl_peak"] = peak
         trade["peak_pct"] = peak_pct
         armed = bool(trade.get("lock_armed", False))
-        if not armed and peak_pct >= float(getattr(cfg, "LOCK_ARM_PCT", 0.003)):
+        # per-trade overrides (sureshot trades arm later + trail wider so
+        # winners run further); fall back to the global config
+        arm_pct = float(trade.get("lock_arm_pct") or getattr(cfg, "LOCK_ARM_PCT", 0.003))
+        trail_step = float(trade.get("lock_trail_step_pct") or getattr(cfg, "LOCK_TRAIL_STEP_PCT", 0.002))
+        if not armed and peak_pct >= arm_pct:
             trade["lock_armed"] = True
             armed = True
         if armed:
             floor = float(getattr(cfg, "LOCK_FLOOR_PCT", 0.001))
             if getattr(cfg, "LOCK_TRAIL_ENABLED", True):
-                floor = max(floor, peak_pct - float(getattr(cfg, "LOCK_TRAIL_STEP_PCT", 0.002)))
+                floor = max(floor, peak_pct - trail_step)
             trade["lock_floor_pct"] = floor
             if is_long:
                 floor_prem = entry_premium * (1.0 + floor)

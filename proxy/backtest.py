@@ -277,10 +277,18 @@ class Backtest:
                         leg.instrument = leg.instrument.rsplit(" ", 1)[0] + " " + leg.option_type
                     budget = risk_budget(self.state, self.cfg)
                     stop_unit = leg.stop_per_unit
+                    # SURESHOT: scale up on high-confidence, trend-aligned signals
+                    from .options import directional_efficiency as _de, sureshot_lots as _sl
+                    _closes = [b["close"] for b in history[-20:]]
+                    _eff = _de(_closes)
+                    lots, _sureshot = _sl(
+                        leg_cfg, float(signal.confidence or 0), _eff, signal.direction,
+                        default_lots=int(getattr(self.cfg, "DEFAULT_LOTS", 5)),
+                        closes=_closes)
                     if getattr(leg_cfg, "SL_MODE", "flat") == "maximals":
                         # wide distribution-based SL: trade the operating band
                         # (DEFAULT_LOTS); daily/monthly loss limits protect
-                        lots = int(getattr(self.cfg, "DEFAULT_LOTS", 5))
+                        lots = max(lots, int(getattr(self.cfg, "DEFAULT_LOTS", 5)))
                         qty = lots * self.cfg.LOT_SIZE
                         actual_risk = qty * stop_unit
                     else:
@@ -313,6 +321,9 @@ class Backtest:
                         "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
                         "regime": regime,
                         "lock_enabled": regime != "flat",
+                        "sureshot": _sureshot,
+                        "lock_arm_pct": float(getattr(leg_cfg, "SURESHOT_ARM_PCT", 0.008)) if _sureshot else None,
+                        "lock_trail_step_pct": float(getattr(leg_cfg, "SURESHOT_TRAIL_PCT", 0.004)) if _sureshot else None,
                     }
                     # entry-time features for the meta-label precision layer
                     try:

@@ -57,6 +57,39 @@ def atm_strike(spot, step=50.0):
     return round(spot / step) * step
 
 
+def directional_efficiency(closes):
+    """Trend strength: |net move| / total path over the window (0=chop, 1=straight)."""
+    if not closes or len(closes) < 12:
+        return 0.0
+    net = abs(closes[-1] - closes[0])
+    path = sum(abs(closes[i] - closes[i - 1]) for i in range(1, len(closes)))
+    return net / path if path > 0 else 0.0
+
+
+def sureshot_lots(cfg, confidence, eff, signal_direction, default_lots=None, closes=None):
+    """SURESHOT sizing: scale lots up when the signal is high-confidence AND
+    aligned with a real trend.
+
+    Returns (lots, is_sureshot).  Counter-trend / ranging signals stay at the
+    default size - they are the risky ones.
+    """
+    default_lots = default_lots if default_lots is not None else int(getattr(cfg, "DEFAULT_LOTS", 5))
+    if not getattr(cfg, "SURESHOT_ENABLED", True):
+        return default_lots, False
+    eff = eff if eff is not None else directional_efficiency(closes or [])
+    if eff < float(getattr(cfg, "SURESHOT_EFF_THRESHOLD", 0.25)):
+        return default_lots, False
+    trend_up = bool(closes and closes[-1] >= closes[0])
+    aligned = (signal_direction == "BUY" and trend_up) or (signal_direction == "SELL" and not trend_up)
+    if not aligned:
+        return default_lots, False
+    if confidence >= 90:
+        return int(getattr(cfg, "SURESHOT_LOTS_90", 9)), True
+    if confidence >= 80:
+        return int(getattr(cfg, "SURESHOT_LOTS_80", 7)), True
+    return default_lots, False
+
+
 def estimate_premium(spot, pct=None, delta=0.5, cfg=None):
     """ATM premium estimate: default ~0.65% of spot (~160-200 on NIFTY 24-25k)."""
     if pct is None:

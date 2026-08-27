@@ -145,7 +145,7 @@ EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
 # ---- UNARMED TIME-STOP: if a trade has not armed the lock-profit within N
 # 5-min bars, cut it at market - the maximals stop is so wide that losers
 # otherwise bleed to the 15:15 time-stop (the -17.7k day)
-MAX_UNARMED_BARS = 12           # 60 minutes; 0 disables
+MAX_UNARMED_BARS = 4            # 20 minutes: sweep cut worst loss -3.7k -> -1.9k, P&L ~same
 MAXIMALS_ALPHA_STOP = 0.20       # tighter SL (20% quantile): 30D A/B cut worst loss -5.2k -> -3.7k
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

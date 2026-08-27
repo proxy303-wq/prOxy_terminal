@@ -584,7 +584,7 @@ def pick_expiry_date(cfg, expiries, today=None):
     - on expiry day the premium melts below the entry floor, so trade the
     upcoming expiry instead.  Returns a date."""
     from datetime import timedelta, datetime as _dt
-    today = today or datetime.now().date()
+    today = today or _dt.now().date()
     roll = int(getattr(cfg, "EXPIRY_ROLL_DAYS", 2))
     dates = sorted(_dt.strptime(str(d)[:10], "%Y-%m-%d").date() for d in (expiries or []))
     if not dates:
@@ -608,7 +608,7 @@ def expiry_for_bucket(bucket, today=None, expiries=None, roll_days=0):
       next_month   -> the one after that.
     Falls back to the calendar approximation otherwise."""
     from datetime import timedelta, datetime as _dt
-    today = today or datetime.now().date()
+    today = today or _dt.now().date()
     if expiries:
         dates = sorted(_dt.strptime(str(d)[:10], "%Y-%m-%d").date() for d in expiries)
         future = [d for d in dates if d >= today] or dates

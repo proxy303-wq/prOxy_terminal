@@ -135,6 +135,10 @@ MAX_STRIKE_SHIFTS = 2           # up to 2 shifts (max 4 steps away) before block
 MIN_PREMIUM_ENTRY = 60.0       # skip entries with premium below this
 MAX_STOP_FRACTION = 0.65       # stop can never exceed 65% of the premium
 MIN_TARGET_PTS = 1.0           # target never tighter than 1 premium point
+
+# ---- EXPIRY ROLL: on/near expiry day the premium melts (theta), so long
+# entries auto-roll to the UPCOMING expiry instead of the decaying one
+EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
 MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

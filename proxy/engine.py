@@ -83,6 +83,9 @@ class PaperEngine:
         # entries use live premiums/IV instead of the model estimate
         self.chain = None
         self._chain_lookup = {}
+        # REAL Dhan expiry list (set via set_expiries): entries auto-roll to
+        # the upcoming expiry when the current one starts melting
+        self.expiries = None
         # ML prediction layer (LSTM per the research paper) - advisory/gate
         self.ml_predict = None
         self.ml_meta = None
@@ -133,6 +136,10 @@ class PaperEngine:
     # entry planning
     # ----------------------------------------------------------
 
+    def set_expiries(self, expiries):
+        """Real Dhan expiry list (cached fetch) for expiry-roll entries."""
+        self.expiries = list(expiries or []) or None
+
     def set_chain(self, chain):
         """Feed the engine a real Dhan option chain {rows: [{strike,
         option_type, ltp, iv, ...}]}.  Entries then use the LIVE premium
@@ -169,14 +176,16 @@ class PaperEngine:
             sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
         except Exception:
             sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
-        leg = select_leg(direction, spot, self.cfg, sigma=sigma)
+        _roll = int(getattr(self.cfg, "EXPIRY_ROLL_DAYS", 2))
+        leg = select_leg(direction, spot, self.cfg, sigma=sigma,
+                         expiries=self.expiries, roll_days=_roll)
         # ---- REAL Dhan chain premium/IV for the chosen strike ----
         chain_prem, chain_sigma, chain_basis = self._chain_premium(
             leg.strike, leg.option_type, sigma
         )
         if chain_prem is not None:
             leg = select_leg(direction, spot, self.cfg, sigma=chain_sigma,
-                             premium=chain_prem)
+                             premium=chain_prem, expiries=self.expiries, roll_days=_roll)
             sigma = chain_sigma
         # ---- STRIKE-SHIFT RULE (LIVE): a same-direction re-entry moves 1-2
         # steps away from an already-traded strike instead of repeating it ----
@@ -197,7 +206,8 @@ class PaperEngine:
                 prem2, sig2, _b2 = self._chain_premium(leg.strike, leg.option_type, sigma)
                 leg = select_leg(direction, spot, self.cfg,
                                  sigma=sig2 if prem2 is not None else sigma,
-                                 premium=prem2, force_strike=leg.strike)
+                                 premium=prem2, force_strike=leg.strike,
+                                 expiries=self.expiries, roll_days=_roll)
                 if prem2 is not None:
                     chain_basis += f" | strike shifted {strike_shift}x toward ITM"
         # ---- SURESHOT: scale up on high-confidence, trend-aligned signals ----

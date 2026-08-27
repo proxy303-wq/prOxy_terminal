@@ -94,6 +94,36 @@ def fetch_intraday_last_days(days=5, interval=5, end=None, security_id=NIFTY_IND
                           security_id=str(security_id))
 
 
+_EXPIRIES_CACHE = {"ts": 0.0, "list": []}
+
+
+def fetch_expiries(underlying_id=NIFTY_INDEX_ID, force=False):
+    """Real Dhan expiry list (cached 6h): ['2026-09-01', '2026-09-08', ...]."""
+    import time as _t
+    now = _t.time()
+    if _EXPIRIES_CACHE["list"] and not force and now - _EXPIRIES_CACHE["ts"] < 6 * 3600:
+        return list(_EXPIRIES_CACHE["list"])
+    try:
+        from .dhan_auth import resolve_token_safe
+        import json as _json
+        import urllib.request as _ur
+        cid = os.environ.get("DHAN_CLIENT_ID")
+        tok, _src = resolve_token_safe(cid, notify=lambda *a: None)
+        req = _ur.Request(
+            "https://api.dhan.co/v2/optionchain/expirylist",
+            data=_json.dumps({"UnderlyingScrip": int(underlying_id), "UnderlyingSeg": IDX_SEGMENT}).encode(),
+            headers={"Content-Type": "application/json", "Accept": "application/json",
+                     "access-token": tok, "client-id": cid}, method="POST")
+        with _ur.urlopen(req, timeout=20) as resp:
+            body = _json.loads(resp.read().decode())
+        dates = sorted((body or {}).get("data") or [])
+        _EXPIRIES_CACHE["list"] = dates
+        _EXPIRIES_CACHE["ts"] = now
+        return dates
+    except Exception:
+        return list(_EXPIRIES_CACHE["list"])
+
+
 def fetch_option_chain(underlying_id=NIFTY_INDEX_ID, expiry=None):
     """Real-time Dhan option chain for an index underlying.
 

@@ -173,8 +173,16 @@ def run_trading_day(notifier, trade_date):
     # for the chosen strike instead of the model estimate.  One POST at
     # session start (rate limit is 1 req/s; a single chain call is fine).
     try:
-        from proxy.dhan_data import fetch_option_chain
-        chain = fetch_option_chain(underlying_id=13)
+        from proxy.dhan_data import fetch_option_chain, fetch_expiries
+        from proxy.options import pick_expiry_date
+        # real expiry list + auto-roll to the upcoming expiry when the
+        # current one is expiring (its premium melts below the entry floor)
+        exps = fetch_expiries()
+        if exps:
+            engine.set_expiries(exps)
+        trade_expiry = pick_expiry_date(cfg, exps) if exps else None
+        chain = fetch_option_chain(underlying_id=13,
+                                   expiry=str(trade_expiry) if trade_expiry else None)
         if chain and chain.get("rows"):
             engine.set_chain(chain)
             atm = min(chain["rows"], key=lambda r: abs(r["strike"] - chain["spot"]))

@@ -156,7 +156,7 @@ def recommend_lots(cfg, premium=None, risk_budget=None, capital=None):
 
 
 def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=None,
-             force_strike=None):
+             force_strike=None, expiries=None, roll_days=0):
     """
     Build the option leg for a signal.
 
@@ -182,9 +182,11 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
     calc = recommend_lots(cfg, premium=premium)
     lots = lots if lots is not None else calc["selected_lots"]
 
-    # expiry-aware theta (Black-76 at the chosen strike and DTE)
-    dte = dte if dte is not None else expiry_for_bucket(
-        getattr(cfg, "OPTION_EXPIRY_BUCKET", "current_week"))["dte"]
+    # expiry-aware theta (Black-76 at the chosen strike and DTE); use the
+    # REAL Dhan expiry list when provided (with expiry roll for the melt)
+    _exp = expiry_for_bucket(getattr(cfg, "OPTION_EXPIRY_BUCKET", "current_week"),
+                             expiries=expiries, roll_days=roll_days)
+    dte = dte if dte is not None else _exp["dte"]
     T = max(dte, 1) / 365.0
     sigma = sigma if sigma is not None else getattr(cfg, "OPTION_IV_EST", 0.13)
     flag = "c" if opt_type == "CE" else "p"
@@ -250,7 +252,7 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
     sym_name = getattr(cfg, "OPTION_SYMBOL", "NIFTY")
     if dte and getattr(cfg, "OPTION_EXPIRY_BUCKET", None):
         try:
-            exp_date = expiry_for_bucket(getattr(cfg, "OPTION_EXPIRY_BUCKET", "current_week"))["date"]
+            exp_date = _exp["date"]
             symbol = f"{sym_name} {exp_date.strftime('%d%b').upper()} {strike:g} {opt_type}"
         except Exception:
             symbol = f"{sym_name} {strike:g} {opt_type}"
@@ -576,8 +578,56 @@ def nifty_expiries(today=None, buckets=None, weekly_weekday=3, monthly_weekday=3
     return sorted(out, key=lambda x: x["dte"])
 
 
-def expiry_for_bucket(bucket, today=None):
-    """Resolve one bucket to its expiry dict (falls back to current_week)."""
+def pick_expiry_date(cfg, expiries, today=None):
+    """The expiry to TRADE from the REAL Dhan list: nearest future expiry,
+    but auto-rolled one forward when it is expiring soon (EXPIRY_ROLL_DAYS)
+    - on expiry day the premium melts below the entry floor, so trade the
+    upcoming expiry instead.  Returns a date."""
+    from datetime import timedelta, datetime as _dt
+    today = today or datetime.now().date()
+    roll = int(getattr(cfg, "EXPIRY_ROLL_DAYS", 2))
+    dates = sorted(_dt.strptime(str(d)[:10], "%Y-%m-%d").date() for d in (expiries or []))
+    if not dates:
+        return None
+    future = [d for d in dates if d >= today]
+    pick = future[0] if future else dates[0]
+    if (pick - today).days <= roll and len(dates) > 1:
+        # roll to the upcoming expiry (skip the decaying series)
+        idx = dates.index(pick)
+        pick = dates[min(idx + 1, len(dates) - 1)]
+    return pick
+
+
+def expiry_for_bucket(bucket, today=None, expiries=None, roll_days=0):
+    """Resolve one bucket to its expiry dict.
+
+    When the REAL Dhan expiry list is provided, buckets map onto it:
+      current_week -> first expiry (rolled forward if expiring soon),
+      next_week    -> second expiry,
+      current_month-> first expiry > 14 days out,
+      next_month   -> the one after that.
+    Falls back to the calendar approximation otherwise."""
+    from datetime import timedelta, datetime as _dt
+    today = today or datetime.now().date()
+    if expiries:
+        dates = sorted(_dt.strptime(str(d)[:10], "%Y-%m-%d").date() for d in expiries)
+        future = [d for d in dates if d >= today] or dates
+        if bucket == "current_week":
+            idx = 0
+            if roll_days and (future[0] - today).days <= roll_days and len(future) > 1:
+                idx = 1
+        elif bucket == "next_week":
+            idx = min(1, len(future) - 1)
+        elif bucket == "current_month":
+            idx = next((i for i, d in enumerate(future) if (d - today).days > 14), 0)
+        elif bucket == "next_month":
+            idx = min(next((i for i, d in enumerate(future) if (d - today).days > 14), 0) + 1, len(future) - 1)
+        else:
+            idx = 0
+        exp_date = future[idx]
+        dte = max((exp_date - today).days, 0)
+        return {"bucket": bucket, "date": exp_date, "dte": dte,
+                "label": f"{bucket} ({exp_date.strftime('%d %b')}, {dte}d)"}
     for e in nifty_expiries(today=today):
         if e["bucket"] == bucket:
             return e

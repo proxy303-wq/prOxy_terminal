@@ -120,12 +120,14 @@ def _worker(client_id, access_token):
         ("IDX_I", BANKNIFTY_INDEX_ID),
     ]
 
-    def seed_prev_close():
-        """Previous trading-day close from Dhan's REST charts (cosmetic)."""
+    def seed_prev_close(security_id):
+        """Previous trading-day close from Dhan's REST charts for ONE index
+        (13 = NIFTY, 25 = BANKNIFTY).  Earlier this reused NIFTY's close for
+        BOTH indices, which made BANKNIFTY show a +138% change."""
         try:
             from .dhan_data import fetch_intraday_last_days
             from datetime import date
-            df = fetch_intraday_last_days(days=2)
+            df = fetch_intraday_last_days(days=2, security_id=security_id)
             if df is not None and not df.empty:
                 rows = df[df["date"].dt.date < date.today()]
                 if not rows.empty:
@@ -134,12 +136,15 @@ def _worker(client_id, access_token):
             pass
         return None
 
-    prev = seed_prev_close()
-    if prev:
+    # per-index previous close (NIFTY 13, BANKNIFTY 25)
+    _prev_nifty = seed_prev_close(NIFTY_INDEX_ID)
+    _prev_bn = seed_prev_close(BANKNIFTY_INDEX_ID)
+    if _prev_nifty and _state["NIFTY"]["previous_close"] is None:
         with _lock:
-            for sym in _state:
-                if _state[sym]["previous_close"] is None:
-                    _state[sym]["previous_close"] = prev
+            _state["NIFTY"]["previous_close"] = _prev_nifty
+    if _prev_bn and _state["BANKNIFTY"]["previous_close"] is None:
+        with _lock:
+            _state["BANKNIFTY"]["previous_close"] = _prev_bn
 
     while True:
         try:

@@ -82,12 +82,16 @@ def fetch_intraday(from_date, to_date, interval=5, security_id=NIFTY_INDEX_ID,
     return df.reset_index()
 
 
-def fetch_intraday_last_days(days=5, interval=5, end=None):
-    """Last N trading days of NIFTY 5-min bars from Dhan (REST)."""
+def fetch_intraday_last_days(days=5, interval=5, end=None, security_id=NIFTY_INDEX_ID):
+    """Last N trading days of 5-min bars from Dhan (REST) for one index.
+
+    security_id: "13" NIFTY (default), "25" BANKNIFTY, "27" FINNIFTY, "51" SENSEX.
+    """
     end = pd.Timestamp(end) if end else pd.Timestamp.now(IST)
     # calendar days are fine; Dhan clamps to trading days
     start = end - pd.Timedelta(days=days * 2)
-    return fetch_intraday(start.date(), end.date(), interval=interval)
+    return fetch_intraday(start.date(), end.date(), interval=interval,
+                          security_id=str(security_id))
 
 
 def fetch_option_chain(underlying_id=NIFTY_INDEX_ID, expiry=None):

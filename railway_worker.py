@@ -178,6 +178,17 @@ def run_trading_day(notifier, trade_date):
         # real expiry list + auto-roll: date-based (within EXPIRY_ROLL_DAYS of
         # expiry) AND premium-based (ATM premium melted below the entry floor,
         # which would block every entry - trade the upcoming expiry instead)
+        # India VIX (market forward vol) anchors the stop sizing
+        try:
+            from proxy.dhan_rest_feed import fetch_ltp
+            from proxy.dhan_auth import resolve_token_safe
+            _tok, _s = resolve_token_safe(os.environ.get("DHAN_CLIENT_ID"), notify=lambda *a: None)
+            _vix = fetch_ltp(os.environ.get("DHAN_CLIENT_ID"), _tok, [("IDX_I", 21)]).get(("IDX_I", "21"))
+            if _vix:
+                engine.set_vix(_vix / 100.0)
+                notifier.log(f"LIVE India VIX: {_vix:.2f} - stops anchored to market forward vol", "INFO")
+        except Exception as exc:
+            notifier.log(f"LIVE VIX fetch failed ({exc}) - stops use GARCH vol only", "WARN")
         exps = fetch_expiries()
         trade_expiry = pick_expiry_date(cfg, exps) if exps else None
         chain = fetch_option_chain(underlying_id=13,

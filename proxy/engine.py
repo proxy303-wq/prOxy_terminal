@@ -87,6 +87,9 @@ class PaperEngine:
         # REAL Dhan expiry list (set via set_expiries): entries auto-roll to
         # the upcoming expiry when the current one starts melting
         self.expiries = None
+        # India VIX annualized (set via set_vix): anchors the stop sizing
+        # to the market's own forward vol forecast
+        self.vix_annual = None
         # ML prediction layer (LSTM per the research paper) - advisory/gate
         self.ml_predict = None
         self.ml_meta = None
@@ -141,6 +144,10 @@ class PaperEngine:
         """Real Dhan expiry list (cached fetch) for expiry-roll entries."""
         self.expiries = list(expiries or []) or None
 
+    def set_vix(self, vix_annual):
+        """India VIX as a fraction (e.g. 11.07 -> 0.1107) - anchors stops."""
+        self.vix_annual = float(vix_annual) if vix_annual and vix_annual > 0 else None
+
     def set_chain(self, chain):
         """Feed the engine a real Dhan option chain {rows: [{strike,
         option_type, ltp, iv, ...}]}.  Entries then use the LIVE premium
@@ -176,6 +183,10 @@ class PaperEngine:
             _vol_bar = vol_per_bar_from_closes(
                 closes, mode=getattr(self.cfg, "VOL_MODE", "window"), window=window)
             sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
+            # VIX anchor: never size stops below the market's forward vol
+            _blend = float(getattr(self.cfg, "VOL_VIX_BLEND", 0.0))
+            if _blend > 0 and getattr(self, "vix_annual", None):
+                sigma = max(sigma, self.vix_annual * _blend)
         except Exception:
             sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
         _roll = int(getattr(self.cfg, "EXPIRY_ROLL_DAYS", 2))

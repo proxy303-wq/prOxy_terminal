@@ -75,9 +75,16 @@ def aggregate_5m(bars_1m):
 
 class Backtest:
     def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False,
-                 target_date=None, df=None, df1m=None, regime_fn=None):
+                 target_date=None, df=None, df1m=None, regime_fn=None, vix_df=None):
         self.cfg = cfg
         self.regime_fn = regime_fn   # optional callable(history) -> 'trend'|'flat'
+        # VIX anchor: {trade_date: annualized-vix-as-fraction} for vol anchoring
+        self.vix_by_day = {}
+        if vix_df is not None and not vix_df.empty:
+            v = vix_df.copy()
+            v["date"] = pd.to_datetime(v["date"]).dt.date
+            daily = v.groupby("date")["close"].last()
+            self.vix_by_day = {d: float(c) / 100.0 for d, c in daily.items()}
         self.path = path or CSV_PATH
         self.max_days = max_days if max_days is not None else cfg.BACKTEST_MAX_DAYS
         self.last_days = last_days
@@ -250,6 +257,13 @@ class Backtest:
                         _vol_bar = vol_per_bar_from_closes(
                             _closes, mode=getattr(self.cfg, "VOL_MODE", "window"), window=_window)
                         _sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
+                        # VIX anchor: never size stops below the market's own
+                        # forward vol forecast (when the VIX data is supplied)
+                        _blend = float(getattr(self.cfg, "VOL_VIX_BLEND", 0.0))
+                        if _blend > 0 and self.vix_by_day:
+                            _vix = self.vix_by_day.get(bar["time"].date())
+                            if _vix:
+                                _sigma = max(_sigma, _vix * _blend)
                     except Exception:
                         _sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
                     leg_cfg = self.cfg

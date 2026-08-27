@@ -153,6 +153,11 @@ MAX_UNARMED_BARS = 4            # 20 minutes: sweep cut worst loss -3.7k -> -1.9
 # A/B 30D: ewma +1.5% P&L, PF 34->45, win 96.2->96.9% -> enabled
 VOL_MODE = "ewma"
 
+# VIX anchor: sigma_used = max(GARCH/realized, IndiaVIX * VOL_VIX_BLEND)
+# 0 = off.  The VIX is the market's own forward vol forecast - anchoring
+# stops to it keeps them honest in calm/panic regimes.
+VOL_VIX_BLEND = 0.8            # A/B 30D: +5.4% P&L (214k vs 203k) -> enabled
+
 # ---- POST-HALT COMEBACK: after the daily halt, allow up to N very high
 # confidence trades to recover, but never let the day sink below the floor.
 # The halt is NOT a winner-filter - this just gives strong signals a shot

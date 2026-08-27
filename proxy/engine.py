@@ -326,6 +326,7 @@ class PaperEngine:
         pct_now = (bar["close"] - entry_spot) / entry_spot if entry_spot else 0.0
         move = premium_move_pct(pct_now, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST)
         prem_now = entry_premium * (1.0 + move) if is_ce else entry_premium * (1.0 - move)
+        slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
 
         # theta decay: LONG options bleed, SHORT options collect.
         # theta_day_pct is the fraction of premium lost per DAY; per 5m bar = /75.
@@ -367,6 +368,13 @@ class PaperEngine:
                         return floor_prem, "LOCK_PROFIT"
                 if getattr(self.cfg, "TRAIL_SL_TO_ENTRY", True):
                     stop_p = entry_premium  # breakeven trail
+
+        # UNARMED TIME-STOP: a trade that never armed the lock within
+        # MAX_UNARMED_BARS has no edge - cut it at market instead of bleeding
+        # to the 15:15 time-stop (this was the -17.7k single-trade loss)
+        max_unarmed = int(getattr(self.cfg, "MAX_UNARMED_BARS", 0))
+        if max_unarmed > 0 and not armed and int(t.get("bars_held") or 0) >= max_unarmed:
+            return prem_now * slip, "UNARMED_TIME_STOP"
 
         # GTT: for an unarmed trade the stop is checked first
         # (conservative).  LONG: loss when premium falls, win when it rises.
@@ -461,6 +469,8 @@ class PaperEngine:
         # 1) manage the open trade first
         if self.active_trade is not None:
             self._active_trade = self.active_trade
+            # bars held: drives the UNARMED_TIME_STOP (cut losers that never arm)
+            self.active_trade["bars_held"] = int(self.active_trade.get("bars_held") or 0) + 1
             exit_price, exit_reason = self._check_exits(bar, signal, spot)
             if exit_price is not None:
                 rec = self._close(exit_price, exit_reason, bar)

@@ -69,6 +69,13 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
             if getattr(cfg, "TRAIL_SL_TO_ENTRY", True):
                 stop_p = entry_premium
 
+    # UNARMED TIME-STOP: a trade that never armed the lock within
+    # MAX_UNARMED_BARS has no edge - cut it at market instead of letting it
+    # bleed to the 15:15 time-stop (this was the -17.7k single-trade loss)
+    max_unarmed = int(getattr(cfg, "MAX_UNARMED_BARS", 0))
+    if max_unarmed > 0 and not armed and int(trade.get("bars_held") or 0) >= max_unarmed:
+        return prem_now, "UNARMED_TIME_STOP"
+
     if is_long:
         if prem_low <= stop_p:
             return stop_p, "STOP_LOSS_HIT (-0.5%)"

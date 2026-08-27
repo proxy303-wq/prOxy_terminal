@@ -117,7 +117,9 @@ SL_MODE = "maximals"
 MAXIMALS_HOLDING_BARS = 4        # expected holding window (4 x 5-min bars; sweep: hold 4 best)
 
 # ---- SURESHOT MODE: scale up on high-confidence, trend-aligned signals ----
-SURESHOT_ENABLED = True
+# DISABLED 2026-08-28: the 9-lot tail risk wiped a day (-17.7k on one wrong
+# signal that bled to the 15:15 time-stop).  5 lots always.
+SURESHOT_ENABLED = False
 SURESHOT_LOTS_90 = 9         # lots when confidence >= 90 AND trend-aligned
 SURESHOT_LOTS_80 = 7         # lots when confidence >= 80 AND trend-aligned
 SURESHOT_ARM_PCT = 0.008     # sureshot lock arms later (+0.8%) so winners run
@@ -139,7 +141,12 @@ MIN_TARGET_PTS = 1.0           # target never tighter than 1 premium point
 # ---- EXPIRY ROLL: on/near expiry day the premium melts (theta), so long
 # entries auto-roll to the UPCOMING expiry instead of the decaying one
 EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
-MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
+
+# ---- UNARMED TIME-STOP: if a trade has not armed the lock-profit within N
+# 5-min bars, cut it at market - the maximals stop is so wide that losers
+# otherwise bleed to the 15:15 time-stop (the -17.7k day)
+MAX_UNARMED_BARS = 12           # 60 minutes; 0 disables
+MAXIMALS_ALPHA_STOP = 0.20       # tighter SL (20% quantile): 30D A/B cut worst loss -5.2k -> -3.7k
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility
 MAXIMALS_MIN_STOP_PCT = 0.005    # never tighter than the flat 0.5% stop

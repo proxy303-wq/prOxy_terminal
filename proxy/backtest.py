@@ -196,6 +196,7 @@ class Backtest:
             for bi, bar in enumerate(five):
                 # ---- 1) exit simulation at 1m resolution ----
                 if active is not None:
+                    active["bars_held"] = int(active.get("bars_held") or 0) + 1
                     sub_bars = bar.get("_1m") or [bar]
                     for sub in sub_bars:
                         if active is None:

@@ -1,5 +1,0 @@
-﻿=== 30D: VIX-anchored stops (GARCH + IndiaVIX blend) ===
-no VIX (GARCH only): trades 161 | win 96.9% | P&L +203,264 | PF 45.62 | worst -1,957 | stops 5
-VIX blend 0.6: trades 155 | win 96.1% | P&L +207,768 | PF 35.42 | worst -1,957 | stops 6
-VIX blend 0.8: trades 153 | win 96.1% | P&L +214,284 | PF 36.42 | worst -1,959 | stops 6
-VIX blend 1.0: trades 152 | win 96.1% | P&L +214,378 | PF 36.35 | worst -1,961 | stops 6

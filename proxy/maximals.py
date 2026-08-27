@@ -122,6 +122,32 @@ def realized_vol_per_bar(closes, window=40):
     return float(rets.std(ddof=1))
 
 
+def ewma_vol_per_bar(closes, lambda_=0.94):
+    """RiskMetrics GARCH(1,1) per-bar vol: sigma2_t = lam*sigma2_{t-1} + (1-lam)*r_t^2.
+
+    Volatility-clustering aware - reacts fast to recent shocks (a burst of
+    big bars lifts the forecast immediately, a quiet patch calms it), unlike
+    a flat window which lags both.  Industry-standard (RiskMetrics)."""
+    if closes is None or len(closes) < 3:
+        return None
+    series = np.asarray(closes, dtype=float)
+    rets = np.diff(np.log(series[series > 0]))
+    if len(rets) < 2:
+        return None
+    var = float(np.mean(rets[-20:] ** 2)) if len(rets) >= 20 else float(rets.var(ddof=1))
+    for r in rets[-60:]:
+        var = lambda_ * var + (1.0 - lambda_) * r * r
+    vol = math.sqrt(var)
+    return vol if vol > 0 else None
+
+
+def vol_per_bar_from_closes(closes, mode="window", window=40, lambda_=0.94):
+    """Per-bar vol via 'window' (flat realized std) or 'ewma' (GARCH-style)."""
+    if mode == "ewma":
+        return ewma_vol_per_bar(closes, lambda_=lambda_)
+    return realized_vol_per_bar(closes, window=window)
+
+
 def annualized_from_per_bar(vol_per_bar, bars_per_day=75, trading_days=252):
     return vol_per_bar * math.sqrt(bars_per_day * trading_days)
 

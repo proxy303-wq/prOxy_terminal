@@ -170,10 +170,11 @@ class PaperEngine:
         direction = signal.direction
         # realized volatility from the recent bar history (maximals exits)
         try:
-            from .maximals import annualized_from_per_bar, realized_vol_per_bar
+            from .maximals import annualized_from_per_bar, vol_per_bar_from_closes
             window = int(getattr(self.cfg, "MAXIMALS_VOL_WINDOW", 40))
             closes = [b["close"] for b in self.history[-window:]]
-            _vol_bar = realized_vol_per_bar(closes, window=window)
+            _vol_bar = vol_per_bar_from_closes(
+                closes, mode=getattr(self.cfg, "VOL_MODE", "window"), window=window)
             sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
         except Exception:
             sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)

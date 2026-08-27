@@ -244,10 +244,11 @@ class Backtest:
                 if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and signal is not None and signal.direction in ("BUY", "SELL"):
                     spot = float(bar["close"])
                     try:
-                        from .maximals import annualized_from_per_bar, realized_vol_per_bar
+                        from .maximals import annualized_from_per_bar, vol_per_bar_from_closes
                         _window = int(getattr(self.cfg, "MAXIMALS_VOL_WINDOW", 40))
                         _closes = [b["close"] for b in history[-_window:]]
-                        _vol_bar = realized_vol_per_bar(_closes, window=_window)
+                        _vol_bar = vol_per_bar_from_closes(
+                            _closes, mode=getattr(self.cfg, "VOL_MODE", "window"), window=_window)
                         _sigma = annualized_from_per_bar(_vol_bar) if _vol_bar else getattr(self.cfg, "OPTION_IV_EST", 0.13)
                     except Exception:
                         _sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)

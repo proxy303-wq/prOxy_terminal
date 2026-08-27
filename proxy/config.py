@@ -147,6 +147,12 @@ EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
 # otherwise bleed to the 15:15 time-stop (the -17.7k day)
 MAX_UNARMED_BARS = 4            # 20 minutes: sweep cut worst loss -3.7k -> -1.9k, P&L ~same
 
+# ---- VOLATILITY MODEL for the maximals stops ----
+# "window" = flat realized std over MAXIMALS_VOL_WINDOW bars
+# "ewma"   = RiskMetrics GARCH(1,1) forecast (volatility-clustering aware)
+# A/B 30D: ewma +1.5% P&L, PF 34->45, win 96.2->96.9% -> enabled
+VOL_MODE = "ewma"
+
 # ---- POST-HALT COMEBACK: after the daily halt, allow up to N very high
 # confidence trades to recover, but never let the day sink below the floor.
 # The halt is NOT a winner-filter - this just gives strong signals a shot

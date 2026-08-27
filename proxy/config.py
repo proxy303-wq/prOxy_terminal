@@ -146,6 +146,15 @@ EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
 # 5-min bars, cut it at market - the maximals stop is so wide that losers
 # otherwise bleed to the 15:15 time-stop (the -17.7k day)
 MAX_UNARMED_BARS = 4            # 20 minutes: sweep cut worst loss -3.7k -> -1.9k, P&L ~same
+
+# ---- POST-HALT COMEBACK: after the daily halt, allow up to N very high
+# confidence trades to recover, but never let the day sink below the floor.
+# The halt is NOT a winner-filter - this just gives strong signals a shot
+# while keeping the worst day bounded.
+POST_HALT_COMEBACK = True
+POST_HALT_MAX_TRADES = 2
+POST_HALT_MIN_CONFIDENCE = 90.0
+POST_HALT_HARD_FLOOR = -7500.0   # INR: hard day floor for comeback trades
 MAXIMALS_ALPHA_STOP = 0.20       # tighter SL (20% quantile): 30D A/B cut worst loss -5.2k -> -3.7k
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

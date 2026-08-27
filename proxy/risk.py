@@ -75,7 +75,21 @@ def check_trade_allowed(state, cfg, signal=None, pending_trade=None, live=False)
     if state.get("trading_halted_month"):
         return RiskCheck(False, "monthly loss limit reached (-5%) - trading halted")
     if state.get("trading_halted_day"):
-        return RiskCheck(False, "daily loss limit reached (-1%) - trading halted")
+        # POST-HALT COMEBACK: very high-confidence signals may trade after the
+        # daily halt, capped at POST_HALT_MAX_TRADES and bounded by a hard day
+        # floor (the halt is not a winner-filter, but this keeps the worst day
+        # capped while letting a genuinely strong signal recover some ground)
+        if getattr(cfg, "POST_HALT_COMEBACK", False):
+            conf = float(signal.confidence or 0) if signal is not None else 0.0
+            used = int(state.get("post_halt_trades", 0))
+            pnl = float(state.get("realized_pnl_today", 0.0))
+            floor = float(getattr(cfg, "POST_HALT_HARD_FLOOR", -7500.0))
+            if (conf >= float(getattr(cfg, "POST_HALT_MIN_CONFIDENCE", 90.0))
+                    and used < int(getattr(cfg, "POST_HALT_MAX_TRADES", 2))
+                    and pnl > floor):
+                return RiskCheck(True,
+                                 f"post-halt comeback (conf {conf:.0f}%, day {pnl:+,.0f}, floor {floor:+,.0f})")
+        return RiskCheck(False, "daily loss limit reached - trading halted")
 
     # trade-count cap and the daily-target stop apply to LIVE (real-money)
     # trading only.  PAPER trades freely so the strategy's full behavior is

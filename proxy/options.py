@@ -171,7 +171,7 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
         strike = float(force_strike)
         delta = cfg.OPTION_DELTA_EST
     elif getattr(cfg, "SELECT_BY_DELTA", False):
-        best = select_best_strike(spot, cfg, sigma=sigma, dte=dte)
+        best = select_best_strike(spot, cfg, sigma=sigma, dte=dte, side=opt_type)
         strike = best["strike"]
         delta = abs(best["delta"])
     else:
@@ -458,7 +458,7 @@ def realized_volatility(close_series, window=14, annualize=252):
     return float(_np.std(rets) * _math.sqrt(annualize))
 
 
-def build_option_chain(spot, cfg, sigma=None, dte=None, itm_steps=3, otm_steps=2):
+def build_option_chain(spot, cfg, sigma=None, dte=None, itm_steps=3, otm_steps=2, side="CE"):
     """
     Full ATM/ITM chain for the current spot.
 
@@ -505,22 +505,26 @@ def build_option_chain(spot, cfg, sigma=None, dte=None, itm_steps=3, otm_steps=2
                 "moneyness": moneyness,
             })
 
-    # best long strike: delta inside [min,max], lowest theta% per day,
-    # tie-break by lower premium
+    # best strike for the requested side: delta inside [min,max], lowest
+    # theta% per day, tie-break by lower premium.  IMPORTANT: side matters -
+    # a SELL signal trades a PE, so it must pick from PE rows (ITM puts have
+    # strikes ABOVE the spot); selecting from CE rows made SELL entries pick
+    # far-OTM puts with 30-50 INR premiums (all blocked by the premium gate).
     dmin = getattr(cfg, "OPTION_DELTA_MIN", 0.50)
     dmax = getattr(cfg, "OPTION_DELTA_MAX", 0.80)
-    long_rows = [r for r in rows if r["option_type"] == "CE"
-                 and dmin <= r["delta"] <= dmax]
-    if not long_rows:
-        long_rows = [r for r in rows if r["option_type"] == "CE"]
+    side_rows = [r for r in rows if r["option_type"] == side
+                 and dmin <= abs(r["delta"]) <= dmax]
+    if not side_rows:
+        side_rows = [r for r in rows if r["option_type"] == side]
     # theta is negative (a cost): minimize the DECAY TAX = abs(theta%)
-    best = min(long_rows, key=lambda r: (abs(r["theta_pct_day"]), r["premium"]))
+    best = min(side_rows, key=lambda r: (abs(r["theta_pct_day"]), r["premium"]))
     return {"rows": rows, "best": best, "sigma": sigma, "dte": dte, "atm": atm}
 
 
-def select_best_strike(spot, cfg, sigma=None, dte=None):
-    """Recommended strike for a LONG position (lowest time-decay tax)."""
-    chain = build_option_chain(spot, cfg, sigma=sigma, dte=dte)
+def select_best_strike(spot, cfg, sigma=None, dte=None, side="CE"):
+    """Recommended strike for the requested side (CE or PE), lowest
+    time-decay tax inside the delta band."""
+    chain = build_option_chain(spot, cfg, sigma=sigma, dte=dte, side=side)
     return chain["best"]
 
 

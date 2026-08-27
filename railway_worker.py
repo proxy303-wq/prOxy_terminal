@@ -175,23 +175,39 @@ def run_trading_day(notifier, trade_date):
     try:
         from proxy.dhan_data import fetch_option_chain, fetch_expiries
         from proxy.options import pick_expiry_date
-        # real expiry list + auto-roll to the upcoming expiry when the
-        # current one is expiring (its premium melts below the entry floor)
+        # real expiry list + auto-roll: date-based (within EXPIRY_ROLL_DAYS of
+        # expiry) AND premium-based (ATM premium melted below the entry floor,
+        # which would block every entry - trade the upcoming expiry instead)
         exps = fetch_expiries()
-        if exps:
-            engine.set_expiries(exps)
         trade_expiry = pick_expiry_date(cfg, exps) if exps else None
         chain = fetch_option_chain(underlying_id=13,
                                    expiry=str(trade_expiry) if trade_expiry else None)
         if chain and chain.get("rows"):
-            engine.set_chain(chain)
-            atm = min(chain["rows"], key=lambda r: abs(r["strike"] - chain["spot"]))
-            notifier.log(
-                f"LIVE option chain: {chain['expiry']} expiry, spot {chain['spot']:,.2f}, "
-                f"ATM {atm['strike']:g} {atm['option_type']} LTP {atm['ltp']:.2f} (IV {atm['iv'] * 100:.1f}%) - "
-                f"{len(chain['rows'])} strikes loaded",
-                "INFO",
-            )
+            spot = chain["spot"]
+            atm = min(chain["rows"], key=lambda r: abs(r["strike"] - spot))
+            prem_floor = float(getattr(cfg, "MIN_PREMIUM_ENTRY", 60.0))
+            rolled_for_premium = False
+            if atm["ltp"] < prem_floor and len(exps) > 1:
+                # the current expiry is melting - roll to the upcoming expiry
+                trade_expiry = pick_expiry_date(cfg, exps[1:])
+                chain = fetch_option_chain(underlying_id=13,
+                                           expiry=str(trade_expiry) if trade_expiry else None)
+                rolled_for_premium = True
+            if chain and chain.get("rows"):
+                # engine symbols/dte follow the ROLLED expiry list
+                engine.set_expiries([e for e in exps if not trade_expiry or e >= str(trade_expiry)])
+                engine.set_chain(chain)
+                spot = chain["spot"]
+                atm = min(chain["rows"], key=lambda r: abs(r["strike"] - spot))
+                roll_note = " | ROLLED: current expiry premium melted" if rolled_for_premium else ""
+                notifier.log(
+                    f"LIVE option chain: {chain['expiry']} expiry, spot {chain['spot']:,.2f}, "
+                    f"ATM {atm['strike']:g} {atm['option_type']} LTP {atm['ltp']:.2f} (IV {atm['iv'] * 100:.1f}%) - "
+                    f"{len(chain['rows'])} strikes loaded{roll_note}",
+                    "INFO",
+                )
+            else:
+                notifier.log("LIVE option chain: roll target unavailable - entries use the model premium", "WARN")
         else:
             notifier.log("LIVE option chain: unavailable - entries use the model premium", "WARN")
     except Exception as exc:

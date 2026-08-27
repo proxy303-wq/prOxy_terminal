@@ -1571,6 +1571,8 @@ elif page == "System":
                 else:
                     st.warning("Paste the full token first (starts with eyJ0eXAi...).")
             st.caption("The worker reads this token at each 9:15 session. Paste the fresh 24h token every morning.")
+        except Exception as _tok_exc:
+            st.error(f"Token panel error: {_tok_exc}")
 
     now = datetime.now().astimezone()
 

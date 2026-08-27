@@ -123,6 +123,11 @@ SURESHOT_LOTS_80 = 7         # lots when confidence >= 80 AND trend-aligned
 SURESHOT_ARM_PCT = 0.008     # sureshot lock arms later (+0.8%) so winners run
 SURESHOT_TRAIL_PCT = 0.004   # sureshot floor trails at peak - 0.4%
 SURESHOT_EFF_THRESHOLD = 0.25  # min 20-bar directional efficiency to count as "trendy"
+
+# ---- STRIKE-SHIFT RULE (LIVE): instead of blocking a repeat strike, the
+# next same-direction trade moves 1-2 steps away (CE -> deeper ITM, PE -> deeper ITM)
+STRIKE_SHIFT_STEPS = 2          # strike steps to move per shift
+MAX_STRIKE_SHIFTS = 2           # up to 2 shifts (max 4 steps away) before blocking
 MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

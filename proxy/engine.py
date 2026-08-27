@@ -178,6 +178,28 @@ class PaperEngine:
             leg = select_leg(direction, spot, self.cfg, sigma=chain_sigma,
                              premium=chain_prem)
             sigma = chain_sigma
+        # ---- STRIKE-SHIFT RULE (LIVE): a same-direction re-entry moves 1-2
+        # steps away from an already-traded strike instead of repeating it ----
+        strike_shift = 0
+        if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True) and getattr(self.broker, "live", False):
+            day_strikes = self._strike_trades.setdefault(str(self.trade_date), {})
+            max_per = int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1))
+            max_shift = int(getattr(self.cfg, "MAX_STRIKE_SHIFTS", 2))
+            shift_step = int(getattr(self.cfg, "STRIKE_SHIFT_STEPS", 2))
+            while day_strikes.get(leg.strike, 0) >= max_per and strike_shift < max_shift:
+                strike_shift += 1
+                # deeper ITM in the same direction: CE -> lower strike, PE -> higher
+                if leg.option_type == "CE":
+                    leg.strike = float(leg.strike - shift_step * strike_shift)
+                else:
+                    leg.strike = float(leg.strike + shift_step * strike_shift)
+            if strike_shift:
+                prem2, sig2, _b2 = self._chain_premium(leg.strike, leg.option_type, sigma)
+                leg = select_leg(direction, spot, self.cfg,
+                                 sigma=sig2 if prem2 is not None else sigma,
+                                 premium=prem2, force_strike=leg.strike)
+                if prem2 is not None:
+                    chain_basis += f" | strike shifted {strike_shift}x toward ITM"
         # ---- SURESHOT: scale up on high-confidence, trend-aligned signals ----
         from .options import directional_efficiency, sureshot_lots
         _closes = [b["close"] for b in self.history[-20:]]
@@ -250,6 +272,7 @@ class PaperEngine:
             "rr": getattr(leg, "rr", 0.0),
             "p_target_reach": getattr(leg, "p_target_reach", 0.0),
             "chain_premium": chain_prem,
+            "strike_shift": strike_shift,
             "sureshot": _sureshot,
             "lock_arm_pct": float(getattr(self.cfg, "SURESHOT_ARM_PCT", 0.008)) if _sureshot else None,
             "lock_trail_step_pct": float(getattr(self.cfg, "SURESHOT_TRAIL_PCT", 0.004)) if _sureshot else None,

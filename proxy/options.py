@@ -155,15 +155,22 @@ def recommend_lots(cfg, premium=None, risk_budget=None, capital=None):
     }
 
 
-def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=None):
+def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=None,
+             force_strike=None):
     """
     Build the option leg for a signal.
 
     direction: "BUY" (CE) | "SELL" (PE)
+    force_strike: optional - use exactly this strike (for the strike-shift
+                  rule: the next same-direction trade moves 1-2 steps away
+                  from an already-traded strike instead of repeating it).
     Returns an OptionLeg.
     """
     opt_type = "CE" if direction == "BUY" else "PE"
-    if getattr(cfg, "SELECT_BY_DELTA", False):
+    if force_strike is not None:
+        strike = float(force_strike)
+        delta = cfg.OPTION_DELTA_EST
+    elif getattr(cfg, "SELECT_BY_DELTA", False):
         best = select_best_strike(spot, cfg, sigma=sigma, dte=dte)
         strike = best["strike"]
         delta = abs(best["delta"])

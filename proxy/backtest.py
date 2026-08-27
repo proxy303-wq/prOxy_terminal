@@ -275,6 +275,21 @@ class Backtest:
                         # BUY signal -> short a PE, SELL signal -> short a CE
                         leg.option_type = "PE" if signal.direction == "BUY" else "CE"
                         leg.instrument = leg.instrument.rsplit(" ", 1)[0] + " " + leg.option_type
+                    # STRIKE-SHIFT RULE: a same-direction re-entry moves 1-2
+                    # steps away from an already-traded strike (CE -> lower ITM,
+                    # PE -> higher ITM) instead of repeating the strike
+                    _shift = 0
+                    _max_shift = int(getattr(leg_cfg, "MAX_STRIKE_SHIFTS", 2))
+                    _shift_step = int(getattr(leg_cfg, "STRIKE_SHIFT_STEPS", 2))
+                    while strikes_today.get(leg.strike, 0) >= int(getattr(leg_cfg, "MAX_TRADES_PER_STRIKE", 1)) and _shift < _max_shift:
+                        _shift += 1
+                        if leg.option_type == "CE":
+                            leg.strike = float(leg.strike - _shift_step * _shift)
+                        else:
+                            leg.strike = float(leg.strike + _shift_step * _shift)
+                    if _shift:
+                        leg = select_leg(signal.direction, spot, leg_cfg, sigma=_sigma,
+                                         premium=leg.premium, force_strike=leg.strike)
                     budget = risk_budget(self.state, self.cfg)
                     stop_unit = leg.stop_per_unit
                     # SURESHOT: scale up on high-confidence, trend-aligned signals
@@ -321,6 +336,7 @@ class Backtest:
                         "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
                         "regime": regime,
                         "lock_enabled": regime != "flat",
+                        "strike_shift": _shift,
                         "sureshot": _sureshot,
                         "lock_arm_pct": float(getattr(leg_cfg, "SURESHOT_ARM_PCT", 0.008)) if _sureshot else None,
                         "lock_trail_step_pct": float(getattr(leg_cfg, "SURESHOT_TRAIL_PCT", 0.004)) if _sureshot else None,

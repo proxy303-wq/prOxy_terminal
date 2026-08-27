@@ -270,10 +270,17 @@ class Backtest:
                             leg_cfg.LOCK_PROFIT_ENABLED = False
                     leg = select_leg(signal.direction, spot, leg_cfg, sigma=_sigma)
                     short_options = bool(getattr(leg_cfg, "SHORT_OPTIONS", False))
+                    sell_long_pe = bool(getattr(leg_cfg, "SELL_LONG_PE", False))
                     if short_options:
                         # SELL the option instead of buying it (collect premium):
                         # BUY signal -> short a PE, SELL signal -> short a CE
                         leg.option_type = "PE" if signal.direction == "BUY" else "CE"
+                        leg.instrument = leg.instrument.rsplit(" ", 1)[0] + " " + leg.option_type
+                    elif sell_long_pe:
+                        # FIX for the inverted SELL leg: a bearish signal should
+                        # BUY the PE (long put), not SHORT it (current code shorts
+                        # the put, which profits when the index RISES)
+                        leg.option_type = "PE"
                         leg.instrument = leg.instrument.rsplit(" ", 1)[0] + " " + leg.option_type
                     # STRIKE-SHIFT RULE: a same-direction re-entry moves 1-2
                     # steps away from an already-traded strike (CE -> lower ITM,
@@ -309,7 +316,7 @@ class Backtest:
                     else:
                         lots, qty, actual_risk = position_size(budget, leg.premium, leg.premium - stop_unit, self.cfg)
                         lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
-                    is_long = (signal.direction == "BUY") and not short_options
+                    is_long = (signal.direction == "BUY") and not short_options or (sell_long_pe and signal.direction == "SELL")
                     stop_p = leg.premium - stop_unit if is_long else leg.premium + stop_unit
                     target_p = leg.premium + leg.target_per_unit if is_long else leg.premium - leg.target_per_unit
                     sl_per_lot = leg.risk_per_lot  # SL for ONE lot (INR) = premium * STOP_LOSS_PCT * LOT_SIZE (precise)
@@ -347,6 +354,11 @@ class Backtest:
                         plan.update(features_from_signal(signal, frame, self.cfg))
                     except Exception:
                         pass
+                    # LOW-PREMIUM GUARD: %-based exit model breaks on tiny premiums
+                    min_prem = float(getattr(leg_cfg, "MIN_PREMIUM_ENTRY", 60.0))
+                    if plan.get("entry_premium", 0) < min_prem:
+                        gate = RiskCheck(False,
+                                         f"premium {plan.get('entry_premium', 0):.2f} too low (< {min_prem:.0f})")
                     # strike-once rule: never average the SAME strike twice a day
                     if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
                         if strikes_today.get(plan["strike"], 0) >= int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1)):

@@ -510,6 +510,12 @@ class PaperEngine:
                                     self.notify(f"GATE  META {m['meta_prob']:.0f}% below {getattr(self.cfg, 'META_MIN_PROB', 60.0):.0f}% - {signal.direction} blocked")
                         except Exception:
                             pass
+                    # LOW-PREMIUM GUARD: the %-based exit model breaks when the
+                    # premium is too small (stop inside the spread / below zero)
+                    min_prem = float(getattr(self.cfg, "MIN_PREMIUM_ENTRY", 60.0))
+                    if gate.allowed and plan.get("entry_premium", 0) < min_prem:
+                        gate = RiskCheck(False,
+                                         f"premium {plan.get('entry_premium', 0):.2f} too low (< {min_prem:.0f}) for the exit model")
                     if gate.allowed and ml_ok:
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.

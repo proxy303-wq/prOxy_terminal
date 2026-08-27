@@ -128,6 +128,13 @@ SURESHOT_EFF_THRESHOLD = 0.25  # min 20-bar directional efficiency to count as "
 # next same-direction trade moves 1-2 steps away (CE -> deeper ITM, PE -> deeper ITM)
 STRIKE_SHIFT_STEPS = 2          # strike steps to move per shift
 MAX_STRIKE_SHIFTS = 2           # up to 2 shifts (max 4 steps away) before blocking
+
+# ---- LOW-PREMIUM GUARDS: the %-based SL breaks when the premium is small
+# (a 40-pt maximals stop on a 40-INR premium is a stop below zero, and the
+# target can sit inside the bid-ask spread).  These keep the exit model sane.
+MIN_PREMIUM_ENTRY = 60.0       # skip entries with premium below this
+MAX_STOP_FRACTION = 0.65       # stop can never exceed 65% of the premium
+MIN_TARGET_PTS = 1.0           # target never tighter than 1 premium point
 MAXIMALS_ALPHA_STOP = 0.10       # only 10% chance a pure-noise move hits the SL
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

@@ -230,6 +230,20 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
         rr = cfg.PROFIT_TARGET_PCT / cfg.STOP_LOSS_PCT if cfg.STOP_LOSS_PCT > 0 else 0.0
         sl_basis = f"flat {cfg.STOP_LOSS_PCT * 100:.1f}% / {cfg.PROFIT_TARGET_PCT * 100:.1f}%"
 
+    # ---- LOW-PREMIUM GUARDS: the SL must FIT inside the premium and the
+    # target must stay above the spread, or the exit model breaks (a maximals
+    # stop in points can exceed the premium itself on cheap strikes) ----
+    max_stop = premium * float(getattr(cfg, "MAX_STOP_FRACTION", 0.65))
+    if stop_per_unit > max_stop:
+        stop_per_unit = max_stop
+        rr = target_per_unit / stop_per_unit if stop_per_unit > 0 else 0.0
+    min_target = float(getattr(cfg, "MIN_TARGET_PTS", 1.0))
+    if target_per_unit < min_target:
+        target_per_unit = min_target
+        rr = target_per_unit / stop_per_unit if stop_per_unit > 0 else 0.0
+    if target_per_unit > premium * 0.5:
+        target_per_unit = premium * 0.5
+
     # Dhan-style instrument symbol: "NIFTY 27AUG 25600 CE" (or BANKNIFTY
     # when cfg.OPTION_SYMBOL is overridden - the engine/backtest are index
     # agnostic and the same strategy runs on either underlying)

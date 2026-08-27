@@ -1,5 +1,0 @@
-﻿=== 30D: SL efficiency (sureshot OFF, 5 lots) ===
-A maximals+lock (no time stop): trades 154 | win 98.7% | P&L +202,162 | PF 31.25 | WORST -5,210 | timeStops 0
-B + unarmed time-stop 12 bars (60m): trades 154 | win 98.7% | P&L +202,162 | PF 31.25 | WORST -5,210 | timeStops 0
-C + unarmed time-stop 8 bars (40m): trades 155 | win 98.1% | P&L +200,084 | PF 26.43 | WORST -5,210 | timeStops 1
-D + time-stop 12 + tighter alpha 0.20: trades 154 | win 98.7% | P&L +203,626 | PF 40.02 | WORST -3,746 | timeStops 0

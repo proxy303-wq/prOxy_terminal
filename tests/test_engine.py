@@ -151,13 +151,28 @@ class TestRealPremiumExits(unittest.TestCase):
         self.assertEqual(plan["premium_source"], "real_option_bar")
 
     def test_model_fallback_without_real_bar(self):
-        """No real option bar -> the delta-premium model decides (backtest /
-        replay / feed not yet delivering the option)."""
+        """REAL-PRICE ONLY (default): no real option bar -> NO exit decision
+        (no stop/target on a simulated premium), source = real_unavailable."""
         plan = _plan_like()
         price, reason = self._check(plan, real_bar=None)
         self.assertIsNone(price)
         self.assertIsNone(reason)
-        self.assertEqual(plan["premium_source"], "delta_model")
+        self.assertEqual(plan["premium_source"], "real_unavailable")
+
+    def test_model_exits_when_explicitly_enabled(self):
+        """The delta-model exit path still exists behind the flag (used only
+        if someone opts back in)."""
+        import proxy.config as _mcfg
+        _old = _mcfg.MODEL_PRICING_ENABLED
+        _mcfg.MODEL_PRICING_ENABLED = True
+        try:
+            plan = _plan_like()
+            price, reason = self._check(plan, real_bar=None)
+            self.assertIsNone(price)
+            self.assertIsNone(reason)
+            self.assertEqual(plan["premium_source"], "delta_model")
+        finally:
+            _mcfg.MODEL_PRICING_ENABLED = _old
 
     def test_security_id_captured_from_chain(self):
         """The plan carries the traded option's Dhan security_id (from the

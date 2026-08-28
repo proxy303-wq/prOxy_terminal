@@ -38,6 +38,14 @@ MAX_POSITIONS      = 1          # concurrent trades (spec allows 1-2; start at 1
 # call, SELL signals buy a PUT (long put) - both are BUY orders.  Exits
 # still SELL to close what was bought.
 LONG_ONLY = True
+# ---- REAL-PRICE ONLY (no model trading) ----
+# The delta-premium model (premium_move_pct) is FICTION - it overstates
+# (08-28: model +5,694 vs real -5,013) and was the root of the phantom
+# profits.  With MODEL_PRICING_ENABLED = False the engine trades ONLY on
+# REAL option premiums: entries need a real chain LTP for the strike,
+# exits need the real option bar (no stop/target on a simulated price),
+# and PAPER trading faces the real market exactly like real money.
+MODEL_PRICING_ENABLED = False
 MAX_TRADES_PER_DAY = 10         # ceiling; the strike gate still keeps it to quality trades
 LOSS_COOLDOWN_BARS = 6          # wait N bars (30 min) after a stop-out before re-entering (0 = off)
 

@@ -173,6 +173,10 @@ def main():
     # dedupe by time
     seen = set()
     all_1m = [b for b in all_1m if not (b["time"] in seen or seen.add(b["time"]))]
+    if not getattr(cfg, "MODEL_PRICING_ENABLED", True):
+        print("WARNING: MODEL_PRICING_ENABLED=False - this backtest has no real option "
+              "bars, so it will produce 0 trades (paper faces real markets only). "
+              "Use tools/replay_real_premium.py for real-premium validation.", flush=True)
     all_5m = build_5m_live(all_1m)
     days = sorted({b["time"].date() for b in all_5m})
     print(f"REAL 1-min candles: {len(all_1m)} | 5-min bars built live-style: {len(all_5m)} | days: {len(days)}", flush=True)

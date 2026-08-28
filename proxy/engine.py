@@ -527,6 +527,21 @@ class PaperEngine:
             prem_now = float(real_bar["close"])
             t["premium_source"] = "real_option_bar"
         else:
+            if not getattr(self.cfg, "MODEL_PRICING_ENABLED", True):
+                # REAL-PRICE ONLY: no exit decision on a simulated premium.
+                # Without a real option bar the engine acts only on the
+                # underlying (reverse signal) and the clock (time stop) -
+                # priced at the last REAL close it saw, never a model.
+                t["premium_source"] = "real_unavailable"
+                _last = t.get("last_real_close")
+                if self._bar_time(bar) >= FORCE_EXIT_TIME and _last:
+                    return float(_last), "TIME_STOP (15:15)"
+                if (signal is not None and signal.direction != "WAIT" and _last):
+                    want_long = (t["direction"] == "LONG")
+                    signal_bull = (signal.direction == "BUY")
+                    if signal_bull != want_long and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
+                        return float(_last), "REVERSE_SIGNAL"
+                return None, None
             t["premium_source"] = "delta_model"
             pct_h = (bar["high"] - entry_spot) / entry_spot if entry_spot else 0.0
             pct_l = (bar["low"] - entry_spot) / entry_spot if entry_spot else 0.0
@@ -768,6 +783,8 @@ class PaperEngine:
                 except Exception:
                     real_bar = None
             self.active_trade["real_option_bar"] = real_bar
+            if real_bar and float(real_bar.get("close") or 0) > 0:
+                self.active_trade["last_real_close"] = float(real_bar["close"])
             exit_price, exit_reason = self._check_exits(bar, signal, spot, real_bar=real_bar)
             if exit_price is not None:
                 rec = self._close(exit_price, exit_reason, bar)
@@ -783,10 +800,13 @@ class PaperEngine:
                 if rb and float(rb.get("close") or 0) > 0:
                     # real premium: mark-to-market at the actual option LTP
                     prem_now = float(rb["close"])
-                else:
+                elif getattr(self.cfg, "MODEL_PRICING_ENABLED", True) or not t.get("last_real_close"):
                     is_ce = t["option_type"] == "CE"
                     pct = (spot - t["entry_spot"]) / t["entry_spot"]
                     prem_now = t["entry_premium"] * (1.0 + premium_move_pct(pct, t["entry_spot"], t["entry_premium"], self.cfg.OPTION_DELTA_EST) * (1 if is_ce else -1))
+                else:
+                    # real-only mode: use the last REAL close seen, never a model
+                    prem_now = float(t["last_real_close"])
                 t["unrealized_pnl"] = round((prem_now - t["entry_premium"]) * t["quantity"] * (1 if t["direction"] == "LONG" else -1), 2)
 
         # 2) fresh entry
@@ -849,6 +869,13 @@ class PaperEngine:
                         _qok, _qwhy = self._chain_entry_quality(plan)
                         if not _qok:
                             gate = RiskCheck(False, f"chain quality: {_qwhy}")
+                    # REAL-PRICE ONLY: no model-priced entries - the chosen
+                    # strike must have a real chain LTP (paper faces the real
+                    # market exactly like live money)
+                    if gate.allowed and not getattr(self.cfg, "MODEL_PRICING_ENABLED", True) \
+                            and plan.get("chain_premium") is None:
+                        gate = RiskCheck(False,
+                                         "no real chain premium for this strike - model pricing disabled")
                     if gate.allowed and ml_ok:
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.
@@ -937,13 +964,20 @@ class PaperEngine:
             if rb and float(rb.get("close") or 0) > 0:
                 # real premium: force-close at the actual option LTP
                 prem_now = float(rb["close"])
-            else:
+            elif t.get("last_real_close"):
+                prem_now = float(t["last_real_close"])
+            elif getattr(cfg, "MODEL_PRICING_ENABLED", True):
                 pct_now = (float(bar["close"]) - t["entry_spot"]) / t["entry_spot"] if t["entry_spot"] else 0.0
                 move = premium_move_pct(pct_now, t["entry_spot"], t["entry_premium"], self.cfg.OPTION_DELTA_EST)
                 if t["option_type"] == "CE":
                     prem_now = t["entry_premium"] * (1.0 + move)
                 else:
                     prem_now = t["entry_premium"] * (1.0 - move)
+            else:
+                # real-only mode with no real price at day end: the LIVE market
+                # order still gets the real fill; book at entry as a placeholder
+                self.notify("DAY END: no real option price available - the live fill is the real price", "WARN")
+                prem_now = float(t.get("entry_premium") or 0)
             rec = self._close(prem_now, "DAY_END", bar)
             if rec is None:
                 self.notify(

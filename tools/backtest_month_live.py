@@ -136,8 +136,22 @@ def main():
     ap.add_argument("--expiry", default=None,
                     help="force the option expiry (YYYY-MM-DD) for the whole range, "
                          "e.g. --expiry 2026-09-01 = first September expiry")
+    ap.add_argument("--cfg", action="append", default=None,
+                    help="override config flags for A/B, e.g. --cfg ML_CONFIRM=True")
     args = ap.parse_args()
     cfg.CAPITAL = args.capital
+    for _kv in (args.cfg or []):
+        for _one in _kv.split():
+            if "=" in _one:
+                _k, _v = _one.split("=", 1)
+                if _v.strip().lower() in ("true", "false"):
+                    setattr(cfg, _k.strip(), _v.strip().lower() == "true")
+                else:
+                    try:
+                        setattr(cfg, _k.strip(), float(_v.strip()))
+                    except ValueError:
+                        setattr(cfg, _k.strip(), _v.strip())
+                print(f"cfg override: {_k.strip()} = {getattr(cfg, _k.strip())}", flush=True)
 
     load_athena_env()
     start = date_cls.fromisoformat(args.start)
@@ -177,6 +191,24 @@ def main():
                      "pnl": round(pnl, 2), "equity": s.get("equity", 0),
                      "win_rate": s.get("win_rate", 0)})
         print(f"{day} | trades {s.get('trades_today',0):>2} | P&L {pnl:+,.2f} | equity {s.get('equity',0):,.0f}", flush=True)
+    # expectancy stats from the actual trade records (real August data)
+    try:
+        import sqlite3 as _sq
+        _conn = _sq.connect(tf.name)
+        _t = _conn.execute(
+            "SELECT pnl FROM trades WHERE entry_time LIKE '2026-08%'").fetchall()
+        _conn.close()
+        _pnls = [float(r[0] or 0) for r in _t]
+        _wins = [p for p in _pnls if p > 0]
+        _losses = [p for p in _pnls if p <= 0]
+        _win_r = len(_wins) / len(_pnls) if _pnls else 0.0
+        _avg_win = sum(_wins) / len(_wins) if _wins else 0.0
+        _avg_loss = sum(_losses) / len(_losses) if _losses else 0.0
+        _er = _avg_win * _win_r - abs(_avg_loss) * (1 - _win_r) if _pnls else 0.0
+        print(f"trades: {len(_pnls)} | win rate: {_win_r*100:.1f}% | avg win: {_avg_win:+,.0f} | "
+              f"avg loss: {_avg_loss:+,.0f} | EXPECTANCY/trade: {_er:+,.2f} INR", flush=True)
+    except Exception as _e:
+        print(f"expectancy stats unavailable: {_e}", flush=True)
     try:
         os.remove(tf.name)
     except OSError:

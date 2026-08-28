@@ -9,10 +9,15 @@ echo "== git pull =="
 git pull --ff-only origin main
 
 # reinstall deps only if requirements.txt changed
-if git diff --quiet HEAD@{1} HEAD -- requirements.txt; then
-  echo "== requirements unchanged, skipping pip =="
+if git rev-parse HEAD@{1} >/dev/null 2>&1; then
+  if git diff --quiet HEAD@{1} HEAD -- requirements.txt; then
+    echo "== requirements unchanged, skipping pip =="
+  else
+    echo "== requirements changed, reinstalling =="
+    /opt/proxy/venv/bin/pip install -r requirements.txt --quiet
+  fi
 else
-  echo "== requirements changed, reinstalling =="
+  echo "== first deploy, ensuring deps =="
   /opt/proxy/venv/bin/pip install -r requirements.txt --quiet
 fi
 

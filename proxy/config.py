@@ -263,7 +263,7 @@ MIN_SETUP_STRENGTH   = 55.0    # price-action setup strength floor (0-100)
 # time-series direction.  ML_ENABLED logs an advisory opinion on every
 # signal; ML_CONFIRM=True turns it into a gate (trade only when the model
 # agrees).  Train with:  python run_terminal.py ml-train
-ML_ENABLED = True
+ML_ENABLED = os.environ.get("PROXY_ML_ENABLED", "true").lower() != "false"   # skip via env on low-RAM boxes
 ML_MODEL = "lstm"               # "lstm" | "xgboost"
 ML_CONFIRM = False              # advisory by default
 ML_MIN_PROB = 55.0              # minimum agreed probability for the gate

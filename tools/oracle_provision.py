@@ -15,13 +15,30 @@ from oci.core.models import UpdateRouteTableDetails as URT
 
 CFG = from_file(r"C:\Users\tgowd\.oci\config")
 TEN = CFG["tenancy"]
-REGION = CFG["region"]
+REGION = os.environ.get("ORACLE_REGION", CFG["region"])
+CFG["region"] = REGION
 print("region:", REGION, flush=True)
 
 vcn_c = VirtualNetworkClient(CFG)
 comp_c = ComputeClient(CFG)
 bs_c = BlockstorageClient(CFG)
-id_c = IdentityClient(CFG)
+import copy
+HOME_REGION = os.environ.get("ORACLE_HOME_REGION", "ap-hyderabad-1")
+_HOME_CFG = copy.deepcopy(CFG)
+_HOME_CFG["region"] = HOME_REGION
+id_c = IdentityClient(_HOME_CFG)   # IAM is a GLOBAL service - home region only
+try:
+    from oci.identity.models import CreateRegionSubscriptionDetails
+    subs = id_c.list_region_subscriptions(TEN).data
+    if not any(s.region_name == REGION for s in subs):
+        id_c.create_region_subscription(TEN, CreateRegionSubscriptionDetails(
+            region_key=REGION.split("-")[1].upper()))
+        print("subscribed region:", REGION, flush=True)
+        time.sleep(30)   # region takes a moment to become usable
+    else:
+        print("region already subscribed:", REGION, flush=True)
+except Exception as e:
+    print("region subscribe skipped:", str(e)[:150], flush=True)
 
 # 1) availability domain
 ads = id_c.list_availability_domains(TEN).data
@@ -84,7 +101,8 @@ print("IMAGE:", img.display_name, flush=True)
 #    for TF + worker + streamlit)
 with open(r"C:\PrOxyTradingTerminal\.oracle\proxy_ed25519.pub") as fh:
     pubkey = fh.read().strip()
-SHAPES = [(4, 24), (2, 12), (1, 6)]
+# smallest first: 1 OCPU/6GB has the best odds when capacity is scarce
+SHAPES = [(1, 6), (2, 12), (4, 24)]
 inst = None
 import oci
 for ocpus, mem in SHAPES:

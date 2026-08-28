@@ -18,5 +18,6 @@ jobs:
           host: 103.86.177.195
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          fingerprint: SHA256:TRE/hIUwQNvoMdlVhxEH6TyVsl3NJlpoXP99uXWSAQA
           script: |
             bash /opt/proxy/deploy/deploy.sh

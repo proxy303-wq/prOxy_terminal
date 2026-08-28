@@ -222,13 +222,37 @@ def generate_signal(df, cfg):
         return any(p.get("bullish") is False and p.get("bar", 0) == 0 and p["strength"] >= 50.0
                    for p in patterns.values())
 
+    # ---- DUAL-TIMEFRAME MOMENTUM GATE (Miner Ch.2 Table 2.1) ----
+    # The higher timeframe momentum must AGREE with the signal direction,
+    # and must not be overbought/oversold (exhaustion).  Long-only variant:
+    #   BUY (call)  needs HTF RSI in (50, 70)
+    #   SELL (put)  needs HTF RSI in (30, 50)
+    momentum_ok = True
+    if getattr(cfg, "MOMENTUM_FILTER_ENABLED", False):
+        try:
+            _htf_bars = max(1, int(getattr(cfg, "HTF_MOMENTUM_BARS", 3)))
+            _htf_period = max(2, int(getattr(cfg, "HTF_MOMENTUM_RSI_PERIOD", 14)))
+            _closes = [float(x) for x in df["close"].tail(_htf_bars * (_htf_period + 4))]
+            # aggregate 5m closes into HTF closes (last close of each group)
+            _htf = [_closes[i] for i in range(_htf_bars - 1, len(_closes), _htf_bars)]
+            if len(_htf) > _htf_period + 2:
+                _rsi_htf = float(_rsi(pd.Series(_htf), _htf_period).iloc[-1])
+                _ob = float(getattr(cfg, "HTF_RSI_OB", 70.0))
+                _os = float(getattr(cfg, "HTF_RSI_OS", 30.0))
+                if direction_out == "BUY":
+                    momentum_ok = 50.0 < _rsi_htf < _ob
+                elif direction_out == "SELL":
+                    momentum_ok = _os < _rsi_htf < 50.0
+        except Exception:
+            momentum_ok = True
+
     direction_out = direction
     if direction_out == "BUY":
-        if not (_bullish_pa() and confidence >= cfg.MIN_CONFIDENCE_PCT and rsi_val > rsi_bull_gate and trend_ok):
+        if not (_bullish_pa() and confidence >= cfg.MIN_CONFIDENCE_PCT and rsi_val > rsi_bull_gate and trend_ok and momentum_ok):
             direction_out = "WAIT"
             reason_bits.append(f"gate: need bullish PA + RSI>{rsi_bull_gate:.0f} + conf>=70% + trend")
     elif direction_out == "SELL":
-        if not (_bearish_pa() and confidence >= cfg.MIN_CONFIDENCE_PCT and rsi_val < rsi_bear_gate and trend_ok):
+        if not (_bearish_pa() and confidence >= cfg.MIN_CONFIDENCE_PCT and rsi_val < rsi_bear_gate and trend_ok and momentum_ok):
             direction_out = "WAIT"
             reason_bits.append(f"gate: need bearish PA + RSI<{rsi_bear_gate:.0f} + conf>=70% + trend")
 

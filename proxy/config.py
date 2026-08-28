@@ -53,6 +53,23 @@ MAX_TRADES_PER_STRIKE = 2       # allow ONE re-entry on the same strike (trendin
 RSI_ENTRY_GATE_BULL = 50.0
 RSI_ENTRY_GATE_BEAR = 50.0
 
+# ---- DUAL-TIMEFRAME MOMENTUM GATE (from Robert Miner, "High Probability
+# Trading Strategies", Ch.2 - Table 2.1) ----
+# The HIGHER timeframe momentum sets the trade direction; the smaller
+# timeframe's momentum reversal (the existing 5m setup) times the entry.
+#   HTF Bull & not OB  -> only LONG (call) setups allowed
+#   HTF Bull & OB      -> NO new longs (upside exhausted)
+#   HTF Bear & not OS  -> only bearish-direction trades (long PUTs)
+#   HTF Bear & OS      -> no new bearish-direction trades
+# HTF momentum = RSI on closes aggregated by HTF_MOMENTUM_BARS (3x5m=15m).
+# OFF by default until validated against the real-premium baseline
+# (tools/replay_real_premium.py).
+MOMENTUM_FILTER_ENABLED = False
+HTF_MOMENTUM_BARS = 3          # 5m bars per HTF bar (3 = 15m)
+HTF_MOMENTUM_RSI_PERIOD = 14   # RSI period on the aggregated HTF closes
+HTF_RSI_OB = 70.0              # HTF overbought (no new longs)
+HTF_RSI_OS = 30.0              # HTF oversold (no new shorts/long-puts)
+
 # Trend-strength gate: BUY/SELL only when ADX >= MIN_TREND_ADX (0 = off).
 # The 5/10/20 moving averages already lean this way; ADX adds persistence.
 MIN_TREND_ADX = 0.0

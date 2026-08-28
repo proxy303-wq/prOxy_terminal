@@ -209,6 +209,29 @@ def _run_once(bars, warmup, option_bars=None, chain=None):
                     sid = _resolve_instrument_sid(ev["entered"].get("instrument") or "")
                 if sid:
                     engine.active_trade["security_id"] = int(sid)
+            # ANCHOR THE ENTRY to the REAL option premium at the entry bar:
+            # a model-priced entry against real exits is garbage (the paper
+            # fiction).  Scale stop/target distances so %-risk is preserved.
+            if option_bars and engine.active_trade.get("security_id"):
+                try:
+                    t = engine.active_trade
+                    key = (str(t["security_id"]), _bucket_min(b["time"]))
+                    rbar = option_bars.get(key)
+                    if rbar and float(rbar.get("close") or 0) > 0 and float(t.get("entry_premium") or 0) > 0:
+                        old_e = float(t["entry_premium"])
+                        new_e = float(rbar["close"])
+                        scale = new_e / old_e
+                        stop_unit = abs(float(t.get("stop_premium") or 0) - old_e)
+                        target_unit = abs(float(t.get("target_premium") or 0) - old_e)
+                        t["entry_premium"] = round(new_e, 2)
+                        if t["direction"] == "LONG":
+                            t["stop_premium"] = round(new_e - stop_unit * scale, 2)
+                            t["target_premium"] = round(new_e + target_unit * scale, 2)
+                        else:
+                            t["stop_premium"] = round(new_e + stop_unit * scale, 2)
+                            t["target_premium"] = round(new_e - target_unit * scale, 2)
+                except Exception:
+                    pass
     summary = engine.finish_day(last) if last is not None else None
     trades = tracker.get_trades()
     # keep only trades from the replayed day
@@ -227,7 +250,20 @@ def main():
     ap = argparse.ArgumentParser(description="A/B replay: model exits vs real option-premium exits")
     ap.add_argument("--date", required=True, help="trading day YYYY-MM-DD")
     ap.add_argument("--csv", default=None, help="recorded option-LTP CSV (default reports/option_ltp_<date>.csv)")
+    ap.add_argument("--cfg", action="append", default=None,
+                    help="override a config flag, e.g. --cfg MOMENTUM_FILTER_ENABLED=True (A/B validation)")
     args = ap.parse_args()
+    for kv in (args.cfg or []):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            if v.strip().lower() in ("true", "false"):
+                setattr(cfg, k.strip(), v.strip().lower() == "true")
+            else:
+                try:
+                    setattr(cfg, k.strip(), float(v.strip()))
+                except ValueError:
+                    setattr(cfg, k.strip(), v.strip())
+            print(f"cfg override: {k.strip()} = {getattr(cfg, k.strip())}", flush=True)
     target = date_cls.fromisoformat(args.date)
     csv_path = args.csv or os.path.join(cfg.REPORT_DIR, f"option_ltp_{args.date}.csv")
 

@@ -66,9 +66,12 @@ def resolve_sid(symbol, df, chain_map=None):
     Fallback: the broker's master-CSV logic (strike + type + name; any
     expiry when the exact expiry is missing)."""
     parts = symbol.upper().split()
-    if len(parts) < 4:
+    if len(parts) < 3:
         return None, None
-    name, strike_str, otype = parts[0], parts[2].replace(",", ""), parts[3]
+    # "NIFTY 25450 CE" (3-part, no expiry) or "NIFTY 27AUG 25450 CE" (4-part)
+    name = parts[0]
+    strike_str = parts[-2].replace(",", "")
+    otype = parts[-1]
     strike = float(strike_str)
     if chain_map:
         sid = chain_map.get((round(strike, 2), otype))
@@ -115,10 +118,33 @@ def fetch_option_bars(sid, day):
     return bars
 
 
+def symbols_from_band(day):
+    """All ATM/ITM strikes around the day's spot range (CE and PE), using
+    master-CSV resolution - the strikes the engine's delta-band selection
+    can actually trade, so replays find their real bars."""
+    from proxy.dhan_data import fetch_intraday_last_days
+    import pandas as _pd
+    df = fetch_intraday_last_days(days=5, end=_pd.Timestamp(day).date())
+    if df is None or df.empty:
+        return []
+    lo = float(df["low"].min())
+    hi = float(df["high"].max())
+    step = 50.0
+    lo_s = int(lo // step) * step
+    hi_s = int(hi // step) * step + step
+    syms = []
+    s = lo_s
+    while s <= hi_s:
+        syms.append(f"NIFTY {s:g} CE")
+        syms.append(f"NIFTY {s:g} PE")
+        s += step
+    return syms
+
+
 def symbols_from_log(log_path):
     """Pull unique option symbols from a day's ENTRY log lines."""
     out = []
-    pat = re.compile(r"ENTRY (NIFTY [\w]+ \d+(?:,\d+)? [CP]E)")
+    pat = re.compile(r"ENTRY (NIFTY (?:\w+ )?\d+(?:,\d+)? [CP]E)")
     with open(log_path, "r", encoding="utf-8") as fh:
         for line in fh:
             m = pat.search(line)
@@ -132,20 +158,30 @@ def main():
     ap.add_argument("--date", required=True, help="trading day YYYY-MM-DD")
     ap.add_argument("--symbols", nargs="*", default=None)
     ap.add_argument("--from-log", default=None)
+    ap.add_argument("--band", action="store_true",
+                    help="fetch the full ATM/ITM strike band around the day's spot")
     args = ap.parse_args()
 
     load_athena_env()
     symbols = list(args.symbols or [])
     if args.from_log:
         symbols += symbols_from_log(args.from_log)
+    if args.band:
+        symbols = sorted(set(symbols + symbols_from_band(args.date)))
     if not symbols:
         print("No symbols - pass --symbols or --from-log")
         return 1
 
     df = _master_df()
-    chain_map = _chain_sid_map()
+    # TODAY: the live chain matches the engine's plans (01SEP series).
+    # PAST days: use the master-CSV fallback (the first series for each
+    # strike/type - exactly what the broker would fill and what the replay
+    # resolves), so the recorded bars and the replay use the SAME sid.
+    chain_map = _chain_sid_map() if str(args.date) == str(datetime.now(IST).date()) else {}
     if chain_map:
         print(f"Using LIVE chain security ids ({len(chain_map)} strikes) - matches the engine's plans", flush=True)
+    else:
+        print("Using master-CSV security ids (past day - matches broker resolution)", flush=True)
     out_path = os.path.join(cfg.REPORT_DIR, f"option_ltp_{args.date}.csv")
     import csv as _csv
     written = 0

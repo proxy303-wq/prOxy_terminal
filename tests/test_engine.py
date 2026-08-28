@@ -266,5 +266,82 @@ class TestBuyingOnlyAndFillChecks(unittest.TestCase):
         self.assertFalse(PaperEngine._order_filled(None))
 
 
+class _FakeLiveBroker(PaperBroker):
+    live = True
+
+    def __init__(self, positions):
+        self._positions = positions
+
+    def get_positions(self):
+        return list(self._positions)
+
+
+class TestEntryAnchoring(unittest.TestCase):
+    """LIVE entries must be booked at the REAL fill, not the chain snapshot."""
+
+    def test_anchor_to_position_book(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        broker = _FakeLiveBroker([{
+            "securityId": "46996", "netQty": 325, "buyAvg": 142.93, "sellAvg": 0.0,
+        }])
+        engine = PaperEngine(cfg, broker=broker, tracker=Tracker(cfg, db_path=self.tmp.name),
+                             notifier=Notifier(quiet=True), trade_date=date(2026, 8, 28))
+        plan = {
+            "direction": "LONG", "security_id": 46996,
+            "entry_premium": 145.45, "stop_premium": 128.64, "target_premium": 151.96,
+            "stop_per_unit": 16.81, "target_per_unit": 6.51,
+            "sl_per_lot": 1093.0, "sl_total": 5465.0, "target_per_lot": 423.0,
+        }
+        ok = engine._anchor_entry_to_fill(plan)
+        self.assertTrue(ok)
+        self.assertAlmostEqual(plan["entry_premium"], 142.93, places=2)
+        # stop/target distances scale with the fill (%-risk preserved)
+        self.assertAlmostEqual(plan["stop_premium"], 142.93 - 16.81 * (142.93 / 145.45), places=2)
+        self.assertAlmostEqual(plan["target_premium"], 142.93 + 6.51 * (142.93 / 145.45), places=2)
+        self.assertAlmostEqual(plan["stop_per_unit"], 16.81 * (142.93 / 145.45), places=2)
+        try:
+            os.remove(self.tmp.name)
+        except OSError:
+            pass
+
+    def test_anchor_fallback_to_live_ltp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        broker = _FakeLiveBroker([])   # position book not updated yet
+        engine = PaperEngine(cfg, broker=broker, tracker=Tracker(cfg, db_path=self.tmp.name),
+                             notifier=Notifier(quiet=True), trade_date=date(2026, 8, 28))
+        engine.set_entry_ltp_fn(lambda sid: 143.5)
+        plan = {"direction": "LONG", "security_id": 46996, "entry_premium": 145.45,
+                "stop_premium": 128.64, "target_premium": 151.96,
+                "stop_per_unit": 16.81, "target_per_unit": 6.51,
+                "sl_per_lot": 1093.0, "sl_total": 5465.0, "target_per_lot": 423.0}
+        ok = engine._anchor_entry_to_fill(plan)
+        self.assertTrue(ok)
+        self.assertAlmostEqual(plan["entry_premium"], 143.5, places=2)
+        try:
+            os.remove(self.tmp.name)
+        except OSError:
+            pass
+
+    def test_no_anchor_without_fill_data(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        broker = _FakeLiveBroker([])
+        engine = PaperEngine(cfg, broker=broker, tracker=Tracker(cfg, db_path=self.tmp.name),
+                             notifier=Notifier(quiet=True), trade_date=date(2026, 8, 28))
+        plan = {"direction": "LONG", "security_id": 46996, "entry_premium": 145.45,
+                "stop_premium": 128.64, "target_premium": 151.96,
+                "stop_per_unit": 16.81, "target_per_unit": 6.51,
+                "sl_per_lot": 1093.0, "sl_total": 5465.0, "target_per_lot": 423.0}
+        ok = engine._anchor_entry_to_fill(plan)
+        self.assertFalse(ok)
+        self.assertEqual(plan["entry_premium"], 145.45)   # unchanged
+        try:
+            os.remove(self.tmp.name)
+        except OSError:
+            pass
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -90,6 +90,11 @@ class PaperEngine:
         # exit decision (lock-profit / target / stop / time-stop) triggers
         # on the ACTUAL option premium instead of the delta-premium model.
         self.option_ltp_source = None
+        # REAL entry-LTP hook (optional): fn(security_id) -> current LTP or
+        # None.  The live worker wires it to the feed's live_ltps; LIVE
+        # entries are re-anchored to the real fill/LTP so the booked entry
+        # (and therefore stop/target/P&L) matches real money.
+        self.entry_ltp_fn = None
         # REAL Dhan expiry list (set via set_expiries): entries auto-roll to
         # the upcoming expiry when the current one starts melting
         self.expiries = None
@@ -177,6 +182,11 @@ class PaperEngine:
         polls the NSE_FNO marketfeed continuously; the engine then prices
         every exit against the real option premium."""
         self.option_ltp_source = source
+
+    def set_entry_ltp_fn(self, fn):
+        """Hook for the option's CURRENT live LTP (fn(security_id) -> float).
+        Used to anchor LIVE entries to the real fill price."""
+        self.entry_ltp_fn = fn
 
     @staticmethod
     def _order_filled(res):
@@ -377,6 +387,61 @@ class PaperEngine:
             "lock_floor_pct": 0.0,
             "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
         }
+
+    def _anchor_entry_to_fill(self, plan):
+        """Re-anchor a LIVE entry to the REAL fill price.
+
+        The chain premium is a snapshot (minutes stale by entry); the
+        market order fills a few points away.  If the engine books the
+        chain price, its stop/target levels and P&L drift from real money.
+        Priority: the broker's position book (the true fill), then the
+        option's current live LTP.  Stop/target distances scale with the
+        fill so the %-risk and R:R are preserved.  Returns True when
+        anchored, False when left on the chain price."""
+        real_entry = None
+        try:
+            if getattr(self.broker, "live", False) and hasattr(self.broker, "get_positions"):
+                for p in self.broker.get_positions():
+                    if int(p.get("netQty") or 0) != 0 \
+                            and str(p.get("securityId")) == str(plan.get("security_id")):
+                        avg = (float(p.get("buyAvg") or 0) if plan["direction"] == "LONG"
+                               else float(p.get("sellAvg") or 0))
+                        if avg > 0:
+                            real_entry = avg
+                            break
+        except Exception:
+            pass
+        if not real_entry and self.entry_ltp_fn is not None and plan.get("security_id"):
+            try:
+                v = self.entry_ltp_fn(plan["security_id"])
+                if v and float(v) > 0:
+                    real_entry = float(v)
+            except Exception:
+                pass
+        if not real_entry or real_entry <= 0:
+            return False
+        old_entry = float(plan.get("entry_premium") or 0)
+        if old_entry <= 0:
+            return False
+        scale = real_entry / old_entry
+        plan["entry_premium"] = round(real_entry, 2)
+        stop_unit = float(plan.get("stop_per_unit") or 0) * scale
+        target_unit = float(plan.get("target_per_unit") or 0) * scale
+        if plan["direction"] == "LONG":
+            plan["stop_premium"] = round(real_entry - stop_unit, 2)
+            plan["target_premium"] = round(real_entry + target_unit, 2)
+        else:
+            plan["stop_premium"] = round(real_entry + stop_unit, 2)
+            plan["target_premium"] = round(real_entry - target_unit, 2)
+        plan["stop_per_unit"] = round(stop_unit, 2)
+        plan["target_per_unit"] = round(target_unit, 2)
+        plan["sl_per_lot"] = round(float(plan.get("sl_per_lot") or 0) * scale, 2)
+        plan["sl_total"] = round(float(plan.get("sl_total") or 0) * scale, 2)
+        plan["target_per_lot"] = round(float(plan.get("target_per_lot") or 0) * scale, 2)
+        self.notify(
+            f"LIVE entry anchored to real fill {real_entry:.2f} (was {old_entry:.2f}) - "
+            f"stop {plan['stop_premium']:.2f} target {plan['target_premium']:.2f}", "TRADE")
+        return True
 
     # ----------------------------------------------------------
     # exits
@@ -691,6 +756,13 @@ class PaperEngine:
                                 _sid_res = res.get("securityId") or (res.get("data") or {}).get("securityId")
                                 if _sid_res and not plan.get("security_id"):
                                     plan["security_id"] = int(_sid_res)
+                                # anchor the booked entry to the REAL fill so
+                                # stop/target/P&L track real money, not the
+                                # (possibly stale) chain snapshot
+                                try:
+                                    self._anchor_entry_to_fill(plan)
+                                except Exception:
+                                    pass
                         if not events.get("live_order_rejected"):
                             try:
                                 from .meta_label import features_from_signal

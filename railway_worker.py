@@ -255,6 +255,7 @@ def run_trading_day(notifier, trade_date):
                     return None
 
             engine.set_option_ltp_source(_option_ltp_source)
+            engine.set_entry_ltp_fn(lambda sid: feed.live_ltps.get(str(sid)))
             notifier.log("LIVE real-premium exits armed - engine polls the traded option's LTP per bar", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE real-premium exits unavailable ({exc}) - exits use the delta model", "WARN")

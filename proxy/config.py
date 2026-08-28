@@ -348,6 +348,23 @@ MIN_OPTION_VOLUME = 100
 MIN_OPTION_OI = 1000
 MAX_OPTION_SPREAD_PCT = 0.02
 
+# ---- REAL-CHAIN ENTRY QUALITY (live protection, Module 5/6) ----
+# The chosen strike must be liquid and the bid/ask spread must FIT INSIDE
+# the stop - a 5pt scalp needs a fillable stop, and an IV-rich option is
+# an overpriced entry (you are paying for vol that may not show up).
+SPREAD_STOP_FRACTION = 0.5      # spread must be < 50% of the stop distance
+IV_RICH_MULT = 1.5              # skip when chain IV > 1.5x realized vol
+
+# ---- PARTIAL PROFIT (Miner Ch 7 / McMillan) ----
+# Book half the position at +PARTIAL_PROFIT_POINTS (real LTP), let the
+# remaining half run to the target with the lock/trail.  Honest 5-day
+# A/B: OFF +96,186 | @3.5 +60,604 | @5.0 +67,105 - cutting winners early
+# HURT on these (trending) days and the lock already protects them, so
+# default OFF.  Turn on for chop-heavy regimes and re-A/B.
+PARTIAL_PROFIT_ENABLED = False
+PARTIAL_PROFIT_POINTS = 3.5     # book half at +3.5pts (of the 6.5pt target)
+PARTIAL_PROFIT_FRACTION = 0.5   # fraction of the quantity booked
+
 
 # ============================================================
 # 7. DATA

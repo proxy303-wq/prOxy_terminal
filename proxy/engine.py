@@ -246,6 +246,7 @@ class PaperEngine:
             leg = select_leg(direction, spot, self.cfg, sigma=chain_sigma,
                              premium=chain_prem, expiries=self.expiries, roll_days=_roll)
             sigma = chain_sigma
+        self._last_entry_sigma = sigma
         # ---- STRIKE-SHIFT RULE (LIVE): a same-direction re-entry moves 1-2
         # steps away from an already-traded strike instead of repeating it ----
         strike_shift = 0
@@ -392,6 +393,45 @@ class PaperEngine:
             "theta_day_pct": abs(leg.theta_day) / leg.premium if leg.premium > 0 else 0.0,
         }
 
+    def _chain_entry_quality(self, plan):
+        """Real-chain entry gates (live protection).  The chosen strike must
+        be liquid (OI/volume), the bid/ask spread must fit inside the stop
+        (a 5pt scalp needs a fillable stop), and the IV must not be rich
+        vs the realized vol (buying an IV-rich option = overpaying).
+        Returns (ok, reason).  Passes when no chain row is available."""
+        row = self._chain_lookup.get((float(plan.get("strike") or 0),
+                                      str(plan.get("option_type") or "").upper()))
+        if not row:
+            return True, ""
+        ltp = float(row.get("ltp") or 0)
+        if ltp <= 0:
+            return True, ""
+        bid = float(row.get("bid") or 0)
+        ask = float(row.get("ask") or 0)
+        if bid > 0 and ask > 0 and ask >= bid:
+            spread_pts = ask - bid
+            stop_pts = float(plan.get("stop_per_unit") or 0)
+            max_spread = max(
+                float(getattr(self.cfg, "MAX_OPTION_SPREAD_PCT", 0.02)) * ltp,
+                stop_pts * float(getattr(self.cfg, "SPREAD_STOP_FRACTION", 0.5)))
+            if spread_pts > max_spread:
+                return False, (f"spread {spread_pts:.2f}pt too wide for a "
+                               f"{stop_pts:g}pt stop")
+        oi = float(row.get("oi") or 0)
+        vol = float(row.get("volume") or 0)
+        if oi < float(getattr(self.cfg, "MIN_OPTION_OI", 1000)):
+            return False, f"OI {oi:.0f} < {getattr(self.cfg, 'MIN_OPTION_OI', 1000)}"
+        if vol < float(getattr(self.cfg, "MIN_OPTION_VOLUME", 100)):
+            return False, f"volume {vol:.0f} < {getattr(self.cfg, 'MIN_OPTION_VOLUME', 100)}"
+        iv = float(row.get("iv") or 0)
+        sig = getattr(self, "_last_entry_sigma", None)
+        if iv > 0 and sig:
+            mult = float(getattr(self.cfg, "IV_RICH_MULT", 1.5))
+            if iv > sig * mult:
+                return False, (f"IV rich {iv * 100:.1f}% vs realized "
+                               f"{sig * 100:.1f}%")
+        return True, ""
+
     def _anchor_entry_to_fill(self, plan):
         """Re-anchor a LIVE entry to the REAL fill price.
 
@@ -509,6 +549,46 @@ class PaperEngine:
                 prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
         slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
 
+        # ---- PARTIAL PROFIT (Miner Ch 7 / McMillan): book half the position
+        # at +PARTIAL_PROFIT_POINTS (real premium), let the rest run to the
+        # target with the lock.  One winner becomes two booked units.
+        _pp_is_long = t["direction"] == "LONG"
+        if (getattr(self.cfg, "PARTIAL_PROFIT_ENABLED", False)
+                and not t.get("partial_taken")
+                and int(t.get("quantity") or 0) > 0):
+            _pp_pts = float(getattr(self.cfg, "PARTIAL_PROFIT_POINTS", 3.5))
+            _pp_frac = float(getattr(self.cfg, "PARTIAL_PROFIT_FRACTION", 0.5))
+            if _pp_is_long:
+                _pp_hit = prem_high >= entry_premium + _pp_pts
+                _pp_price = entry_premium + _pp_pts
+            else:
+                _pp_hit = prem_low <= entry_premium - _pp_pts
+                _pp_price = entry_premium - _pp_pts
+            if _pp_hit:
+                _pp_qty = max(1, int(int(t["quantity"]) * _pp_frac))
+                _pp_pnl = (_pp_price - entry_premium) * _pp_qty * (1.0 if _pp_is_long else -1.0)
+                _pp_pnl -= _pp_qty * _pp_price * self.cfg.TRANSACTION_COST_PCT
+                _pp_pnl -= _pp_qty * entry_premium * self.cfg.TRANSACTION_COST_PCT
+                if getattr(self.broker, "live", False):
+                    try:
+                        _res = self.broker.place_order(
+                            "SELL" if is_long else "BUY", t["instrument"], _pp_qty)
+                        if not self._order_filled(_res):
+                            raise RuntimeError("partial exit rejected")
+                    except Exception as _exc:
+                        self.notify(f"PARTIAL exit order failed ({_exc}) - skipping partial", "WARN")
+                        _pp_hit = False
+                if _pp_hit:
+                    t["partial_taken"] = True
+                    t["partial_price"] = round(_pp_price, 2)
+                    t["partial_qty"] = _pp_qty
+                    t["quantity"] = int(t["quantity"]) - _pp_qty
+                    t["pnl_booked"] = float(t.get("pnl_booked", 0.0) or 0.0) + _pp_pnl
+                    self.notify(
+                        f"PARTIAL {t['instrument']} {_pp_qty} qty @ {_pp_price:.2f} "
+                        f"(+{_pp_pts:g}pt) - booked {_pp_pnl:+,.2f} INR, "
+                        f"{t['quantity']} qty running", "TRADE")
+
         # --- OpenBull lock-profit / trailing exit management ---
         # Track the best premium reached; once profit >= LOCK_ARM_PCT the
         # trade is armed and exits if it falls back to a locked floor
@@ -604,6 +684,8 @@ class PaperEngine:
         # transaction cost cushion
         pnl -= t["quantity"] * exit_price * self.cfg.TRANSACTION_COST_PCT
         pnl -= t["quantity"] * t["entry_premium"] * self.cfg.TRANSACTION_COST_PCT
+        # partial profit already booked earlier (Miner Ch 7 / McMillan)
+        pnl += float(t.get("pnl_booked", 0.0) or 0.0)
 
         # LIVE mode: place the real exit order.  A REJECTED order is NOT a
         # close - the engine keeps the trade open and retries next bar
@@ -761,6 +843,12 @@ class PaperEngine:
                     if gate.allowed and plan.get("entry_premium", 0) < min_prem:
                         gate = RiskCheck(False,
                                          f"premium {plan.get('entry_premium', 0):.2f} too low (< {min_prem:.0f}) for the exit model")
+                    # REAL-CHAIN QUALITY: liquid strike + spread fits inside
+                    # the stop + IV not rich (live protection, Module 5/6)
+                    if gate.allowed:
+                        _qok, _qwhy = self._chain_entry_quality(plan)
+                        if not _qok:
+                            gate = RiskCheck(False, f"chain quality: {_qwhy}")
                     if gate.allowed and ml_ok:
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.

@@ -255,6 +255,23 @@ class TestBuyingOnlyAndFillChecks(unittest.TestCase):
         self.assertGreater(plan["target_premium"], plan["entry_premium"])  # long math
         self.assertIsNotNone(plan["security_id"])
 
+    def test_partial_profit_books_half_then_lets_rest_run(self):
+        """Miner/McMillan partial: at +PARTIAL_PROFIT_POINTS the engine books
+        half the quantity at the real premium and the rest keeps running."""
+        plan = _plan_like()   # entry 100, stop 99.5, target 101, qty 325
+        real_bar = {"open": 100.0, "high": 104.0, "low": 102.5, "close": 103.0}
+        self.engine.active_trade = plan
+        self.engine._active_trade = plan
+        _bar = {"time": datetime(2026, 8, 28, 10, 0, tzinfo=_IST),
+                "open": 24900.0, "high": 24900.0, "low": 24900.0,
+                "close": 24900.0, "volume": 100.0}
+        price, reason = self.engine._check_exits(_bar, None, 24900.0, real_bar=real_bar)
+        self.assertTrue(plan.get("partial_taken"))
+        self.assertEqual(plan["partial_qty"], 162)   # 325 * 0.5
+        self.assertEqual(plan["quantity"], 163)      # remainder
+        self.assertGreater(plan.get("pnl_booked", 0.0), 0.0)
+        self.assertTrue(reason.startswith("LOCK_PROFIT"))  # rest runs + locks
+
     def test_order_filled_rejects_rejected(self):
         """A 'success' envelope with orderStatus REJECTED is NOT a fill."""
         self.assertFalse(PaperEngine._order_filled(

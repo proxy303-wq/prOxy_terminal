@@ -399,18 +399,24 @@ class PaperEngine:
         fill so the %-risk and R:R are preserved.  Returns True when
         anchored, False when left on the chain price."""
         real_entry = None
-        try:
-            if getattr(self.broker, "live", False) and hasattr(self.broker, "get_positions"):
-                for p in self.broker.get_positions():
-                    if int(p.get("netQty") or 0) != 0 \
-                            and str(p.get("securityId")) == str(plan.get("security_id")):
-                        avg = (float(p.get("buyAvg") or 0) if plan["direction"] == "LONG"
-                               else float(p.get("sellAvg") or 0))
-                        if avg > 0:
-                            real_entry = avg
-                            break
-        except Exception:
-            pass
+        if getattr(self.broker, "live", False) and hasattr(self.broker, "get_positions"):
+            import time as _t
+            # the position book lags the fill by a beat - retry briefly
+            for _attempt in range(4):
+                try:
+                    for p in self.broker.get_positions():
+                        if int(p.get("netQty") or 0) != 0 \
+                                and str(p.get("securityId")) == str(plan.get("security_id")):
+                            avg = (float(p.get("buyAvg") or 0) if plan["direction"] == "LONG"
+                                   else float(p.get("sellAvg") or 0))
+                            if avg > 0:
+                                real_entry = avg
+                                break
+                except Exception:
+                    pass
+                if real_entry:
+                    break
+                _t.sleep(0.7)
         if not real_entry and self.entry_ltp_fn is not None and plan.get("security_id"):
             try:
                 v = self.entry_ltp_fn(plan["security_id"])

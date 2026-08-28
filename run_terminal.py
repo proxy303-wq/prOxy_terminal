@@ -252,7 +252,7 @@ def cmd_live(args):
                     return None
 
             engine.set_option_ltp_source(_opt_src)
-            engine.set_entry_ltp_fn(lambda sid: feed.live_ltps.get(str(sid)))
+            engine.set_entry_ltp_fn(lambda sid: (feed.subscribe_option(sid), feed.live_ltps.get(str(sid)))[1])
             print(f"{GR}Real-premium exits armed - polling the traded option's live LTP{R}")
     except Exception:
         pass

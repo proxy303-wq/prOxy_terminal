@@ -105,7 +105,7 @@ def build_5m_live(one_min):
     return bars
 
 
-def run_day(day, all_5m, tracker_db):
+def run_day(day, all_5m, tracker_db, expiry=None):
     """Run one trading day through the engine (live-style bars)."""
     day_bars = [b for b in all_5m if b["time"].date() == day]
     if not day_bars:
@@ -115,6 +115,8 @@ def run_day(day, all_5m, tracker_db):
                          tracker=Tracker(cfg, db_path=tracker_db),
                          notifier=Notifier(quiet=True), trade_date=day,
                          capital=cfg.CAPITAL)
+    if expiry:
+        engine.set_expiries([expiry])    # force the month's expiry
     for b in warm:
         engine.history.append(b)
     last = None
@@ -131,12 +133,16 @@ def main():
     ap.add_argument("--end", default="2026-08-28")
     ap.add_argument("--capital", type=float, default=300000.0,
                     help="simulated account capital (live risk gates scale with it)")
+    ap.add_argument("--expiry", default=None,
+                    help="force the option expiry (YYYY-MM-DD) for the whole range, "
+                         "e.g. --expiry 2026-09-01 = first September expiry")
     args = ap.parse_args()
     cfg.CAPITAL = args.capital
 
     load_athena_env()
     start = date_cls.fromisoformat(args.start)
     end = date_cls.fromisoformat(args.end)
+    _EXPIRY = args.expiry
 
     # fetch real 1-min data in weekly chunks (the API window is ~1 week)
     all_1m = []
@@ -162,7 +168,7 @@ def main():
     rows = []
     tot = 0.0
     for day in days:
-        s = run_day(day, all_5m, tf.name)
+        s = run_day(day, all_5m, tf.name, expiry=_EXPIRY)
         if s is None:
             continue
         pnl = s.get("day_pnl", 0.0)

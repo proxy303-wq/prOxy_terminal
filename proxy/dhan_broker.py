@@ -249,6 +249,20 @@ class DhanBroker(Broker):
         if not security_id or not trading_symbol:
             return {"status": "REJECTED",
                     "reason": f"security id/trading symbol not found for {instrument}"}
+        # ---- INSTRUMENT VERIFICATION: the resolved security MUST match the
+        # intended option type and strike, else REJECT (a mismatched order
+        # would trade the wrong instrument - CE vs PE / wrong strike).
+        parts = instrument.upper().split()
+        intended_type = parts[3] if len(parts) >= 4 else ""
+        intended_strike = parts[2] if len(parts) >= 3 else ""
+        res_type = str(trading_symbol).rsplit("-", 1)[-1].upper() if trading_symbol else ""
+        res_has_strike = str(intended_strike) in str(trading_symbol)
+        if res_type != intended_type or not res_has_strike:
+            return {"status": "REJECTED",
+                    "reason": (f"security mismatch: wanted {intended_type} {intended_strike}, "
+                               f"got {trading_symbol}. NO ORDER PLACED.")}
+        print(f"[order] {side} {instrument} -> sid {security_id} / {trading_symbol} (verified match)",
+              flush=True)
         otype = (order_type or "MARKET").upper()
         with self._lock:
             payload = {

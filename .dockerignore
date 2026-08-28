@@ -1,0 +1,21 @@
+# mirror of .railwayignore - keep the image small and secret-free
+.git/
+.athena_ref/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.env
+*.env
+*.env.example
+logs/
+models/
+data/*.csv
+!data/warmup_5m.csv
+reports/
+*.sqlite
+dhan_token.txt
+tests/
+railway.json
+Procfile
+.railwayignore

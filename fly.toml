@@ -1,0 +1,48 @@
+# PrOxy Trading Terminal - Fly.io configuration
+# Region: bom (Mumbai, India) -> Indian IP + lowest latency to NSE/Dhan
+# (Replaces the Railway deployment in railway.json)
+
+app = "proxytrading-terminal"
+
+primary_region = "bom"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  # start.sh binds Streamlit to $PORT (Railway set this; Fly needs it set too)
+  PORT = "8080"
+
+# Persistent state (SQLite trades/state + worker heartbeat + mode.json)
+# lives under reports/ - keep it on a Fly volume, not the ephemeral disk.
+[mounts]
+  source = "data"
+  destination = "/app/reports"
+
+# pandas + xgboost + streamlit need more than the 256MB default
+[vm]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "1gb"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # The paper-trading worker must run 24/7 - never auto-stop
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "connections"
+    hard_limit = 25
+    soft_limit = 20
+
+  # Streamlit's health endpoint (same one Railway used)
+  [[http_service.checks]]
+    grace_period = "60s"
+    interval = "30s"
+    timeout = "5s"
+    method = "GET"
+    path = "/_stcore/health"

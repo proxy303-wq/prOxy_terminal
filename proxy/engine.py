@@ -256,11 +256,15 @@ class PaperEngine:
             shift_step = int(getattr(self.cfg, "STRIKE_SHIFT_STEPS", 2))
             while day_strikes.get(leg.strike, 0) >= max_per and strike_shift < max_shift:
                 strike_shift += 1
-                # deeper ITM in the same direction: CE -> lower strike, PE -> higher
+                # deeper ITM in the same direction: CE -> lower strike, PE -> higher.
+                # Shift in strike STEPS (OPTION_STRIKE_STEP, 50 pts), NOT raw
+                # points - a 2-point shift produced invalid strikes like 24252
+                # (rejected orders today).
+                step = float(getattr(self.cfg, "OPTION_STRIKE_STEP", 50.0))
                 if leg.option_type == "CE":
-                    leg.strike = float(leg.strike - shift_step * strike_shift)
+                    leg.strike = float(leg.strike - shift_step * step * strike_shift)
                 else:
-                    leg.strike = float(leg.strike + shift_step * strike_shift)
+                    leg.strike = float(leg.strike + shift_step * step * strike_shift)
             if strike_shift:
                 prem2, sig2, _b2 = self._chain_premium(leg.strike, leg.option_type, sigma)
                 leg = select_leg(direction, spot, self.cfg,
@@ -513,6 +517,19 @@ class PaperEngine:
         lock_on = bool(getattr(self.cfg, "LOCK_PROFIT_ENABLED", False))
         is_long = t["direction"] == "LONG"
 
+        # points-based lock (scalp mode): the %-based lock armed at +0.43pt
+        # and trailed at ~0.29pt, so winners exited at ~1pt and never ran to
+        # the 6-7pt target.  In points mode: arm at +LOCK_ARM_POINTS, floor
+        # at +LOCK_FLOOR_POINTS, trail at peak - LOCK_TRAIL_STEP_POINTS.
+        if getattr(self.cfg, "SL_MODE", "flat") == "points" and entry_premium > 0:
+            arm_pct = float(getattr(self.cfg, "LOCK_ARM_POINTS", 2.0)) / entry_premium
+            floor_pct = float(getattr(self.cfg, "LOCK_FLOOR_POINTS", 1.0)) / entry_premium
+            trail_pct = float(getattr(self.cfg, "LOCK_TRAIL_STEP_POINTS", 1.0)) / entry_premium
+        else:
+            arm_pct = float(getattr(self.cfg, "LOCK_ARM_PCT", 0.003))
+            floor_pct = float(getattr(self.cfg, "LOCK_FLOOR_PCT", 0.001))
+            trail_pct = float(getattr(self.cfg, "LOCK_TRAIL_STEP_PCT", 0.002))
+
         if lock_on:
             prior_peak = t.get("pnl_peak") or entry_premium
             if is_long:
@@ -527,13 +544,13 @@ class PaperEngine:
             # an unarmed trade's stop is checked first; an armed trade has a
             # standing lock-floor GTT order that fires before the stop.
             armed = bool(t.get("lock_armed", False))
-            if not armed and peak_pct >= float(getattr(self.cfg, "LOCK_ARM_PCT", 0.003)):
+            if not armed and peak_pct >= arm_pct:
                 t["lock_armed"] = True
                 armed = True
             if armed:
-                floor = float(getattr(self.cfg, "LOCK_FLOOR_PCT", 0.001))
+                floor = floor_pct
                 if getattr(self.cfg, "LOCK_TRAIL_ENABLED", True):
-                    floor = max(floor, peak_pct - float(getattr(self.cfg, "LOCK_TRAIL_STEP_PCT", 0.002)))
+                    floor = max(floor, peak_pct - trail_pct)
                 t["lock_floor_pct"] = floor
                 if is_long:
                     floor_prem = entry_premium * (1.0 + floor)

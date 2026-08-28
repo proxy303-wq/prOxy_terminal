@@ -306,10 +306,12 @@ class Backtest:
                     _shift_step = int(getattr(leg_cfg, "STRIKE_SHIFT_STEPS", 2))
                     while strikes_today.get(leg.strike, 0) >= int(getattr(leg_cfg, "MAX_TRADES_PER_STRIKE", 1)) and _shift < _max_shift:
                         _shift += 1
+                        # shift in strike STEPS (x50), not raw points (invalid strikes)
+                        _stk_step = float(getattr(leg_cfg, "OPTION_STRIKE_STEP", 50.0))
                         if leg.option_type == "CE":
-                            leg.strike = float(leg.strike - _shift_step * _shift)
+                            leg.strike = float(leg.strike - _shift_step * _stk_step * _shift)
                         else:
-                            leg.strike = float(leg.strike + _shift_step * _shift)
+                            leg.strike = float(leg.strike + _shift_step * _stk_step * _shift)
                     if _shift:
                         leg = select_leg(signal.direction, spot, leg_cfg, sigma=_sigma,
                                          premium=leg.premium, force_strike=leg.strike)

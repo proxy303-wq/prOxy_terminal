@@ -195,12 +195,23 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
 
     quantity = lots * cfg.LOT_SIZE
 
-    # ---- stop/target: MAXIMALS (volatility distribution) or FLAT ----
+    # ---- stop/target: MAXIMALS (volatility distribution), FLAT (%) or
+    # POINTS (absolute premium points - the trader's 6-7pt scalp target) ----
     sl_mode = getattr(cfg, "SL_MODE", "flat")
     sl_basis = ""
     rr = 0.0
     p_target_reach = 0.0
-    if sl_mode == "maximals":
+    if sl_mode == "points":
+        # absolute premium points: target TARGET_POINTS / stop SL_POINTS.
+        # R:R = TARGET_POINTS / SL_POINTS - must be >= 1 or the win rate
+        # needed to break even climbs past what the market gives.
+        stop_per_unit = float(getattr(cfg, "SL_POINTS", 5.0))
+        target_per_unit = float(getattr(cfg, "TARGET_POINTS", 6.5))
+        rr = target_per_unit / stop_per_unit if stop_per_unit > 0 else 0.0
+        p_target_reach = 0.0
+        sl_basis = (f"points target {target_per_unit:g}pt / stop {stop_per_unit:g}pt "
+                    f"(R:R {rr:.2f})")
+    elif sl_mode == "maximals":
         from .maximals import sl_target_from_maximals
         mx = sl_target_from_maximals(
             spot, premium, abs(delta), sigma,

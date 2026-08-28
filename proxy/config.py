@@ -110,11 +110,16 @@ DEMO_BAR_SECONDS = 30                   # synthetic feed: 5-min bar in 30 s of w
 #                         and the stop moves to breakeven.
 
 LOCK_PROFIT_ENABLED = True
-LOCK_ARM_PCT = 0.0030           # arm at +0.3% profit
-LOCK_FLOOR_PCT = 0.0010         # never give back more than to +0.1%
+LOCK_ARM_PCT = 0.0030           # arm at +0.3% profit (%-mode)
+LOCK_FLOOR_PCT = 0.0010         # never give back more than to +0.1% (%-mode)
 LOCK_TRAIL_ENABLED = True
-LOCK_TRAIL_STEP_PCT = 0.0020    # floor = peak - 0.2% once armed
+LOCK_TRAIL_STEP_PCT = 0.0020    # floor = peak - 0.2% once armed (%-mode)
 TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
+# points-mode lock (SL_MODE="points"): arm at +2pt, floor at +1pt, trail
+# at peak - 1pt - so a winner can actually run to the 6-7pt target
+LOCK_ARM_POINTS = 2.0
+LOCK_FLOOR_POINTS = 1.0
+LOCK_TRAIL_STEP_POINTS = 1.0
 
 
 # ============================================================
@@ -136,7 +141,13 @@ TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
 #   SL_MODE = "maximals"  -> distribution-based levels (default)
 #          = "flat"       -> the old flat 0.5% / 1% of premium levels
 
-SL_MODE = "maximals"
+# SL_MODE = "points"  -> absolute premium-points stop/target (the trader's
+#          scalp: target 6-7pts, stop sized to the target so R:R >= 1).
+#          The maximals distribution-stop gave R:R ~0.39 (risk 17 to make
+#          6.6) - negative expectancy; the real-premium baseline decides.
+SL_MODE = "points"
+TARGET_POINTS = 6.5              # profit target in absolute premium points
+SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R 1.3)
 MAXIMALS_HOLDING_BARS = 4        # expected holding window (4 x 5-min bars; sweep: hold 4 best)
 
 # ---- SURESHOT MODE: scale up on high-confidence, trend-aligned signals ----

@@ -115,3 +115,28 @@ the maximals edge came from a few wide-stop trend winners.  Keep points
 as default; the stop distance is a knob (--cfg SL_POINTS=...) to tune as
 real days accumulate.  Every new day extends this table - only switch
 when a config wins on >=10 real days.
+
+## 6c. Options path results (commits 9033a58, 28dc248)
+
+Config now defaulting to (all A/B'd on the honest 5-day real baseline):
+  - SL_MODE="points"  TARGET_POINTS=6.5  SL_POINTS=5.0  (R:R 1.3)
+  - lock: arm +2pt / floor +1pt / trail peak-1pt (winners reach the target)
+  - PARTIAL_PROFIT_ENABLED=False  (A/B: OFF 96,186 | @3.5 60,604 |
+    @5.0 67,105 - cutting winners early HURT; lock already protects them)
+  - chain-quality gate ON (live protection, not baseline-measurable):
+    liquid strike + bid/ask spread must fit inside the stop + IV not rich
+  - strike-shift fixed (50-pt steps; was producing invalid strikes)
+
+Honest 5-day totals (real entries + exits, long-only):
+  maximals           +110,906   (R:R 0.39 - broken geometry)
+  points 6.5/5.0      +96,186   (DEFAULT - structurally sound)
+  points+partial3.5   +60,604
+  points+partial5.0   +67,105
+
+Next experiments (each gated by this baseline):
+  - Miner full momentum-REVERSAL entry (simple HTF-RSI band showed no edge)
+  - IV-rank entry (chain IV percentile) - can't be A/B'd historically
+    (no bid/ask history); validate live
+  - ITM strike selection by fill quality + theta (Module 6)
+  - More real days: extend the baseline table; only switch config when a
+    variant wins on >=10 real days

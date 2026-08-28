@@ -27,3 +27,6 @@ models/
 # reference clone (Athena dashboard source)
 _athena_ref/
 
+
+# Oracle provisioning secrets (never commit)
+.oracle/

@@ -19,4 +19,4 @@ jobs:
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            bash /opt/proxy/deploy.sh
+            bash /opt/proxy/deploy/deploy.sh

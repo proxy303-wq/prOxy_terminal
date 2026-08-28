@@ -178,6 +178,22 @@ class PaperEngine:
         every exit against the real option premium."""
         self.option_ltp_source = source
 
+    @staticmethod
+    def _order_filled(res):
+        """True only when the broker response represents a REAL fill.
+
+        Dhan's envelope returns status=success for rejected orders too, so
+        the orderStatus must be checked: REJECTED/CANCELLED is not a fill
+        (a phantom 'entry' would leave the engine managing a position that
+        does not exist on the account)."""
+        if not res:
+            return False
+        if not (res.get("status") == "success" or res.get("orderId")):
+            return False
+        ost = str((res.get("data") or {}).get("orderStatus")
+                  or res.get("orderStatus") or "").upper()
+        return ost not in ("REJECTED", "CANCELLED", "CANCELED")
+
     def _chain_premium(self, strike, option_type, sigma):
         """Return (premium, sigma, basis) from the real chain, or the
         model estimate when the chain has no usable row for that strike."""
@@ -282,6 +298,13 @@ class PaperEngine:
         target_unit = leg.target_per_unit
         target_per_lot = round(self.cfg.LOT_SIZE * target_unit, 2)
         is_long = direction == "BUY"
+        # ---- BUYING ONLY (LONG_ONLY): the account cannot fund option writes,
+        # so the engine NEVER opens with a SELL order.  A SELL signal still
+        # picks its PE leg, but as a LONG PUT (buy the put) instead of a
+        # short put: direction is LONG, the exit math mirrors a long, and
+        # the live order side is BUY.  Exits still SELL to close.
+        if getattr(self.cfg, "LONG_ONLY", False):
+            is_long = True
         # LONG: stop below entry, target above.  SHORT: the mirror.
         stop_premium = entry - stop_unit if is_long else entry + stop_unit
         target_premium = entry + target_unit if is_long else entry - target_unit
@@ -494,13 +517,24 @@ class PaperEngine:
         pnl -= t["quantity"] * exit_price * self.cfg.TRANSACTION_COST_PCT
         pnl -= t["quantity"] * t["entry_premium"] * self.cfg.TRANSACTION_COST_PCT
 
-        # LIVE mode: place the real exit order
+        # LIVE mode: place the real exit order.  A REJECTED order is NOT a
+        # close - the engine keeps the trade open and retries next bar
+        # (recording a close that never filled would orphan the real
+        # position on the account).
         if getattr(self.broker, "live", False):
             try:
                 side = "SELL" if t["direction"] == "LONG" else "BUY"
-                self.broker.place_order(side, t["instrument"], t["quantity"])
+                res = self.broker.place_order(side, t["instrument"], t["quantity"])
+                if not self._order_filled(res):
+                    self.notify(
+                        f"LIVE exit order REJECTED ({_ost}) - position still open, retrying next bar",
+                        "WARN")
+                    return None
             except Exception as exc:
-                self.notify(f"LIVE exit order failed: {exc}")
+                self.notify(
+                    f"LIVE exit order failed: {exc} - position still open, retrying next bar",
+                    "WARN")
+                return None
 
         record = {
             **{k: v for k, v in t.items() if k != "unrealized_pnl"},
@@ -567,7 +601,12 @@ class PaperEngine:
             exit_price, exit_reason = self._check_exits(bar, signal, spot, real_bar=real_bar)
             if exit_price is not None:
                 rec = self._close(exit_price, exit_reason, bar)
-                events["exited"] = rec
+                # rec is None when the live exit order was REJECTED - the
+                # trade stays open (no phantom close recorded)
+                if rec is not None:
+                    events["exited"] = rec
+                else:
+                    self.notify(f"EXIT  {self.active_trade['instrument']} @ {exit_price:.2f} | {exit_reason} | ORDER REJECTED - keeping position open")
             else:
                 t = self.active_trade
                 rb = t.get("real_option_bar")
@@ -641,7 +680,7 @@ class PaperEngine:
                             res = self.broker.place_order(
                                 "BUY" if plan["direction"] == "LONG" else "SELL",
                                 plan["instrument"], plan["quantity"])
-                            filled = bool(res) and (res.get("status") == "success" or res.get("orderId"))
+                            filled = self._order_filled(res)
                             if not filled:
                                 self.notify(f"GATE  LIVE order rejected: {res}")
                                 events["live_order_rejected"] = True
@@ -721,7 +760,12 @@ class PaperEngine:
                 else:
                     prem_now = t["entry_premium"] * (1.0 - move)
             rec = self._close(prem_now, "DAY_END", bar)
-            self.notify(f"DAY END forced close: {rec['instrument']} P&L {rec['pnl']:+,.2f} INR")
+            if rec is None:
+                self.notify(
+                    "DAY END close REJECTED - REAL position may remain open. "
+                    "Square it off manually before tomorrow!", "WARN")
+            else:
+                self.notify(f"DAY END forced close: {rec['instrument']} P&L {rec['pnl']:+,.2f} INR")
 
         equity = current_equity(self.state, self.cfg)
         self.state.setdefault("equity_curve", []).append([

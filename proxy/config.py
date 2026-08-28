@@ -32,6 +32,12 @@ PROFIT_TARGET_PCT  = 0.0100     # Exit at +1.0% of the option premium
 STOP_LOSS_PCT      = 0.0050     # Exit at -0.5% of the option premium
 MIN_RISK_REWARD    = 2.0        # target / stop must be >= 2  (1% / 0.5% = 2.0)
 MAX_POSITIONS      = 1          # concurrent trades (spec allows 1-2; start at 1)
+# BUYING ONLY: the account cannot fund option WRITES (short puts/calls need
+# margin Dhan rejects with 'insufficient funds').  With LONG_ONLY=True the
+# engine never places a SELL order to OPEN a position: BUY signals buy a
+# call, SELL signals buy a PUT (long put) - both are BUY orders.  Exits
+# still SELL to close what was bought.
+LONG_ONLY = True
 MAX_TRADES_PER_DAY = 10         # ceiling; the strike gate still keeps it to quality trades
 LOSS_COOLDOWN_BARS = 6          # wait N bars (30 min) after a stop-out before re-entering (0 = off)
 

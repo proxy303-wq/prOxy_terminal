@@ -332,7 +332,12 @@ class Backtest:
                     else:
                         lots, qty, actual_risk = position_size(budget, leg.premium, leg.premium - stop_unit, self.cfg)
                         lots = max(1, min(lots, self.cfg.DEFAULT_LOTS))
-                    is_long = (signal.direction == "BUY") and not short_options or (sell_long_pe and signal.direction == "SELL")
+                    # BUYING ONLY (LONG_ONLY): every position is a BUY (long call /
+                    # long put) - the account cannot fund option writes.  The
+                    # backtest mirrors the live engine so its results stay valid.
+                    is_long = ((signal.direction == "BUY") and not short_options) \
+                        or (sell_long_pe and signal.direction == "SELL") \
+                        or bool(getattr(leg_cfg, "LONG_ONLY", False))
                     stop_p = leg.premium - stop_unit if is_long else leg.premium + stop_unit
                     target_p = leg.premium + leg.target_per_unit if is_long else leg.premium - leg.target_per_unit
                     sl_per_lot = leg.risk_per_lot  # SL for ONE lot (INR) = premium * STOP_LOSS_PCT * LOT_SIZE (precise)

@@ -212,5 +212,59 @@ class TestOptionLTPFeed(unittest.TestCase):
         self.assertEqual(n, 1)
 
 
+class TestBuyingOnlyAndFillChecks(unittest.TestCase):
+    """LONG_ONLY: the engine never opens with a SELL order - SELL signals
+    become LONG PUT buys.  Plus the fill-check fix (a REJECTED order is
+    not a fill)."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        self.tracker = Tracker(cfg, db_path=self.db_path)
+        self.engine = PaperEngine(cfg, broker=PaperBroker(cfg.CAPITAL),
+                                  tracker=self.tracker,
+                                  notifier=Notifier(quiet=True),
+                                  trade_date=date(2026, 8, 28))
+
+    def tearDown(self):
+        try:
+            os.remove(self.db_path)
+        except OSError:
+            pass
+
+    def test_long_only_converts_sell_signal_to_long_put(self):
+        """A SELL signal buys the PE (long put) - never shorts it."""
+        self.assertTrue(getattr(cfg, "LONG_ONLY", False))
+        from proxy.options import build_option_chain
+        spot = 24100.0
+        mc = build_option_chain(spot, cfg, side="PE")
+        rows = [{"strike": r["strike"], "option_type": r["option_type"],
+                 "security_id": int(100000 + r["strike"]),
+                 "ltp": r["premium"], "iv": 0.13} for r in mc["rows"]]
+        self.engine.set_chain({"rows": rows})
+        sig = SimpleNamespace(direction="SELL", confidence=90.0, score=-0.3,
+                              setup_type="TEST", setup_strength=60.0,
+                              candle_pattern="", reason="test", trend="DOWNTREND")
+        plan = self.engine._plan_entry(sig, spot, 500000.0)
+        self.assertEqual(plan["option_type"], "PE")
+        self.assertEqual(plan["direction"], "LONG")          # buy the put
+        self.assertGreater(plan["stop_premium"], 0)
+        self.assertGreater(plan["target_premium"], plan["entry_premium"])  # long math
+        self.assertIsNotNone(plan["security_id"])
+
+    def test_order_filled_rejects_rejected(self):
+        """A 'success' envelope with orderStatus REJECTED is NOT a fill."""
+        self.assertFalse(PaperEngine._order_filled(
+            {"status": "success", "data": {"orderId": "x", "orderStatus": "REJECTED"}}))
+        self.assertFalse(PaperEngine._order_filled(
+            {"status": "success", "orderStatus": "CANCELLED"}))
+        self.assertTrue(PaperEngine._order_filled(
+            {"status": "success", "data": {"orderId": "x", "orderStatus": "TRADED"}}))
+        self.assertTrue(PaperEngine._order_filled(
+            {"orderId": "x", "orderStatus": "TRANSIT"}))
+        self.assertFalse(PaperEngine._order_filled(None))
+
+
 if __name__ == "__main__":
     unittest.main()

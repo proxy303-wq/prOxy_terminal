@@ -867,13 +867,9 @@ class PaperEngine:
                                 _sid_res = res.get("securityId") or (res.get("data") or {}).get("securityId")
                                 if _sid_res and not plan.get("security_id"):
                                     plan["security_id"] = int(_sid_res)
-                                # anchor the booked entry to the REAL fill so
-                                # stop/target/P&L track real money, not the
-                                # (possibly stale) chain snapshot
-                                try:
-                                    self._anchor_entry_to_fill(plan)
-                                except Exception:
-                                    pass
+                                # (entry anchoring now runs AFTER the Telegram
+                                # push - execution + push come first, the
+                                # position-book retry must never delay them)
                         if not events.get("live_order_rejected"):
                             try:
                                 from .meta_label import features_from_signal
@@ -914,6 +910,12 @@ class PaperEngine:
                                 f"| {_sl_basis} | score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
                                 "TRADE"
                             )
+                            # order executed + Telegram pushed - now anchor the
+                            # booked entry to the real fill (bookkeeping only)
+                            try:
+                                self._anchor_entry_to_fill(plan)
+                            except Exception:
+                                pass
                         else:
                             self.notify(f"LIVE entry SKIPPED - order rejected (no position taken, engine continues)", "WARN")
                     else:

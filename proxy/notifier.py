@@ -76,12 +76,23 @@ class Notifier:
             self._telegram(message)
 
     def _telegram(self, text):
+        # fire-and-forget: a slow Telegram network must NEVER delay the
+        # engine (the order is already placed; execution comes first).
+        def _send():
+            try:
+                token = os.getenv("TELEGRAM_BOT_TOKEN")
+                chat_id = os.getenv("TELEGRAM_CHAT_ID")
+                if not token or not chat_id:
+                    return
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
+                req = urllib.request.Request(url, data=payload,
+                                             headers={"Content-Type": "application/json"})
+                urllib.request.urlopen(req, timeout=10)
+            except Exception:
+                pass
         try:
-            token = os.getenv("TELEGRAM_BOT_TOKEN")
-            chat_id = os.getenv("TELEGRAM_CHAT_ID")
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
-            req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-            urllib.request.urlopen(req, timeout=10)
+            import threading
+            threading.Thread(target=_send, daemon=True).start()
         except Exception:
             pass

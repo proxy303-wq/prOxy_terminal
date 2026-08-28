@@ -110,6 +110,27 @@ def _fetch_today_bars(trade_date):
 
 
 
+def _expectancy_line(tracker, trade_date):
+    """Expectancy (avg-win x win% - avg-loss x loss%) from the day's real
+    trade records - the metric every config is judged by."""
+    try:
+        trades = tracker.get_trades()
+        day = [t for t in trades if str(trade_date) in str(t.get("entry_time", ""))]
+        pnls = [float(t.get("pnl") or 0) for t in day]
+        if not pnls:
+            return "Expectancy: n/a (no trades)"
+        wins = [p for p in pnls if p > 0]
+        losses = [p for p in pnls if p <= 0]
+        wr = len(wins) / len(pnls)
+        aw = sum(wins) / len(wins) if wins else 0.0
+        al = sum(losses) / len(losses) if losses else 0.0
+        er = aw * wr - abs(al) * (1 - wr)
+        return (f"Expectancy: {er:+,.2f} INR/trade | win rate {wr*100:.1f}% | "
+                f"avg win {aw:+,.0f} | avg loss {al:+,.0f}")
+    except Exception as exc:
+        return f"Expectancy: unavailable ({exc})"
+
+
 def run_trading_day(notifier, trade_date):
     """Run one paper session; send the daily summary afterwards.
 
@@ -347,12 +368,14 @@ def run_trading_day(notifier, trade_date):
     summary = engine.finish_day(last_bar) if last_bar is not None else None
 
     if summary:
+        _exp = _expectancy_line(tracker, trade_date)
         msg = (
             f"DAY SUMMARY {trade_date}\n"
             f"Trades: {summary.get('trades_today', 0)} | "
             f"Day P&L: {summary.get('day_pnl', 0):+,.2f} INR\n"
             f"Equity: {summary.get('equity', 0):,.2f} INR | "
             f"Win rate: {summary.get('win_rate', 0):.1f}%\n"
+            f"{_exp}\n"
             f"Monthly target progress: {summary.get('monthly_progress_pct', 0):.1f}%"
         )
         notifier.log(msg, "TRADE")

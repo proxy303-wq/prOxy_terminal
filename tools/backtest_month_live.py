@@ -195,8 +195,7 @@ def main():
     try:
         import sqlite3 as _sq
         _conn = _sq.connect(tf.name)
-        _t = _conn.execute(
-            "SELECT pnl FROM trades WHERE entry_time LIKE '2026-08%'").fetchall()
+        _t = _conn.execute("SELECT pnl FROM trades").fetchall()
         _conn.close()
         _pnls = [float(r[0] or 0) for r in _t]
         _wins = [p for p in _pnls if p > 0]

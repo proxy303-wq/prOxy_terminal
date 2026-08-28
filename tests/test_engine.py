@@ -138,13 +138,15 @@ class TestRealPremiumExits(unittest.TestCase):
 
     def test_real_option_bar_drives_lock_profit(self):
         """Once armed, a real premium dip to the locked floor exits at the
-        floor (LOCK_PROFIT) - the standing GTT floor fires before the stop."""
+        floor (LOCK_PROFIT) - the standing GTT floor fires before the stop.
+        Points-mode lock (config default): arms at +2pts, floor at +1pt,
+        trail at peak - 1pt."""
         plan = _plan_like()
-        # peak +1.5% arms the lock; floor = peak - 0.2% = +1.3% (101.3);
-        # the real low dips to 100.6 (below 101.3) -> LOCK_PROFIT at 101.3
-        real_bar = {"open": 100.0, "high": 101.5, "low": 100.6, "close": 100.8}
+        # peak +3.0pts arms the lock; floor = max(+1pt, 3-1) = +2.0pts
+        # (102.0); the real low dips to 101.5 (below 102.0) -> LOCK_PROFIT
+        real_bar = {"open": 100.0, "high": 103.0, "low": 101.5, "close": 102.2}
         price, reason = self._check(plan, real_bar=real_bar)
-        self.assertAlmostEqual(price, 101.3, places=2)
+        self.assertAlmostEqual(price, 102.0, places=2)
         self.assertTrue(reason.startswith("LOCK_PROFIT"))
         self.assertEqual(plan["premium_source"], "real_option_bar")
 

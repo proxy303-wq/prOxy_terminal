@@ -42,7 +42,8 @@ class Tracker:
                 entry_premium REAL, exit_premium REAL, stop_premium REAL,
                 target_premium REAL, entry_spot REAL, entry_time TEXT,
                 exit_time TEXT, exit_reason TEXT, setup_type TEXT,
-                confidence REAL, trend TEXT, reason TEXT, pnl REAL, pnl_pct REAL
+                confidence REAL, trend TEXT, reason TEXT, pnl REAL, pnl_pct REAL,
+                premium_source TEXT
             )
         """)
         conn.execute("""
@@ -56,6 +57,12 @@ class Tracker:
                 ts TEXT, level TEXT, message TEXT
             )
         """)
+        # migration: older DBs lack the premium_source audit column
+        try:
+            conn.execute("ALTER TABLE trades ADD COLUMN premium_source TEXT")
+            conn.commit()
+        except Exception:
+            pass
         conn.commit()
         conn.close()
 
@@ -94,8 +101,9 @@ class Tracker:
             """INSERT INTO trades (ts, instrument, direction, option_type, strike,
                lots, quantity, entry_premium, exit_premium, stop_premium,
                target_premium, entry_spot, entry_time, exit_time, exit_reason,
-               setup_type, confidence, trend, reason, pnl, pnl_pct)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               setup_type, confidence, trend, reason, pnl, pnl_pct,
+               premium_source)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(IST).isoformat(),
                 record.get("instrument"), record.get("direction"),
@@ -108,6 +116,7 @@ class Tracker:
                 record.get("setup_type"), record.get("confidence"),
                 record.get("trend"), record.get("reason"),
                 record.get("pnl"), record.get("pnl_pct"),
+                record.get("premium_source", "delta_model"),
             ),
         )
         conn.commit()

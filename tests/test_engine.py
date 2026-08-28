@@ -55,5 +55,162 @@ class TestEngine(unittest.TestCase):
             self.assertIn("2024-08-26", str(t.get("entry_time", "")))
 
 
+from datetime import datetime
+from types import SimpleNamespace
+from zoneinfo import ZoneInfo
+from proxy.broker import PaperBroker
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _plan_like(entry=100.0, stop=99.5, target=101.0, direction="LONG",
+               option_type="CE", spot=24900.0):
+    """A minimal active-trade dict for exit checks (mirrors _plan_entry)."""
+    return {
+        "instrument": f"NIFTY 28AUG {int(spot)} {option_type}",
+        "direction": direction,
+        "option_type": option_type,
+        "strike": float(spot),
+        "lots": 5, "quantity": 5 * cfg.LOT_SIZE,
+        "entry_premium": entry,
+        "stop_premium": stop,
+        "target_premium": target,
+        "entry_spot": spot,
+        "theta_day_pct": 0.0,
+        "pnl_peak": None, "peak_pct": 0.0,
+        "lock_armed": False, "lock_floor_pct": 0.0,
+        "bars_held": 1, "security_id": None,
+    }
+
+
+class TestRealPremiumExits(unittest.TestCase):
+    """The engine's exits must trigger on the REAL option premium when a
+    real option bar is supplied, and fall back to the delta-premium model
+    otherwise (the whole point of the live exit fix)."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        self.tracker = Tracker(cfg, db_path=self.db_path)
+        self.engine = PaperEngine(cfg, broker=PaperBroker(cfg.CAPITAL),
+                                  tracker=self.tracker,
+                                  notifier=Notifier(quiet=True),
+                                  trade_date=date(2026, 8, 28))
+        self.bar = {
+            "time": datetime(2026, 8, 28, 10, 0, tzinfo=_IST),
+            "open": 24900.0, "high": 24900.0, "low": 24900.0,
+            "close": 24900.0, "volume": 100.0,
+        }
+
+    def tearDown(self):
+        try:
+            os.remove(self.db_path)
+        except OSError:
+            pass
+
+    def _check(self, plan, real_bar=None):
+        self.engine.active_trade = plan
+        self.engine._active_trade = plan
+        return self.engine._check_exits(self.bar, None, 24900.0, real_bar=real_bar)
+
+    def test_real_option_bar_drives_stop(self):
+        """Real premium low crosses the stop even though the delta model
+        (flat underlying bar) would NOT have stopped - the 08-28 failure."""
+        plan = _plan_like()
+        real_bar = {"open": 100.0, "high": 100.2, "low": 99.4, "close": 99.6}
+        price, reason = self._check(plan, real_bar=real_bar)
+        self.assertEqual(price, plan["stop_premium"])
+        self.assertTrue(reason.startswith("STOP_LOSS_HIT"))
+        self.assertEqual(plan["premium_source"], "real_option_bar")
+
+    def test_real_option_bar_drives_target(self):
+        """Real premium high crosses the target -> TARGET_HIT on the real
+        price (the model, with a flat underlying, holds the position)."""
+        plan = _plan_like()
+        # low stays above the locked floor (+1.3% = 101.3) so the standing
+        # floor order does not fire before the target
+        real_bar = {"open": 100.0, "high": 101.5, "low": 101.35, "close": 101.4}
+        price, reason = self._check(plan, real_bar=real_bar)
+        self.assertEqual(price, plan["target_premium"])
+        self.assertTrue(reason.startswith("TARGET_HIT"))
+        self.assertEqual(plan["premium_source"], "real_option_bar")
+
+    def test_real_option_bar_drives_lock_profit(self):
+        """Once armed, a real premium dip to the locked floor exits at the
+        floor (LOCK_PROFIT) - the standing GTT floor fires before the stop."""
+        plan = _plan_like()
+        # peak +1.5% arms the lock; floor = peak - 0.2% = +1.3% (101.3);
+        # the real low dips to 100.6 (below 101.3) -> LOCK_PROFIT at 101.3
+        real_bar = {"open": 100.0, "high": 101.5, "low": 100.6, "close": 100.8}
+        price, reason = self._check(plan, real_bar=real_bar)
+        self.assertAlmostEqual(price, 101.3, places=2)
+        self.assertTrue(reason.startswith("LOCK_PROFIT"))
+        self.assertEqual(plan["premium_source"], "real_option_bar")
+
+    def test_model_fallback_without_real_bar(self):
+        """No real option bar -> the delta-premium model decides (backtest /
+        replay / feed not yet delivering the option)."""
+        plan = _plan_like()
+        price, reason = self._check(plan, real_bar=None)
+        self.assertIsNone(price)
+        self.assertIsNone(reason)
+        self.assertEqual(plan["premium_source"], "delta_model")
+
+    def test_security_id_captured_from_chain(self):
+        """The plan carries the traded option's Dhan security_id (from the
+        real chain rows) so process_bar can poll its live LTP per bar."""
+        from proxy.options import build_option_chain
+        spot = 24900.0
+        mc = build_option_chain(spot, cfg, side="CE")
+        rows = []
+        for r in mc["rows"]:
+            rows.append({
+                "strike": r["strike"], "option_type": r["option_type"],
+                "security_id": int(100000 + r["strike"]),
+                "ltp": r["premium"], "iv": 0.13,
+            })
+        self.engine.set_chain({"rows": rows})
+        sig = SimpleNamespace(direction="BUY", confidence=90.0, score=0.3,
+                              setup_type="TEST", setup_strength=60.0,
+                              candle_pattern="", reason="test", trend="UPTREND")
+        plan = self.engine._plan_entry(sig, spot, 500000.0)
+        self.assertEqual(plan["option_type"], "CE")
+        self.assertEqual(plan["security_id"], int(100000 + plan["strike"]))
+        # the real chain premium is what feeds the entry + exit levels
+        self.assertAlmostEqual(plan["entry_premium"], round(plan["entry_premium"], 2))
+
+
+class TestOptionLTPFeed(unittest.TestCase):
+    """DhanRestFeed builds real 5-min option bars from NSE_FNO LTP ticks."""
+
+    def test_option_bar_accumulation_and_bucket_match(self):
+        from proxy.dhan_rest_feed import DhanRestFeed
+        f = DhanRestFeed()
+        t1a = datetime(2026, 8, 28, 9, 30, 5, tzinfo=_IST)
+        t1b = datetime(2026, 8, 28, 9, 30, 50, tzinfo=_IST)
+        t2 = datetime(2026, 8, 28, 9, 35, 2, tzinfo=_IST)
+        f._accumulate_option("46996", 100.0, t1a)
+        f._accumulate_option("46996", 102.0, t1b)
+        f._accumulate_option("46996", 99.0, t2)  # next bucket: finalises 09:30
+        bar = f.option_bar("46996", t1a)
+        self.assertIsNotNone(bar)
+        self.assertEqual(bar["open"], 100.0)
+        self.assertEqual(bar["high"], 102.0)
+        self.assertEqual(bar["low"], 100.0)   # 99.0 belongs to the NEXT bucket
+        self.assertEqual(bar["close"], 102.0)
+        # an in-progress (not-yet-finalised) bucket returns None
+        self.assertIsNone(f.option_bar("46996", t2))
+        self.assertIsNone(f.option_bar("99999", t1a))
+
+    def test_subscribe_option_is_idempotent(self):
+        from proxy.dhan_rest_feed import DhanRestFeed
+        f = DhanRestFeed()
+        f.subscribe_option(46996)
+        f.subscribe_option(46996)
+        n = sum(1 for seg, sid in f.instruments if seg == "NSE_FNO" and str(sid) == "46996")
+        self.assertEqual(n, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

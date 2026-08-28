@@ -289,6 +289,46 @@ payoff builder, WebSocket fan-out - is a full platform not needed here):
   **1-minute** bars (signals stay on 5-minute bars), so a single bar can
   no longer artificially cross both the arm level and the stop.
 
+## Real-premium exits (live money screens match your money)
+
+The engine's exits (lock-profit / target / stop / time-stop) trigger on the
+**actual option premium**, not the delta-premium model.  While a live trade
+is open, the engine polls the traded option's LTP from Dhan's REST
+marketfeed (POST /v2/marketfeed/ltp, NSE_FNO + the option's security_id)
+every 5-minute bar and prices every exit against the real option high/low/
+close.  The delta-premium model remains only as the fallback when no real
+option bar exists (backtest / replay / feed not yet delivering).
+
+How it is wired:
+
+    engine.set_option_ltp_source(source)   # source(security_id, bar_time)
+                                          # -> {open,high,low,close} | None
+
+- `proxy/dhan_rest_feed.py` polls NSE_FNO continuously and finalises real
+  5-min option bars (`option_bar`).  The live worker and
+  `run_terminal.py live --dhan` wire this into the engine automatically.
+- `proxy/engine.py` captures the traded option's `security_id` at entry
+  (from the real chain row, or the broker's resolution) and passes the real
+  bar into `_check_exits`; every exit record stores `premium_source`
+  (real_option_bar | delta_model) in the tracker DB.
+- `proxy/dhan_broker.py` returns the resolved `securityId` on every order
+  response, and the type/strike verification stays in force.
+- Real option bars are recorded to `reports/option_ltp_<date>.csv` during
+  live sessions.
+
+Validation (backtests cannot validate this - no per-bar option history):
+
+    # 1) unit tests prove the exit logic on real premiums
+    python -m unittest tests.test_engine
+
+    # 2) fetch a past day's REAL option candles from Dhan's charts API and
+    #    replay the day twice: model exits vs real-premium exits
+    python tools/fetch_option_history.py --date 2026-08-28 --from-log logs/2026-08-28.log
+    python tools/replay_real_premium.py --date 2026-08-28
+
+    # 3) short live paper session against the live feed (real option LTP)
+    python tools/live_smoke_test.py --minutes 12
+
 ## Validation results (be honest with yourself)
 
 The terminal ships with a 2-year NIFTY 5-minute dataset (37,506 bars, Aug 2024 - Aug 2026)

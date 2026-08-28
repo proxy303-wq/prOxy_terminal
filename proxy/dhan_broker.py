@@ -282,6 +282,12 @@ class DhanBroker(Broker):
                 "correlationId": tag or "PrOxy",
             }
             res = self._api.dhan_http.post("/orders", payload)
+        # expose the resolved instrument on the response: the engine stores
+        # security_id on the trade and polls this option's live LTP
+        # (NSE_FNO marketfeed) to price exits on the REAL premium.
+        if isinstance(res, dict):
+            res.setdefault("securityId", int(security_id))
+            res.setdefault("tradingSymbol", trading_symbol)
         return res
 
     def cancel_order(self, order_id):

@@ -123,11 +123,32 @@ class DhanRestFeed:
                     self.access_token = tok
             except Exception:
                 pass
+        # auto-renew / validate (generator machine only): a dead token
+        # would kill the feed on the first 401.  resolve_token_safe uses
+        # the same path as the worker's ensure_token, so the feed stays in
+        # lockstep with the rest of the system.
+        if self.client_id and self.access_token:
+            try:
+                from proxy.dhan_auth import resolve_token_safe
+                tok, _src = resolve_token_safe(self.client_id, notify=notify)
+                if tok:
+                    self.access_token = tok
+            except Exception:
+                pass
         self.poll_interval = poll_interval
         self.timeout = timeout
         self.notify = notify
         self.instruments = [("IDX_I", NIFTY_INDEX_ID), ("IDX_I", BANKNIFTY_INDEX_ID)]
         self.live_ltps = {}           # sid (str) -> last price
+        # REAL option LTP bars (NSE_FNO): polled continuously, finalised
+        # per 5-min bucket so the engine can trigger exits on the ACTUAL
+        # option premium instead of the delta-premium model.
+        #   option_bar_history : sid(str) -> {bucket_min: completed bar}
+        #   _option_accum      : sid(str) -> in-progress bar for the bucket
+        #   _option_bucket     : sid(str) -> bucket of the in-progress bar
+        self.option_bar_history = {}
+        self._option_accum = {}
+        self._option_bucket = {}
         self._ticks = queue.Queue()
         self._thread = None
         self._stop = threading.Event()
@@ -154,9 +175,76 @@ class DhanRestFeed:
         self._stop.set()
 
     def subscribe_option(self, symbol_or_id):
-        """Add an NSE_FNO instrument (security id int) to the poll set."""
+        """Add an NSE_FNO instrument (security id int) to the poll set.
+
+        Idempotent: the engine calls this on every bar while a trade is
+        open, so duplicates must not pile up in the poll list."""
         if isinstance(symbol_or_id, int) and symbol_or_id > 0:
-            self.instruments.append(("NSE_FNO", symbol_or_id))
+            if not any(seg == "NSE_FNO" and str(sid) == str(symbol_or_id)
+                       for seg, sid in self.instruments):
+                self.instruments.append(("NSE_FNO", symbol_or_id))
+
+    # ----------------------------------------------------------
+    # real option LTP bars (the engine's exit source)
+    # ----------------------------------------------------------
+
+    def _accumulate_option(self, sid, price, now):
+        """Roll one real option LTP tick into the 5-min bar for sid.
+
+        When a new bucket starts, the previous bucket's bar is finalised
+        into option_bar_history (high/low/close of the ACTUAL option
+        premium for that 5-minute window)."""
+        bucket = (now.hour * 60 + now.minute) // 5 * 5
+        prev = self._option_bucket.get(sid)
+        if prev is not None and bucket != prev:
+            hist = self.option_bar_history.setdefault(sid, {})
+            hist[prev] = self._option_accum.pop(sid)
+            # keep only the most recent buckets (a trade lives ~minutes)
+            if len(hist) > 12:
+                for k in sorted(hist)[:-8]:
+                    del hist[k]
+        self._option_bucket[sid] = bucket
+        acc = self._option_accum.get(sid)
+        if acc is None:
+            self._option_accum[sid] = {
+                "time": now.replace(minute=bucket % 60, second=0, microsecond=0),
+                "open": price, "high": price, "low": price,
+                "close": price, "volume": 0.0,
+            }
+        else:
+            acc["high"] = max(acc["high"], price)
+            acc["low"] = min(acc["low"], price)
+            acc["close"] = price
+
+    def option_bar(self, security_id, bar_time=None):
+        """The most recent COMPLETED 5-min bar for a subscribed option
+        (NSE_FNO security id), or None when the poller has no bar yet.
+
+        bar_time: the index bar's timestamp.  When given, returns the
+        option bar whose 5-min bucket CONTAINS bar_time - i.e. the exact
+        window the engine is about to evaluate exits for.  Falls back to
+        the newest completed bar when no bucket match exists.
+
+        Returns a copy so callers cannot corrupt the feed's history."""
+        hist = self.option_bar_history.get(str(security_id))
+        if not hist:
+            return None
+        if bar_time is not None:
+            try:
+                if hasattr(bar_time, "hour"):
+                    bucket = (bar_time.hour * 60 + bar_time.minute) // 5 * 5
+                else:
+                    from datetime import datetime as _dt
+                    t = _dt.fromisoformat(str(bar_time))
+                    bucket = (t.hour * 60 + t.minute) // 5 * 5
+                bar = hist.get(bucket)
+                if bar is not None:
+                    return dict(bar)
+                return None
+            except Exception:
+                pass
+        key = max(hist)
+        return dict(hist[key])
 
     # ----------------------------------------------------------
     # poller
@@ -169,6 +257,14 @@ class DhanRestFeed:
                 if prices:
                     self._last_error = None
                     now = datetime.now(IST)
+                    # option bars first: when the engine reads the CLOSED
+                    # index bar, the matching option bar must already be in
+                    # option_bar_history (the index tick is enqueued after
+                    # this pass, so no consumer can see it before the option
+                    # bar is finalised)
+                    for (seg, sid), price in prices.items():
+                        if seg == "NSE_FNO" and price:
+                            self._accumulate_option(str(sid), float(price), now)
                     for (seg, sid), price in prices.items():
                         self.live_ltps[sid] = price
                         self._ticks.put({"ltp": price, "tick_time": now, "security_id": sid})

@@ -225,6 +225,36 @@ def cmd_live(args):
     live_capital = balance["cash"] if live_orders and balance else None
     engine = PaperEngine(cfg, broker=broker, tracker=tracker, notifier=notifier,
                          trade_date=trade_date, capital=live_capital)
+    # REAL premium exits: when the feed is Dhan's REST marketfeed, the
+    # engine polls the traded option's live LTP per bar so lock/target/
+    # stop/time-stop trigger on the ACTUAL option premium.  Bars are
+    # recorded to reports/option_ltp_<date>.csv for offline replays.
+    try:
+        from proxy.dhan_rest_feed import DhanRestFeed as _DRF
+        if isinstance(feed, _DRF):
+            _rec_path = os.path.join(cfg.REPORT_DIR, f"option_ltp_{trade_date}.csv")
+
+            def _opt_src(sid, bar_time):
+                try:
+                    feed.subscribe_option(sid)
+                    bar = feed.option_bar(sid, bar_time)
+                    if bar:
+                        import csv as _csv
+                        _new = not os.path.exists(_rec_path)
+                        with open(_rec_path, "a", newline="", encoding="utf-8") as fh:
+                            w = _csv.writer(fh)
+                            if _new:
+                                w.writerow(["time", "security_id", "open", "high", "low", "close"])
+                            w.writerow([bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"]),
+                                        sid, bar["open"], bar["high"], bar["low"], bar["close"]])
+                    return bar
+                except Exception:
+                    return None
+
+            engine.set_option_ltp_source(_opt_src)
+            print(f"{GR}Real-premium exits armed - polling the traded option's live LTP{R}")
+    except Exception:
+        pass
     try:
         summary = engine.run_feed(feed, live=False)
     except RuntimeError as exc:

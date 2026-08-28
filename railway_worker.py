@@ -224,6 +224,41 @@ def run_trading_day(notifier, trade_date):
     except Exception as exc:
         notifier.log(f"LIVE option chain failed ({exc}) - entries use the model premium", "WARN")
 
+    # REAL premium exits: the engine polls the traded option's live LTP
+    # (NSE_FNO marketfeed) per 5-min bar so lock/target/stop/time-stop
+    # trigger on the ACTUAL option premium, not the delta-premium model.
+    # Bars are also recorded to reports/option_ltp_<date>.csv so the day
+    # can be replayed offline (tools/replay_real_premium.py).
+    try:
+        from proxy.dhan_rest_feed import DhanRestFeed as _DRF
+        if isinstance(feed, _DRF):
+            _rec_path = os.path.join(cfg.REPORT_DIR, f"option_ltp_{trade_date}.csv")
+
+            def _option_ltp_source(sid, bar_time):
+                try:
+                    feed.subscribe_option(sid)
+                    bar = feed.option_bar(sid, bar_time)
+                    if bar:
+                        try:
+                            import csv as _csv
+                            _new = not os.path.exists(_rec_path)
+                            with open(_rec_path, "a", newline="", encoding="utf-8") as fh:
+                                w = _csv.writer(fh)
+                                if _new:
+                                    w.writerow(["time", "security_id", "open", "high", "low", "close"])
+                                w.writerow([bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"]),
+                                            sid, bar["open"], bar["high"], bar["low"], bar["close"]])
+                        except Exception:
+                            pass
+                    return bar
+                except Exception:
+                    return None
+
+            engine.set_option_ltp_source(_option_ltp_source)
+            notifier.log("LIVE real-premium exits armed - engine polls the traded option's LTP per bar", "INFO")
+    except Exception as exc:
+        notifier.log(f"LIVE real-premium exits unavailable ({exc}) - exits use the delta model", "WARN")
+
     # warm-up: seed indicators so signals start on the first live bar.
     # Preferred: TODAY's bars from Dhan's REST charts API (accurate current-day
     # context).  Fallback: recent bars from the shipped warmup CSV.

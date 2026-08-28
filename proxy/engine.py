@@ -84,6 +84,12 @@ class PaperEngine:
         # entries use live premiums/IV instead of the model estimate
         self.chain = None
         self._chain_lookup = {}
+        # REAL option LTP source (optional, set via set_option_ltp_source):
+        # a callable source(security_id, bar_time) -> {open,high,low,close}
+        # for the traded option's CURRENT 5-min bar.  When present, every
+        # exit decision (lock-profit / target / stop / time-stop) triggers
+        # on the ACTUAL option premium instead of the delta-premium model.
+        self.option_ltp_source = None
         # REAL Dhan expiry list (set via set_expiries): entries auto-roll to
         # the upcoming expiry when the current one starts melting
         self.expiries = None
@@ -119,7 +125,12 @@ class PaperEngine:
         if not self.history:
             return None
         df = pd.DataFrame(self.history)
-        df["time"] = pd.to_datetime(df["time"])
+        # normalise bar times to UTC: the CSV loader can produce
+        # FixedOffset datetimes while the live feed carries ZoneInfo IST;
+        # pd.to_datetime rejects a mix of tz-aware types.  The dataframe
+        # index is only used for indicators/signals, never for the
+        # 9:15/15:15 window checks (those use the raw bar dicts).
+        df["time"] = pd.to_datetime(df["time"], utc=True)
         df = df.set_index("time")
         return df
 
@@ -157,6 +168,15 @@ class PaperEngine:
         for row in (chain or {}).get("rows") or []:
             key = (float(row["strike"]), str(row["option_type"]).upper())
             self._chain_lookup[key] = row
+
+    def set_option_ltp_source(self, source):
+        """Plug in a callable source of the traded option's REAL 5-min bar.
+
+        source(security_id, bar_time) -> {"open","high","low","close"} or
+        None.  The live worker wires this to DhanRestFeed.option_bar, which
+        polls the NSE_FNO marketfeed continuously; the engine then prices
+        every exit against the real option premium."""
+        self.option_ltp_source = source
 
     def _chain_premium(self, strike, option_type, sigma):
         """Return (premium, sigma, basis) from the real chain, or the
@@ -265,11 +285,39 @@ class PaperEngine:
         # LONG: stop below entry, target above.  SHORT: the mirror.
         stop_premium = entry - stop_unit if is_long else entry + stop_unit
         target_premium = entry + target_unit if is_long else entry - target_unit
+        # ---- REAL Dhan security id for the traded option: the engine polls
+        # its live LTP (NSE_FNO marketfeed) per bar so exits trigger on the
+        # actual option price.  Primary source is the real chain row (which
+        # carries security_id); fall back to the broker's scrip-master
+        # resolution when the chain has no row (or only in live mode).
+        security_id = None
+        row = self._chain_lookup.get((float(leg.strike), str(leg.option_type).upper()))
+        if row:
+            security_id = row.get("security_id")
+        if not security_id:
+            # exact strike missing from the chain rows: use the nearest
+            # strike of the same type (same option series, sid is what the
+            # marketfeed needs - the engine polls LTP, not the strike)
+            try:
+                _ot = str(leg.option_type).upper()
+                _cands = [r for r in (self.chain or {}).get("rows") or []
+                          if str(r.get("option_type", "")).upper() == _ot and r.get("security_id")]
+                if _cands:
+                    _best = min(_cands, key=lambda r: abs(float(r["strike"]) - float(leg.strike)))
+                    security_id = _best.get("security_id")
+            except Exception:
+                pass
+        if not security_id and getattr(self.broker, "live", False):
+            try:
+                security_id = self.broker.resolve_security_id(leg.instrument)
+            except Exception:
+                security_id = None
         return {
             "instrument": leg.instrument,
             "direction": "LONG" if is_long else "SHORT",
             "option_type": leg.option_type,
             "strike": leg.strike,
+            "security_id": security_id,
             "lots": lots,
             "quantity": qty,
             "entry_premium": entry,
@@ -311,8 +359,16 @@ class PaperEngine:
     # exits
     # ----------------------------------------------------------
 
-    def _check_exits(self, bar, signal, spot):
-        """Return (exit_price, exit_reason) if the trade should close now."""
+    def _check_exits(self, bar, signal, spot, real_bar=None):
+        """Return (exit_price, exit_reason) if the trade should close now.
+
+        real_bar: the traded option's ACTUAL 5-min bar ({open,high,low,
+        close}) polled from Dhan's marketfeed for this bar's window.  When
+        present, lock-profit / target / stop / time-stop all trigger on the
+        REAL option premium (theta is already inside the LTP, so no model
+        decay is applied).  Without it the delta-premium model is the
+        fallback (backtest / replay / feed not yet delivering the option).
+        """
         t = self._active_trade
         entry_premium = t["entry_premium"]
         stop_p = t["stop_premium"]
@@ -320,14 +376,40 @@ class PaperEngine:
         entry_spot = t["entry_spot"]
         is_ce = t["option_type"] == "CE"
 
-        pct_h = (bar["high"] - entry_spot) / entry_spot if entry_spot else 0.0
-        pct_l = (bar["low"] - entry_spot) / entry_spot if entry_spot else 0.0
-        if is_ce:
-            prem_high = entry_premium * (1.0 + premium_move_pct(pct_h, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
-            prem_low = entry_premium * (1.0 + premium_move_pct(pct_l, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+        # ---- REAL option premium path ----
+        real_ok = (
+            bool(real_bar)
+            and float(real_bar.get("close") or 0) > 0
+            and float(real_bar.get("low") or 0) > 0
+            and float(real_bar.get("high") or 0) >= float(real_bar.get("low") or 0)
+        )
+        if real_ok:
+            prem_high = float(real_bar["high"])
+            prem_low = float(real_bar["low"])
+            prem_now = float(real_bar["close"])
+            t["premium_source"] = "real_option_bar"
         else:
-            prem_high = entry_premium * (1.0 + premium_move_pct(pct_l, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
-            prem_low = entry_premium * (1.0 + premium_move_pct(pct_h, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            t["premium_source"] = "delta_model"
+            pct_h = (bar["high"] - entry_spot) / entry_spot if entry_spot else 0.0
+            pct_l = (bar["low"] - entry_spot) / entry_spot if entry_spot else 0.0
+            if is_ce:
+                prem_high = entry_premium * (1.0 + premium_move_pct(pct_h, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+                prem_low = entry_premium * (1.0 + premium_move_pct(pct_l, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            else:
+                prem_high = entry_premium * (1.0 + premium_move_pct(pct_l, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+                prem_low = entry_premium * (1.0 + premium_move_pct(pct_h, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST))
+            pct_now = (bar["close"] - entry_spot) / entry_spot if entry_spot else 0.0
+            move = premium_move_pct(pct_now, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST)
+            prem_now = entry_premium * (1.0 + move) if is_ce else entry_premium * (1.0 - move)
+            # theta decay: LONG options bleed, SHORT options collect.
+            # theta_day_pct is the fraction of premium lost per DAY; per 5m
+            # bar = /75.  Real LTPs already carry theta - never applied twice.
+            theta_bar = float(t.get("theta_day_pct", 0.0) or 0.0) / 75.0
+            if t["direction"] == "LONG":
+                prem_high, prem_low, prem_now = prem_high * (1.0 - theta_bar), prem_low * (1.0 - theta_bar), prem_now * (1.0 - theta_bar)
+            else:
+                prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
+        slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
 
         # --- OpenBull lock-profit / trailing exit management ---
         # Track the best premium reached; once profit >= LOCK_ARM_PCT the
@@ -336,18 +418,6 @@ class PaperEngine:
         # and the GTT stop moves to breakeven (TRAIL_SL_TO_ENTRY).
         lock_on = bool(getattr(self.cfg, "LOCK_PROFIT_ENABLED", False))
         is_long = t["direction"] == "LONG"
-        pct_now = (bar["close"] - entry_spot) / entry_spot if entry_spot else 0.0
-        move = premium_move_pct(pct_now, entry_spot, entry_premium, self.cfg.OPTION_DELTA_EST)
-        prem_now = entry_premium * (1.0 + move) if is_ce else entry_premium * (1.0 - move)
-        slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
-
-        # theta decay: LONG options bleed, SHORT options collect.
-        # theta_day_pct is the fraction of premium lost per DAY; per 5m bar = /75.
-        theta_bar = float(t.get("theta_day_pct", 0.0) or 0.0) / 75.0
-        if t["direction"] == "LONG":
-            prem_high, prem_low, prem_now = prem_high * (1.0 - theta_bar), prem_low * (1.0 - theta_bar), prem_now * (1.0 - theta_bar)
-        else:
-            prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
 
         if lock_on:
             prior_peak = t.get("pnl_peak") or entry_premium
@@ -403,9 +473,6 @@ class PaperEngine:
             if prem_low <= target_p:
                 return target_p, "TARGET_HIT (+1%)"
 
-        # slippage factor on market exits: long sells lower, short buys back higher
-        slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
-
         # time stop
         if self._bar_time(bar) >= FORCE_EXIT_TIME:
             return prem_now * slip, "TIME_STOP (15:15)"
@@ -439,6 +506,7 @@ class PaperEngine:
             **{k: v for k, v in t.items() if k != "unrealized_pnl"},
             "exit_premium": round(exit_price, 2),
             "exit_reason": exit_reason,
+            "premium_source": t.get("premium_source", "delta_model"),
             "exit_time": bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"]),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl / max(t["entry_premium"] * t["quantity"], 1e-9) * 100.0, 3),
@@ -454,7 +522,8 @@ class PaperEngine:
             self.tracker.clear_active_trade()
         except Exception:
             pass
-        self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR", "EXIT")
+        _src = "REAL option LTP" if record.get("premium_source") == "real_option_bar" else "model"
+        self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR | exit priced on {_src}", "EXIT")
         return record
 
     # ----------------------------------------------------------
@@ -484,15 +553,31 @@ class PaperEngine:
             self._active_trade = self.active_trade
             # bars held: drives the UNARMED_TIME_STOP (cut losers that never arm)
             self.active_trade["bars_held"] = int(self.active_trade.get("bars_held") or 0) + 1
-            exit_price, exit_reason = self._check_exits(bar, signal, spot)
+            # REAL option premium for this bar: poll the traded option's
+            # live LTP (NSE_FNO marketfeed) so exits trigger on the actual
+            # option price, not the delta-premium simulation.
+            real_bar = None
+            _sid = self.active_trade.get("security_id")
+            if _sid and self.option_ltp_source is not None:
+                try:
+                    real_bar = self.option_ltp_source(_sid, bar["time"])
+                except Exception:
+                    real_bar = None
+            self.active_trade["real_option_bar"] = real_bar
+            exit_price, exit_reason = self._check_exits(bar, signal, spot, real_bar=real_bar)
             if exit_price is not None:
                 rec = self._close(exit_price, exit_reason, bar)
                 events["exited"] = rec
             else:
                 t = self.active_trade
-                is_ce = t["option_type"] == "CE"
-                pct = (spot - t["entry_spot"]) / t["entry_spot"]
-                prem_now = t["entry_premium"] * (1.0 + premium_move_pct(pct, t["entry_spot"], t["entry_premium"], self.cfg.OPTION_DELTA_EST) * (1 if is_ce else -1))
+                rb = t.get("real_option_bar")
+                if rb and float(rb.get("close") or 0) > 0:
+                    # real premium: mark-to-market at the actual option LTP
+                    prem_now = float(rb["close"])
+                else:
+                    is_ce = t["option_type"] == "CE"
+                    pct = (spot - t["entry_spot"]) / t["entry_spot"]
+                    prem_now = t["entry_premium"] * (1.0 + premium_move_pct(pct, t["entry_spot"], t["entry_premium"], self.cfg.OPTION_DELTA_EST) * (1 if is_ce else -1))
                 t["unrealized_pnl"] = round((prem_now - t["entry_premium"]) * t["quantity"] * (1 if t["direction"] == "LONG" else -1), 2)
 
         # 2) fresh entry
@@ -562,6 +647,11 @@ class PaperEngine:
                                 events["live_order_rejected"] = True
                             else:
                                 plan["broker_order_id"] = res.get("orderId") or res.get("data", {}).get("orderId")
+                                # the broker resolved the exact security it
+                                # filled - use it for real-premium exits
+                                _sid_res = res.get("securityId") or (res.get("data") or {}).get("securityId")
+                                if _sid_res and not plan.get("security_id"):
+                                    plan["security_id"] = int(_sid_res)
                         if not events.get("live_order_rejected"):
                             try:
                                 from .meta_label import features_from_signal
@@ -619,12 +709,17 @@ class PaperEngine:
         if self.active_trade is not None:
             self._active_trade = self.active_trade
             t = self.active_trade
-            pct_now = (float(bar["close"]) - t["entry_spot"]) / t["entry_spot"] if t["entry_spot"] else 0.0
-            move = premium_move_pct(pct_now, t["entry_spot"], t["entry_premium"], self.cfg.OPTION_DELTA_EST)
-            if t["option_type"] == "CE":
-                prem_now = t["entry_premium"] * (1.0 + move)
+            rb = t.get("real_option_bar")
+            if rb and float(rb.get("close") or 0) > 0:
+                # real premium: force-close at the actual option LTP
+                prem_now = float(rb["close"])
             else:
-                prem_now = t["entry_premium"] * (1.0 - move)
+                pct_now = (float(bar["close"]) - t["entry_spot"]) / t["entry_spot"] if t["entry_spot"] else 0.0
+                move = premium_move_pct(pct_now, t["entry_spot"], t["entry_premium"], self.cfg.OPTION_DELTA_EST)
+                if t["option_type"] == "CE":
+                    prem_now = t["entry_premium"] * (1.0 + move)
+                else:
+                    prem_now = t["entry_premium"] * (1.0 - move)
             rec = self._close(prem_now, "DAY_END", bar)
             self.notify(f"DAY END forced close: {rec['instrument']} P&L {rec['pnl']:+,.2f} INR")
 

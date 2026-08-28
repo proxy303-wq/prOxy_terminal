@@ -1,0 +1,18 @@
+[Unit]
+Description=PrOxy Trading Terminal (Streamlit dashboard + supervised worker)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxy
+EnvironmentFile=/opt/proxy/.env
+Environment=PATH=/opt/proxy/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PORT=8080
+ExecStart=/bin/bash /opt/proxy/start.sh
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

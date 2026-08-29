@@ -1,7 +1,7 @@
 import subprocess, sys, time, os
 from datetime import datetime
-PY = sys.executable
-STATUS = r"C:\PrOxyTradingTerminal\.oracle\provision_status.txt"
+PY = os.environ.get("ORACLE_PY", sys.executable)
+STATUS = os.environ.get("ORACLE_STATUS", r"C:\PrOxyTradingTerminal\.oracle\provision_status.txt")
 def log(m):
     line = f"[{datetime.now().isoformat()}] {m}"
     print(line, flush=True)
@@ -9,7 +9,7 @@ def log(m):
         fh.write(line + "\n")
 log("HYD watcher v2 started - 10-min cycles, shapes 1/2/4 OCPU, up to 48h")
 for cycle in range(288):
-    r = subprocess.run([PY, r"C:\PrOxyTradingTerminal\tools\oracle_provision.py"],
+    r = subprocess.run([PY, os.environ.get("ORACLE_PROVISION", r"C:\PrOxyTradingTerminal\tools\oracle_provision.py")],
                        capture_output=True, text=True, timeout=3600)
     out = (r.stdout or "") + (r.stderr or "")
     log(f"cycle {cycle+1}: exit {r.returncode}")

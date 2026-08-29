@@ -13,7 +13,7 @@ from oci.core.models import (CreateVcnDetails, CreateInternetGatewayDetails,
                              CreateSubnetDetails)
 from oci.core.models import UpdateRouteTableDetails as URT
 
-CFG = from_file(r"C:\Users\tgowd\.oci\config")
+CFG = from_file(os.environ.get("ORACLE_CONFIG", r"C:\Users\tgowd\.oci\config"))
 TEN = CFG["tenancy"]
 REGION = os.environ.get("ORACLE_REGION", CFG["region"])
 CFG["region"] = REGION
@@ -99,7 +99,7 @@ print("IMAGE:", img.display_name, flush=True)
 # 8) instance (A1.Flex - retry smaller shapes: ARM capacity in Hyderabad
 #    is often exhausted; 2 OCPU/12GB is still fully Always-Free and enough
 #    for TF + worker + streamlit)
-with open(r"C:\PrOxyTradingTerminal\.oracle\proxy_ed25519.pub") as fh:
+with open(os.environ.get("ORACLE_PUBKEY", r"C:\PrOxyTradingTerminal\.oracle\proxy_ed25519.pub")) as fh:
     pubkey = fh.read().strip()
 # smallest first: 1 OCPU/6GB has the best odds when capacity is scarce
 SHAPES = [(1, 6), (2, 12), (4, 24)]

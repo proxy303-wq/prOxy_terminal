@@ -58,8 +58,10 @@ MAX_TRADES_PER_STRIKE = 2       # allow ONE re-entry on the same strike (trendin
 # RSI alignment gate used by the signal engine: BUY needs RSI > BULL,
 # SELL needs RSI < BEAR.  50/50 = neutral momentum (spec default);
 # 62/38 = stricter "RSI > 70 or < 30 confirms trend strength" reading.
-RSI_ENTRY_GATE_BULL = 50.0
-RSI_ENTRY_GATE_BEAR = 50.0
+# FORCE-OPEN (2026-08-31, user chose full throughput): relaxed to 45/55 so
+# the engine takes more signals (more total P&L, lower per-trade quality).
+RSI_ENTRY_GATE_BULL = 45.0
+RSI_ENTRY_GATE_BEAR = 55.0
 
 # ---- DUAL-TIMEFRAME MOMENTUM GATE (from Robert Miner, "High Probability
 # Trading Strategies", Ch.2 - Table 2.1) ----
@@ -104,10 +106,10 @@ TAPER_FACTOR = 0.8             # risk x 0.8 per step (2.0% -> 1.6% -> 1.28%)
 
 # Trend-strength gate: BUY/SELL only when ADX >= MIN_TREND_ADX (0 = off).
 # The 5/10/20 moving averages already lean this way; ADX adds persistence.
-# Set to 18 on 2026-08-30: walk-forward validation (tools/walk_forward.py,
-# train 2026-01..05 / test 2026-06..08) shows ADX 18 is best on BOTH train
-# (PF 2.71) and held-out test (PF 2.53 vs 2.14 with ADX off) - not curve-fit.
-MIN_TREND_ADX = 18.0
+# FORCE-OPEN (2026-08-31, user chose full throughput): ADX 18 -> 0 = trade
+# every signal (walk-forward had 18 as the ROBUST choice; 0 makes ~2.5x the
+# model P&L at lower PF 2.49->1.82).  Keep 18 for the quality/robust profile.
+MIN_TREND_ADX = 0.0
 
 # --- Time filters (IST) ---
 TRADE_START        = dt_time(9, 15)     # first tradable moment
@@ -296,7 +298,8 @@ SCORE_VOLUME_W   = 0.20
 SCORE_BUY_THRESHOLD  =  0.15
 SCORE_SELL_THRESHOLD = -0.15
 
-MIN_CONFIDENCE_PCT   = 70.0    # "Signal Strength > 70% confidence"
+MIN_CONFIDENCE_PCT   = 60.0    # FORCE-OPEN (2026-08-31): 70 -> 60 = more signals
+                               # ("Signal Strength > 70% confidence" plan rule, relaxed for throughput)
 MIN_SETUP_STRENGTH   = 55.0    # price-action setup strength floor (0-100)
 
 # --- ML prediction layer (LSTM per the research paper) ---

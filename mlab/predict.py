@@ -16,7 +16,9 @@ def _load_model(symbol, horizon, model_name=None):
     """Load the deployed artifact; default to the best model from metadata."""
     import glob
     if model_name is None:
-        cands = glob.glob(os.path.join(MODELS_DIR, symbol + "_" + horizon + "_*_meta.json"))
+        cands = glob.glob(os.path.join(MODELS_DIR, symbol + "_" + horizon + "_dir_*_meta.json"))
+        if not cands:
+            cands = glob.glob(os.path.join(MODELS_DIR, symbol + "_" + horizon + "_*_meta.json"))
         best = None
         for c in cands:
             with open(c, encoding="utf-8") as fh:
@@ -29,10 +31,14 @@ def _load_model(symbol, horizon, model_name=None):
         _, meta_path, meta = best
         model_name = meta["model"]
     else:
-        meta_path = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_" + model_name + "_meta.json")
+        meta_path = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_dir_" + model_name + "_meta.json")
+        if not os.path.exists(meta_path):
+            meta_path = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_" + model_name + "_meta.json")
         with open(meta_path, encoding="utf-8") as fh:
             meta = json.load(fh)
-    artifact = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_" + model_name + ".joblib")
+    artifact = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_dir_" + model_name + ".joblib")
+    if not os.path.exists(artifact):
+        artifact = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_" + model_name + ".joblib")
     if model_name == "gru":
         import tensorflow as tf
         keras_path = os.path.join(MODELS_DIR, symbol + "_" + horizon + "_gru.keras")

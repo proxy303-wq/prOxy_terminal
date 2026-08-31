@@ -121,3 +121,31 @@ The 5-day pilot (08-24..28) is superseded by the full-history experiment:
 the walk-forward comparison price-only vs price+option for every horizon
 and both indices is reported in reports/ml_lab_report*.json / .txt.
 
+
+## VPS / Railway deployment notes
+
+The ML Lab code is committed (mlab/, tests, docs).  What the VPS still needs:
+
+1. **Code + deps**: `requirements.txt` now includes `lightgbm` (and
+   `xgboost`, already present).  No tensorflow needed on the VPS unless you
+   retrain GRU models there (CPU-only; recommended to skip).
+2. **Data** (gitignored, must be provisioned):
+   - `data/NIFTY_5m.csv`, `data/BANKNIFTY_5m.csv` (price history)
+   - `data/options/history/*.csv` - regenerate with
+     `python -m mlab.options_hist` (needs a valid Dhan token) OR copy the
+     95 MB folder from this machine.
+   - Option feature cache rebuilds automatically on first train.
+3. **Models**: `models/ml_lab/` is gitignored.  Either copy the trained
+   artifacts from this machine or retrain on the VPS with
+   `python -m mlab.train --symbol all --horizons all --with-options`.
+4. **Dhan creds**: `DHAN_CLIENT_ID` / access token via the Athena env or
+   the token file (the terminal's existing auth handles this).
+5. **Live use**: `ml-lab --predict` fetches the live option chain from
+   Dhan on the VPS; the snapshot recorder (`ml-lab --record`) accumulates
+   chain history there too.
+
+Sanity check on the VPS after deploy:
+
+    python -m unittest tests.test_mlab -v        # 10 tests
+    python -m mlab.train --symbol nifty --horizons h6 --with-options --quick
+    python run_terminal.py ml-lab --predict nifty,h6

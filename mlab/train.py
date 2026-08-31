@@ -142,13 +142,13 @@ def train_symbol_horizon(symbol, horizon_name, model_types=None, report=None, ve
             model = build_model(m)
         model.fit(X, y)
         if m == "gru":
-            path = os.path.join(MODELS_DIR, f"{symbol}_{horizon_name}_gru.keras")
+            path = os.path.join(MODELS_DIR, f"{symbol}_{horizon_name}_{target}_gru.keras")
             model.model.save(path)
         else:
             path = os.path.join(MODELS_DIR, f"{symbol}_{horizon_name}_{m}.joblib")
             joblib.dump(model, path)
         meta = {
-            "symbol": symbol, "horizon": horizon_name, "model": m,
+            "symbol": symbol, "horizon": horizon_name, "target": target, "model": m,
             "bars_ahead": h_spec["bars"], "minutes_ahead": h_spec["bars"] * 5,
             "min_move": h_spec["min_move"], "trained_at": datetime.now().isoformat(),
             "train_rows": int(len(X)), "feature_cols": feat_cols,
@@ -156,7 +156,7 @@ def train_symbol_horizon(symbol, horizon_name, model_types=None, report=None, ve
             "oos": results[m], "majority_baseline": round(majority_baseline(y) * 100, 2),
             "artifact": path,
         }
-        meta_path = os.path.join(MODELS_DIR, f"{symbol}_{horizon_name}_{m}_meta.json")
+        meta_path = os.path.join(MODELS_DIR, f"{symbol}_{horizon_name}_{target}_{m}_meta.json")
         with open(meta_path, "w", encoding="utf-8") as fh:
             json.dump(meta, fh, indent=2)
         saved.append({"model": m, "artifact": path, "meta": meta_path})
@@ -187,7 +187,7 @@ def train_symbol_horizon(symbol, horizon_name, model_types=None, report=None, ve
         "prob_up": p_all, "label": y_all, "fold": fold_all,
     })
     os.makedirs(REPORT_DIR, exist_ok=True)
-    csv_path = os.path.join(REPORT_DIR, f"oos_{symbol}_{horizon_name}.csv")
+    csv_path = os.path.join(REPORT_DIR, f"oos_{symbol}_{horizon_name}_{target}.csv")
     oos_df.to_csv(csv_path, index=False)
 
     summary = {

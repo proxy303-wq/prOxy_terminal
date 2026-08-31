@@ -373,10 +373,13 @@ SELECT_BY_DELTA = True          # True = auto-pick the best delta-band (ITM bias
 # Lot recommendation bands (lot size 65, premium ~150-200)
 LOTS_CONSERVATIVE = (1, 2)      # 500-1,000 INR daily profit potential
 LOTS_BALANCED     = (3, 5)      # 1,500-2,500 INR daily profit potential
-LOTS_TARGET       = (5, 5)      # the 5-lot operating band for the 6k daily target
-DEFAULT_LOTS      = 5           # 5 lots: stop ~5.4k INR (1.8% of 3L) vs 7-lot ~7.5k; needs 4-5 wins for the 6k target (10-trade cap covers it)
-                                 # (fewer trades = less brokerage; tune to 5-10 as you prefer)
-                                        # (7 lots = churnier; 10+ = full daily target)
+LOTS_TARGET       = (8, 8)      # the 8-lot operating band: uses the FULL 0.5%
+                                 # risk budget (5 lots risked only ~0.32%).
+# DEFAULT_LOTS = 8 since 2026-08-31 (lots A/B, tools/_lots_ab.py): July
+# +16.2k -> +23.1k, June +35.0k -> +52.8k on NIFTY at same PF ~2.5; BANKNIFTY
+# July 5m +48.9k -> +100.3k (PF 1.70 -> 2.25).  Risk/trade stays <= 0.5% of
+# equity (the plan's rule) - the engine was under-sizing at 5 lots.
+DEFAULT_LOTS      = 8
 
 # Option liquidity gates (paper validation)
 MIN_OPTION_VOLUME = 100

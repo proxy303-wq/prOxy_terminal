@@ -445,8 +445,12 @@ class PaperEngine:
         real_entry = None
         if getattr(self.broker, "live", False) and hasattr(self.broker, "get_positions"):
             import time as _t
-            # the position book lags the fill by a beat - retry briefly
-            for _attempt in range(4):
+            # The position book is the AUTHORITATIVE fill but lags by a beat
+            # (Dhan books options fills up-to ~5-10s after the order).  Give
+            # it a generous window so we anchor to the REAL fill, not the
+            # stale chain snapshot.  (2026-08-31: the 4x0.7s retry + a stale
+            # live-LTP fallback anchored a 208.05 entry to a 170.21 fill.)
+            for _attempt in range(20):
                 try:
                     for p in self.broker.get_positions():
                         if int(p.get("netQty") or 0) != 0 \
@@ -460,15 +464,23 @@ class PaperEngine:
                     pass
                 if real_entry:
                     break
-                _t.sleep(0.7)
+                _t.sleep(1.0)
+        # Fallback to the live option LTP, but ONLY if it is a genuinely
+        # FRESH price (materially different from the chain snapshot) - a
+        # value equal to the stale chain LTP is NOT an anchor.
         if not real_entry and self.entry_ltp_fn is not None and plan.get("security_id"):
             try:
                 v = self.entry_ltp_fn(plan["security_id"])
-                if v and float(v) > 0:
+                old = float(plan.get("entry_premium") or 0)
+                if v and float(v) > 0 and abs(float(v) - old) > max(0.5, old * 0.005):
                     real_entry = float(v)
             except Exception:
                 pass
         if not real_entry or real_entry <= 0:
+            self.notify(
+                f"WARN: could not confirm the real fill for {plan.get('instrument')} "
+                f"(position book empty, live LTP unchanged) - booking the chain price.",
+                "TRADE")
             return False
         old_entry = float(plan.get("entry_premium") or 0)
         if old_entry <= 0:

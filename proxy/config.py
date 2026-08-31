@@ -183,6 +183,20 @@ LOCK_TRAIL_STEP_POINTS = 1.0
 SL_MODE = "points"
 TARGET_POINTS = 6.5              # profit target in absolute premium points
 SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R 1.3)
+
+# ---- VOL-SCALED STOP (C. 2026-08-31) ----
+# A fixed 5pt stop on an option premium that swings ±20% intraday is a
+# stop-out ticket inside the noise (Natenberg).  A/B 2026-07/06 (8 lots):
+# the vol-scaled stop made it WORSE - July +23.1k -> +15.1k, June +52.8k ->
+# +38.9k (PF 2.49->2.40 / 2.45->2.32, avgR 0.243->0.163).  The tight scalp +
+# lock-profit machinery IS the edge (small stops arm the lock fast -> 73% win
+# rate); widening the stop gives every winner less R.  So C is OFF by default
+# (the real fix for the "phantom dip" was the real-fill anchor, proxy/engine.py).
+VOL_SCALED_STOP = False
+VOL_SCALED_STOP_BASE_SIGMA = 0.11      # "normal" NIFTY IV - vol below this = no widening
+VOL_SCALED_STOP_FLOOR_PTS = 6.0        # stop never tighter than this (calm days)
+VOL_SCALED_STOP_CAP_PTS = 12.0         # stop never wider than this (no runaway)
+VOL_SCALED_STOP_TARGET_RR = 1.3        # target = stop x R:R (keeps the 1.3 ratio)
 MAXIMALS_HOLDING_BARS = 4        # expected holding window (4 x 5-min bars; sweep: hold 4 best)
 
 # ---- SURESHOT MODE: scale up on high-confidence, trend-aligned signals ----

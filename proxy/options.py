@@ -207,10 +207,24 @@ def select_leg(direction, spot, cfg, lots=None, premium=None, sigma=None, dte=No
         # needed to break even climbs past what the market gives.
         stop_per_unit = float(getattr(cfg, "SL_POINTS", 5.0))
         target_per_unit = float(getattr(cfg, "TARGET_POINTS", 6.5))
+        if getattr(cfg, "VOL_SCALED_STOP", False):
+            # widen the scalp stop with the option's realized vol so it
+            # clears the premium's own intraday noise (Natenberg).  On an
+            # elevated-vol day the fixed 5pt stop is inside the noise and
+            # gets chopped; scale it up and keep the target/stop R:R.
+            _sigma = float(sigma or getattr(cfg, "OPTION_IV_EST", 0.11))
+            _base = max(float(getattr(cfg, "VOL_SCALED_STOP_BASE_SIGMA", 0.11)), 1e-6)
+            _k = max(1.0, _sigma / _base)
+            _floor = float(getattr(cfg, "VOL_SCALED_STOP_FLOOR_PTS", 6.0))
+            _cap = float(getattr(cfg, "VOL_SCALED_STOP_CAP_PTS", 12.0))
+            _rr = float(getattr(cfg, "VOL_SCALED_STOP_TARGET_RR", 1.3))
+            stop_per_unit = min(max(_floor * _k, stop_per_unit), _cap)
+            target_per_unit = stop_per_unit * _rr
         rr = target_per_unit / stop_per_unit if stop_per_unit > 0 else 0.0
         p_target_reach = 0.0
         sl_basis = (f"points target {target_per_unit:g}pt / stop {stop_per_unit:g}pt "
-                    f"(R:R {rr:.2f})")
+                    f"(R:R {rr:.2f})" + (f" | vol-scaled (sigma {_sigma:.2f})"
+                                         if getattr(cfg, "VOL_SCALED_STOP", False) else ""))
     elif sl_mode == "maximals":
         from .maximals import sl_target_from_maximals
         mx = sl_target_from_maximals(

@@ -21,8 +21,9 @@ quality gate -- the same relationship as the reference Athena-X build.
 from dataclasses import dataclass, field
 
 import numpy as np
+import pandas as pd
 
-from .indicators import calculate_indicators, rsi as _rsi
+from .indicators import calculate_indicators, ema as _ema, rsi as _rsi
 from .price_action import analyze_price_action
 
 
@@ -227,6 +228,9 @@ def generate_signal(df, cfg):
     # and must not be overbought/oversold (exhaustion).  Long-only variant:
     #   BUY (call)  needs HTF RSI in (50, 70)
     #   SELL (put)  needs HTF RSI in (30, 50)
+    # Miner's trigger (p. 14): the SMALL time frame must also show the
+    # momentum reversal - fast EMA crossing the slow EMA in the signal
+    # direction (alignment; optionally a cross within the last N bars).
     momentum_ok = True
     if getattr(cfg, "MOMENTUM_FILTER_ENABLED", False):
         try:
@@ -239,11 +243,31 @@ def generate_signal(df, cfg):
                 _rsi_htf = float(_rsi(pd.Series(_htf), _htf_period).iloc[-1])
                 _ob = float(getattr(cfg, "HTF_RSI_OB", 70.0))
                 _os = float(getattr(cfg, "HTF_RSI_OS", 30.0))
-                if direction_out == "BUY":
+                if direction == "BUY":
                     momentum_ok = 50.0 < _rsi_htf < _ob
-                elif direction_out == "SELL":
+                elif direction == "SELL":
                     momentum_ok = _os < _rsi_htf < 50.0
+                # Miner's small-frame momentum reversal: fast/slow EMA cross
+                _fast = int(getattr(cfg, "MOMENTUM_CROSS_FAST", 0))
+                _slow = int(getattr(cfg, "MOMENTUM_CROSS_SLOW", 0))
+                if momentum_ok and _fast > 0 and _slow > _fast:
+                    _ef = float(_ema(df["close"], _fast).iloc[-1])
+                    _es = float(_ema(df["close"], _slow).iloc[-1])
+                    if direction == "BUY":
+                        momentum_ok = _ef > _es
+                    else:
+                        momentum_ok = _ef < _es
+                    _within = int(getattr(cfg, "MOMENTUM_CROSS_WITHIN_BARS", 0))
+                    if momentum_ok and _within > 0:
+                        ef = df["close"].ewm(span=_fast, adjust=False).mean()
+                        es = df["close"].ewm(span=_slow, adjust=False).mean()
+                        sign = np.sign(ef - es)
+                        crossed = (sign != sign.shift(1)).fillna(False)
+                        momentum_ok = bool(crossed.tail(_within).any())
         except Exception:
+            import os as _os
+            if _os.environ.get("PROXY_DEBUG_GATE"):
+                raise
             momentum_ok = True
 
     direction_out = direction

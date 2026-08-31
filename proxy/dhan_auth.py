@@ -123,7 +123,7 @@ def load_api_keypair(path=API_KEY_FILE):
 def load_saved_token(path=TOKEN_FILE):
     try:
         if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, "r", encoding="utf-8-sig") as fh:
                 token = fh.read().strip()
                 if token:
                     return token
@@ -274,13 +274,25 @@ def validate_token(client_id, token):
     """Ask Dhan whether the token is actually accepted (catches corrupted
     copies that pass structural checks but fail DH-906).
 
-    Uses the official dhanhq SDK (get_fund_limits) - the raw REST call can
-    false-negative on valid tokens, so the SDK is the source of truth."""
+    Tries the official dhanhq SDK (get_fund_limits) first; if the SDK is not
+    installed or that endpoint misbehaves, falls back to a lightweight raw
+    REST ping (/v2/optionchain/expirylist) - a 200 with status success is
+    sufficient proof the token works for market data."""
     try:
         from dhanhq import DhanContext, dhanhq
         client = dhanhq(DhanContext(client_id, token))
         r = client.get_fund_limits()
-        return bool(r and r.get('status') == 'success')
+        if r and r.get('status') == 'success':
+            return True
+    except Exception:
+        pass
+    try:
+        data = _http_json(f"{API_BASE}/optionchain/expirylist", method="POST",
+                          headers={"Content-Type": "application/json",
+                                   "Accept": "application/json",
+                                   "access-token": token, "client-id": client_id},
+                          data={"UnderlyingScrip": 13, "UnderlyingSeg": "IDX_I"})
+        return bool(data and data.get("status") == "success")
     except Exception:
         return False
 

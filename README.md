@@ -186,6 +186,75 @@ streamlit run streamlit_app.py       # the multi-tab dashboard
 python railway_worker.py             # paper trading loop (signals + Telegram)
 ```
 
+## Crypto module - same strategy on Delta Exchange perps
+
+The terminal now ships a first-class crypto counterpart of the NIFTY engine
+(`proxy/crypto_engine.py`): the SAME signal pipeline, exits (lock-profit
+trailing), risk rules (0.5%/trade, 1% daily halt, 5% monthly halt) and
+sizing, running on perp price as a delta-1 "premium".
+
+```bash
+python run_terminal.py crypto backtest --symbols BTCUSDT,ETHUSDT --session ist --period 2026-07
+python run_terminal.py crypto compare          # full NIFTY-vs-crypto head-to-head (July 2026 report in reports/)
+python run_terminal.py crypto account          # Delta balance / positions / orders
+```
+
+Two session variants per symbol: `ist` (faithful NIFTY clock 9:15-14:45 IST,
+force-exit 15:15) and `247` (crypto-native, force-exit 23:55 UTC).
+
+**Head-to-head result (July 2026, same strategy, same ₹5L, same rules):**
+NIFTY +7.5% (PF 1.82, win 64%) vs every crypto variant **−4% to −5.3%**
+(PF ≤ 0.43, win ≤ 36%; three of four hit the monthly loss halt). The edge
+lives in the index's structure, option delta-leverage and the IST session
+clock - it does not survive the transplant to a 24/7 delta-1 perp. Full
+report: `reports/CRYPTO_VS_NIFTY_JULY_2026.md` and
+`reports/crypto_compare_july2026.json`. See `docs/BACKTEST_HONESTY.md` for
+the caveats (5m vs 1m exit resolution, single month, model premiums).
+
+**Delta India account (verified working 2026-08-30):**
+
+- Market data is public (no key): `DeltaFeed.candles()/tickers()`.
+- Account/orders use the keys in `.env` (gitignored - never commit):
+  `DELTA_API_KEY` / `DELTA_API_SECRET`. The India platform trades INVERSE
+  perps (`BTCUSD` id 27, `ETHUSD` id 3136); `BTCUSDT`/`ETHUSDT` names in the
+  engine resolve to their inverse twins automatically.
+- Auth is `HMAC-SHA256(secret, METHOD + unix_seconds + path + body)` with
+  headers `api-key`/`timestamp`/`signature` against
+  `https://api.india.delta.exchange`; the broker auto-resyncs its clock when
+  Delta rejects a stale signature.
+- Costs assumed: taker 0.05%/side + slippage 0.05%/side (env-overridable
+  `CRYPTO_TAKER_FEE`, `CRYPTO_SLIPPAGE`); FX `CRYPTO_FX_INR_USD` (default 83).
+
+**Live trading TODO (not yet enabled):** the engine's P&L model is linear
+(USDT-perp style, matching the backtest data); Delta India's inverse perps
+settle in BTC - wire the settlement conversion before real orders.
+`railway_crypto_worker.py` runs the paper loop 24/7 (Procfile
+`crypto-worker`); flip to live only after the inverse-perp P&L is correct.
+
+## Running BOTH platforms together (NIFTY + crypto, one Telegram feed)
+
+Both workers are always-on loops that post to the SAME Telegram chat:
+
+| Platform | Worker | Process (Procfile) | Signals on Telegram |
+|---|---|---|---|
+| NIFTY options (Dhan) | `railway_worker.py` | `worker` (inside start.sh) | ENTRY / EXIT / DAY SUMMARY |
+| Crypto perps (Delta India) | `railway_crypto_worker.py` | `crypto-worker` | ENTRY [CRYPTO] / EXIT [CRYPTO] / DAY SUMMARY [CRYPTO] |
+
+Setup:
+1. **Telegram** - `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` (already used by
+   the NIFTY worker; the crypto worker uses the same chat).
+2. **Crypto capital** - `CRYPTO_CAPITAL_INR` (default 300,000) splits your
+   book: e.g. 3L crypto + the rest on NIFTY. The crypto engine's risk rules
+   (0.5%/trade, 1% daily / 5% monthly halts) apply to that allocation.
+3. **Symbols / session** - `CRYPTO_WORKER_SYMBOLS=BTCUSD,ETHUSD`,
+   `CRYPTO_WORKER_SESSION=247` (24/7) or `ist` (NIFTY clock).
+4. Deploy once: both processes run from the same `Procfile` (`web`,
+   `crypto-worker`); the NIFTY `worker` is supervised inside `start.sh`.
+
+Both sides report in INR; the crypto side converts at `CRYPTO_FX_INR_USD`
+(default 83). Day summaries from both workers give you the combined book on
+one Telegram thread.
+
 ## Paper vs live
 
 `LIVE_TRADING` = False in `proxy/config.py` — everything runs on a paper
@@ -382,6 +451,74 @@ the backtest after each change):
 
 When the backtest shows **win rate ≥ 40% with profit factor ≥ 1.1 for a full
 month**, paper-trade it for another month, then consider the 5-10 lot scale-up.
+
+
+## ML Lab - NIFTY & BANKNIFTY movement prediction
+
+A research pipeline (`mlab/`) that trains walk-forward-validated models to
+forecast index direction over 5m/15m/30m/60m horizons, informed by the
+downloaded papers (Gupta et al. IJRTE 2021 on NIFTY+option-chain horizons;
+Ukhalkar et al. 2025 on BankNifty ML) and the project's trading books
+(Aronson's evidence-based validation, Volman's 5-min price action, Williams'
+seasonality). Full details: [docs/ML_LAB.md](docs/ML_LAB.md).
+
+**Results (5-fold expanding walk-forward, strictly out-of-sample):**
+
+| Symbol | Horizon | Best model | OOS acc | Majority | AUC | perm-p |
+|---|---|---|---|---|---|---|
+| NIFTY | 5 min | XGB/Ensemble | 50.9% | 50.3% | 0.512 | 0.005 |
+| NIFTY | 15 min | Ensemble | 51.1% | 50.1% | 0.514 | 0.005 |
+| NIFTY | **30 min** | **XGBoost** | **51.7%** | 50.2% | 0.521 | 0.005 |
+| NIFTY | 60 min | - | 50.3% | 50.6% | 0.500 | 0.23 (no edge) |
+| BANKNIFTY | 5 min | Ensemble | 51.0% | 50.1% | 0.516 | 0.010 |
+| BANKNIFTY | 15 min | XGBoost | 51.5% | 50.4% | 0.516 | 0.005 |
+| BANKNIFTY | **30 min** | **XGBoost** | **52.1%** | 50.1% | 0.523 | 0.005 |
+| BANKNIFTY | 60 min | LightGBM | 51.6% | 50.0% | 0.519 | 0.005 |
+
+Key findings:
+
+- **30 minutes is the sweet spot for both indices** (mirrors paper 1, where
+  accuracy rose with horizon to 25-30 min). NIFTY 60-min degrades to noise
+  (mean-reversion), BANKNIFTY 60-min keeps a small edge.
+- Edges are small but **statistically significant** (permutation p <= 0.01).
+  Paper 1 reached ~70% at 30 min only with option-chain features (PCR of
+  volume); price-only data caps us around 51-52% - the honest ceiling here.
+- **Confident signals beat the average**: P(up)<=0.40 short calls hit 53.0%
+  (NIFTY) / 53.6% (BANKNIFTY); calibration is monotonic (realized up-rate
+  rises from 22% at P=0.05 to 56% at P=0.95 for NIFTY h6).
+- **The first hour (09:15-10:15) is where the edge is strongest**: 54.1%
+  (NIFTY) / 53.7% (BANKNIFTY) 30-min accuracy vs ~51.5% midday - consistent
+  with the paper's observation that the opening hours carry the signal.
+- GRU (deep learning) matches but does not beat the gradient-boosted trees
+  on this data; the ensemble of LightGBM+XGBoost is the workhorse.
+
+Usage:
+
+```bash
+python run_terminal.py ml-lab                     # (re)train all models + report
+python run_terminal.py ml-lab --predict nifty,h6  # live forecast (advisory)
+python run_terminal.py ml-lab --predict banknifty,h3
+python -m mlab.train --symbol all --horizons all  # full training CLI
+python -m mlab.analyze nifty h6                   # where the edge lives
+```
+
+Deployed artifacts in `models/ml_lab/` (best model + ensemble per symbol &
+horizon), OOS prediction series in `reports/oos_<symbol>_<horizon>.csv`.
+
+
+Deployed artifacts in `models/ml_lab/` (best model + ensemble per symbol &
+horizon), OOS prediction series in `reports/oos_<symbol>_<horizon>.csv`.
+
+**Option-chain data (Dhan) - pilot + live recorder.** Dhan gives the full
+live chain (LTP/OI/volume/IV) but only ~5 days of option history. We built
+the paper-1 feature set (PCR-volume, ATM IV/skew, premium flow) on those 5
+days: in a leave-one-day-out pilot at the 30-min horizon the option features
+were actively used and nudged accuracy from 59.5% -> 59.8% (tiny sample,
+indicative only). The `ml-lab --record` command now snapshots the full chain
+every 5 min during market hours into `data/options/live_chain_history/` -
+after a few weeks that data enables a proper retrain with option features.
+`ml-lab --predict` already prints the live PCR/IV/skew/support-resistance
+readout next to the forecast.
 
 ## Risk warning
 

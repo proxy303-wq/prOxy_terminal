@@ -277,6 +277,69 @@ def cmd_live(args):
 
 
 
+def cmd_crypto(args):
+    """Crypto module: Delta Exchange perps (same strategy, different platform)."""
+    from proxy.crypto_engine import (run_crypto_backtest, run_compare,
+                                     DeltaExchangeBroker, DeltaConfigError)
+    banner()
+    action = args.action
+
+    if action == "account":
+        try:
+            b = DeltaExchangeBroker()
+            print(f"{MG}Delta India account (keys from .env){R}")
+            for r in b.get_balance():
+                if float(r.get("balance") or 0) != 0:
+                    print(f"  {r.get('asset_symbol','?'):8s} balance {r.get('balance')}  "
+                          f"avail {r.get('available_balance')}  INR {r.get('available_balance_inr')}")
+            print(f"  open positions: {len(b.get_positions())}")
+            print(f"  open orders   : {len(b.get_orders(state='open'))}")
+        except DeltaConfigError as e:
+            print(f"{RED}  {e}{R}")
+        return
+
+    if action == "compare":
+        out, out_json = run_compare(period=args.period,
+                                    symbols=tuple(s.strip() for s in args.symbols.split(",")),
+                                    no_fetch=args.no_fetch)
+        _print_crypto_compare(out)
+        print(f"\n  Saved: {out_json}")
+        return
+
+    # backtest (default)
+    for sym in [s.strip() for s in args.symbols.split(",")]:
+        bt, rep = run_crypto_backtest(sym, session=args.session, period=args.period,
+                                      no_fetch=args.no_fetch)
+        print(f"{MG}{rep['label']} ({rep['session']}){R}: {rep['trades']} trades, "
+              f"win {rep['win_rate']}%, net {rep['net_pnl_inr']:+,.2f} INR "
+              f"({rep['net_pct']:+.2f}%), PF {rep['profit_factor']}, "
+              f"expectancy {rep.get('expectancy', {}).get('avg_r', 'n/a')}R")
+
+
+def _print_crypto_compare(out):
+    """Print the NIFTY-vs-crypto head-to-head table."""
+    print(f"""
+  {B}CRYPTO VS NIFTY - {out['period']} (same strategy, same capital, same rules){R}
+  FX {out['fx_inr_per_usd']} INR/USD | taker {out['assumptions']['taker_fee_per_side']*100:.2f}%/side | slip {out['assumptions']['slippage_per_side']*100:.2f}%/side
+  levels: {out['assumptions']['levels']} | lock-profit ON | 0.5%/trade, 1% daily, 5% monthly halts
+  """)
+    hdr = f"  {'Platform':52s} {'Trd':>4s} {'Win%':>6s} {'Net INR':>11s} {'%':>7s} {'PF':>5s} {'AvgR':>6s}"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+    for side in ("nifty", "crypto"):
+        for key, rep in out[side].items():
+            label = rep.get("label") or key
+            if side == "nifty":
+                net = rep["net_pnl"]; pct = net / 500000 * 100.0
+            else:
+                net = rep["net_pnl_inr"]; pct = rep["net_pct"]
+            avg_r = (rep.get("expectancy") or {}).get("avg_r")
+            print(f"  {label:52s} {rep['trades']:4d} {rep['win_rate']:5.1f}% "
+                  f"{net:>+12,.0f} {pct:>+7.2f}% {str(rep['profit_factor']):>5s} "
+                  f"{avg_r if avg_r is not None else '':>6}")
+    print("  (⛔ = hit the -5% monthly loss halt; NIFTY net is INR, crypto converted at FX)")
+
+
 def cmd_backtest(args):
     banner()
     from proxy.backtest import Backtest
@@ -648,6 +711,60 @@ def cmd_ml_train_meta(args=None):
     print(f"\n  {B}META MODEL READY{R} - {meta}")
     print(f"  Advisory layer active; META_CONFIRM in config.py makes it a gate.")
 
+def cmd_ml_lab(args=None):
+    """Train / predict with the ML Lab (NIFTY & BANKNIFTY movement models)."""
+    banner()
+    if getattr(args, "predict", None):
+        symbol, horizon = args.predict.split(",")
+        symbol, horizon = symbol.strip().lower(), horizon.strip().lower()
+        print(f"{MG}ML Lab live prediction: {symbol.upper()} over {horizon}{R}\n")
+        from proxy.data import load_csv
+        from mlab.predict import predict
+        nifty = load_csv(os.path.join(cfg.DATA_DIR, "NIFTY_5m.csv"))
+        bank = load_csv(os.path.join(cfg.DATA_DIR, "BANKNIFTY_5m.csv"))
+        res = predict(symbol, horizon, nifty, bank)
+        print(f"  as of ........... {res['as_of']}")
+        print(f"  direction ....... {res['direction']}  (P(up) = {res['prob_up']}%)")
+        print(f"  confidence ...... {res['confidence']}")
+        print(f"  horizon ......... next {res['bars_ahead']} bar(s) = {res['minutes_ahead']} min")
+        print(f"  model ........... {res['model']}  (trained {res['trained_at']})")
+        print(f"  OOS accuracy .... {res['oos_accuracy']}%  AUC {res['oos_auc']}  "
+              f"conf-hit {res['oos_conf_acc']}%")
+        try:
+            from mlab.options_live import live_features_for
+            opt = live_features_for(symbol)
+            if opt:
+                print(f"\n  Option chain (Dhan live):")
+                print(f"    PCR volume ... {opt.get('pcr_vol')}   PCR OI ..... {opt.get('pcr_oi')}")
+                print(f"    ATM IV CE .... {opt.get('atm_iv_ce')}   ATM IV PE .. {opt.get('atm_iv_pe')}   skew {opt.get('iv_skew')}")
+                print(f"    resistance ... {opt.get('resistance_dist_pct')}% from spot (max CE OI {opt.get('max_ce_oi_strike')})")
+                print(f"    support ...... {opt.get('support_dist_pct')}% from spot (max PE OI {opt.get('max_pe_oi_strike')})")
+        except Exception:
+            pass
+        print(f"\n  {YE}Advisory only - ML direction is not a trade signal.{R}")
+        print(f"  {YE}Option-chain features are NOT yet in the model - the live recorder{ R}\n"
+              f"     (ml-lab --record) accumulates the data to add them at next retrain.{R}")
+        return
+    if getattr(args, "record", False):
+        print(f"{MG}ML Lab option-chain recorder - snapshots every 5 min during market hours{R}\n")
+        print(f"  Appends to data/options/live_chain_history/chain_<date>.csv - the")
+        print(f"  training data for adding option features at the next retrain (paper-1 style).")
+        print(f"  Ctrl+C to stop.\n")
+        from mlab.options_live import record_loop
+        record_loop(duration_minutes=getattr(args, "minutes", 375))
+        return
+    print(f"{MG}Training ML Lab models for NIFTY & BANKNIFTY (walk-forward)...{R}\n")
+    from mlab.train import main as mlab_train
+    from mlab.report import build_report
+    mlab_train(["--symbol", getattr(args, "symbol", "all"),
+                "--horizons", getattr(args, "horizons", "all")] +
+               (["--models", args.models] if getattr(args, "models", None) else []))
+    path = build_report()
+    print(f"\n  {GR}Report: {path}{R}")
+    print(f"  Models in models/ml_lab/ - predict with: "
+          f"python run_terminal.py ml-lab --predict nifty,h3")
+
+
 
 def cmd_menu():
     banner()
@@ -754,11 +871,31 @@ def main():
     p.add_argument("--model", choices=["xgboost", "gb"], default="xgboost")
     p.add_argument("--days", type=int, default=120)
     p.set_defaults(func=cmd_ml_train_meta)
+    p = sub.add_parser("ml-lab")
+    p.add_argument("--symbol", choices=["nifty", "banknifty", "all"], default="all")
+    p.add_argument("--horizons", default="all", help="comma list h1,h3,h6,h12 or all")
+    p.add_argument("--models", default=None, help="comma list lgbm,xgb,mlp,gru")
+    p.add_argument("--predict", default=None, help="symbol,horizon e.g. nifty,h3")
+    p.add_argument("--record", action="store_true",
+                   help="record live option-chain snapshots every 5 min (accumulate training data)")
+    p.add_argument("--minutes", type=int, default=375, help="recorder duration in minutes")
+    p.set_defaults(func=cmd_ml_lab)
     p = sub.add_parser("chain")
     p.add_argument("--spot", type=float, default=None)
     p.add_argument("--expiry", type=str, default=None,
                    choices=["current_week", "next_week", "current_month", "next_month"])
     p.set_defaults(func=cmd_chain)
+
+    p = sub.add_parser("crypto")
+    p.add_argument("action", nargs="?", default="backtest",
+                   choices=["backtest", "compare", "account"],
+                   help="backtest = one symbol; compare = full NIFTY-vs-crypto; account = Delta balance/positions")
+    p.add_argument("--symbols", default="BTCUSDT", help="comma list, e.g. BTCUSDT,ETHUSDT")
+    p.add_argument("--session", default="ist", choices=["ist", "247"],
+                   help="ist = NIFTY clock (9:15-14:45 IST), 247 = crypto-native all day")
+    p.add_argument("--period", default="2026-07", help="YYYY-MM backtest window")
+    p.add_argument("--no-fetch", action="store_true", help="reuse cached candle CSVs")
+    p.set_defaults(func=cmd_crypto)
 
     args = parser.parse_args()
     if hasattr(args, "func"):

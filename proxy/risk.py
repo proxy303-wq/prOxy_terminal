@@ -43,7 +43,27 @@ def current_equity(state, cfg):
 
 
 def risk_budget(state, cfg):
-    return current_equity(state, cfg) * cfg.RISK_PER_TRADE_PCT
+    """Risk budget for the next trade: 0.5% of equity by default, tapered
+    down 20% per 10% of drawdown from the equity peak (Turtle rule, Faith
+    pp. 92-93) when cfg.RISK_DD_TAPER is on.  Restores as equity recovers."""
+    pct = float(cfg.RISK_PER_TRADE_PCT)
+    if getattr(cfg, "RISK_DD_TAPER", False):
+        step = float(getattr(cfg, "TAPER_STEP_PCT", 10.0))
+        factor = float(getattr(cfg, "TAPER_FACTOR", 0.8))
+        if step > 0:
+            equity = current_equity(state, cfg)
+            peak = equity
+            for pt in state.get("equity_curve", []):      # end-of-day points
+                try:
+                    peak = max(peak, float(pt[1]))
+                except Exception:
+                    pass
+            if peak > 0:
+                dd_pct = (peak - equity) / peak * 100.0
+                steps = int(dd_pct // step)
+                if steps > 0:
+                    pct *= factor ** steps
+    return current_equity(state, cfg) * pct
 
 
 def position_size(risk_budget_amount, entry, stop, cfg, lot_size=None):

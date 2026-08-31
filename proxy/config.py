@@ -70,17 +70,44 @@ RSI_ENTRY_GATE_BEAR = 50.0
 #   HTF Bear & not OS  -> only bearish-direction trades (long PUTs)
 #   HTF Bear & OS      -> no new bearish-direction trades
 # HTF momentum = RSI on closes aggregated by HTF_MOMENTUM_BARS (3x5m=15m).
-# OFF by default until validated against the real-premium baseline
-# (tools/replay_real_premium.py).
+# Miner's trigger (p. 14): the SMALL time frame must show a momentum
+# reversal in the HTF direction - a fast/slow EMA cross on the 5m chart
+# (MOMENTUM_CROSS_FAST/SLOW), not just an HTF RSI band.
+# A/B (tools/strat_ab.py, Jul+Jun 2026): alignment mode cuts ~30% of trades
+# (Jul PF flat 1.82, Jun PF 2.60->2.75, avgR 0.145->0.157) at ~40% lower
+# total profit; combined with the lunch filter it collapses to 15-47
+# trades/month (statistically meaningless).  OFF by default; enable for the
+# strict Miner mode.  (The gate was dead code - missing `import pandas` -
+# until 2026-08-30; enabling it now actually filters.)
 MOMENTUM_FILTER_ENABLED = False
 HTF_MOMENTUM_BARS = 3          # 5m bars per HTF bar (3 = 15m)
 HTF_MOMENTUM_RSI_PERIOD = 14   # RSI period on the aggregated HTF closes
 HTF_RSI_OB = 70.0              # HTF overbought (no new longs)
 HTF_RSI_OS = 30.0              # HTF oversold (no new shorts/long-puts)
+MOMENTUM_CROSS_FAST = 5        # fast EMA period on the 5m closes
+MOMENTUM_CROSS_SLOW = 13       # slow EMA period (Miner: 13 = happy medium)
+MOMENTUM_CROSS_WITHIN_BARS = 0 # 0 = alignment only; N = cross must be within N bars
+
+# ---- LUNCH DOLDRUMS FILTER (Volman, "Understanding Price Action",
+# pp. 182/184): the 12:00-14:00 lunch lull is a graveyard of dead setups.
+# No NEW entries inside the window (open trades keep their exits).
+LUNCH_DOLDRUMS_ENABLED = True
+LUNCH_DOLDRUMS_START = dt_time(12, 0)
+LUNCH_DOLDRUMS_END = dt_time(14, 0)
+
+# ---- TURTLE DRAWDOWN TAPER (Faith, "The Complete Turtle Trader",
+# pp. 92-93): cut risk per trade 20% for every 10% drawdown from the
+# equity peak, restore automatically as equity recovers.
+RISK_DD_TAPER = True
+TAPER_STEP_PCT = 10.0          # one taper step per 10% drawdown
+TAPER_FACTOR = 0.8             # risk x 0.8 per step (2.0% -> 1.6% -> 1.28%)
 
 # Trend-strength gate: BUY/SELL only when ADX >= MIN_TREND_ADX (0 = off).
 # The 5/10/20 moving averages already lean this way; ADX adds persistence.
-MIN_TREND_ADX = 0.0
+# Set to 18 on 2026-08-30: walk-forward validation (tools/walk_forward.py,
+# train 2026-01..05 / test 2026-06..08) shows ADX 18 is best on BOTH train
+# (PF 2.71) and held-out test (PF 2.53 vs 2.14 with ADX off) - not curve-fit.
+MIN_TREND_ADX = 18.0
 
 # --- Time filters (IST) ---
 TRADE_START        = dt_time(9, 15)     # first tradable moment

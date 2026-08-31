@@ -133,6 +133,18 @@ class Backtest:
         t = bar["time"]
         return t.time() if hasattr(t, "time") else pd.Timestamp(t).time()
 
+    def _in_lunch(self, bar):
+        """Volman's lunch-doldrums filter (pp. 182/184): no NEW entries in
+        the 12:00-14:00 window (open trades keep their exits)."""
+        if not getattr(self.cfg, "LUNCH_DOLDRUMS_ENABLED", False):
+            return False
+        start = getattr(self.cfg, "LUNCH_DOLDRUMS_START", None)
+        end = getattr(self.cfg, "LUNCH_DOLDRUMS_END", None)
+        if start is None or end is None:
+            return False
+        t = self._bar_time(bar)
+        return start <= t < end
+
     def _premium_proxy(self, trade, bar):
         """Premium high/low/close proxy for one (1m or 5m) bar."""
         entry_premium = trade["entry_premium"]
@@ -248,7 +260,7 @@ class Backtest:
                 last_signal = signal
 
                 # ---- 3) fresh entry ----
-                if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and signal is not None and signal.direction in ("BUY", "SELL"):
+                if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and not self._in_lunch(bar)                         and signal is not None and signal.direction in ("BUY", "SELL"):
                     spot = float(bar["close"])
                     try:
                         from .maximals import annualized_from_per_bar, vol_per_bar_from_closes
@@ -468,6 +480,8 @@ class Backtest:
             "profit_factor": round(gross_win / gross_loss, 2) if gross_loss > 0 else None,
             "avg_win": round(gross_win / len(wins), 2) if wins else 0.0,
             "avg_loss": round(gross_loss / len(losses), 2) if losses else 0.0,
+            "expectancy": self.r_stats(trades),
+            "setup_stats": self.setup_stats(trades),
             "max_drawdown_pct": round(max_dd, 2),
             "daily_pnl": self.daily_pnl,
             "monthly_target_rs": round(self.cfg.CAPITAL * self.cfg.MONTHLY_TARGET_PCT, 2),
@@ -490,6 +504,65 @@ class Backtest:
         for t in trades:
             counts[t["exit_reason"]] = counts.get(t["exit_reason"], 0) + 1
         return counts
+
+    # ----------------------------------------------------------
+    # R-multiple / expectancy stats (Tharp, "Trade Your Way to
+    # Financial Freedom"): every trade expressed in R, where
+    # R = the planned risk of that trade (risk_rs, INR).  A 2R win
+    # is worth twice the planned risk; expectancy in R is the mean.
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def r_stats(trades):
+        """R-multiple stats across trades. Returns {} when no trade
+        carries a planned-risk figure."""
+        rs = [t for t in trades if t.get("risk_rs") and t["risk_rs"] > 0]
+        if not rs:
+            return {}
+        r = [t["pnl"] / t["risk_rs"] for t in rs]
+        wins = [x for x in r if x > 0]
+        losses = [x for x in r if x <= 0]
+        n = len(r)
+        mean_r = float(np.mean(r))
+        std_r = float(np.std(r, ddof=1)) if n > 1 else 0.0
+        # Chan significance gate (p. 17): t = mean/std * sqrt(n);
+        # |t| >= 2.326 rejects "no edge" at p < 0.01.
+        t_stat = (mean_r / std_r * np.sqrt(n)) if std_r > 0 else 0.0
+        return {
+            "trades_with_r": n,
+            "avg_r": round(mean_r, 3),
+            "median_r": round(float(np.median(r)), 3),
+            "avg_r_win": round(float(np.mean(wins)), 3) if wins else 0.0,
+            "avg_r_loss": round(float(np.mean(losses)), 3) if losses else 0.0,
+            "expectancy_inr_per_trade": round(float(np.mean([t["pnl"] for t in rs])), 2),
+            "total_r": round(float(np.sum(r)), 3),
+            "r_win_rate": round(len(wins) / n * 100.0, 1) if rs else 0.0,
+            "t_stat": round(float(t_stat), 2),
+            "significance": "p<0.01" if abs(t_stat) >= 2.326 else (
+                "p<0.05" if abs(t_stat) >= 1.96 else "not significant"),
+        }
+
+    @staticmethod
+    def setup_stats(trades):
+        """Per-setup-type performance (Volman audit hook): every setup's
+        trade count, win rate, average R and net P&L."""
+        by_setup = {}
+        for t in trades:
+            key = t.get("setup_type") or "none"
+            by_setup.setdefault(key, []).append(t)
+        out = {}
+        for key, ts in sorted(by_setup.items()):
+            wins = [t for t in ts if t["pnl"] > 0]
+            rs = [t for t in ts if t.get("risk_rs") and t["risk_rs"] > 0]
+            avg_r = round(float(np.mean([t["pnl"] / t["risk_rs"] for t in rs])), 3) if rs else None
+            out[key] = {
+                "trades": len(ts),
+                "wins": len(wins),
+                "win_rate": round(len(wins) / len(ts) * 100.0, 1) if ts else 0.0,
+                "avg_r": avg_r,
+                "net_pnl": round(sum(t["pnl"] for t in ts), 2),
+            }
+        return out
 
     def save_report(self, report, name="backtest_report"):
         os.makedirs(REPORT_DIR, exist_ok=True)

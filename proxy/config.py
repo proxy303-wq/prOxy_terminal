@@ -106,10 +106,11 @@ TAPER_FACTOR = 0.8             # risk x 0.8 per step (2.0% -> 1.6% -> 1.28%)
 
 # Trend-strength gate: BUY/SELL only when ADX >= MIN_TREND_ADX (0 = off).
 # The 5/10/20 moving averages already lean this way; ADX adds persistence.
-# FORCE-OPEN (2026-08-31, user chose full throughput): ADX 18 -> 0 = trade
-# every signal (walk-forward had 18 as the ROBUST choice; 0 makes ~2.5x the
-# model P&L at lower PF 2.49->1.82).  Keep 18 for the quality/robust profile.
-MIN_TREND_ADX = 0.0
+# Walk-forward (tools/walk_forward.py, train 2026-01..05 / test 2026-06..08)
+# shows ADX 18 is best on BOTH train (PF 2.71) and held-out test (PF 2.53 vs
+# 2.14 with ADX off) - not curve-fit.  KEPT at 18 per user (2026-08-31) -
+# only confidence/RSI were force-opened, NOT the trend gate.
+MIN_TREND_ADX = 18.0
 
 # --- Time filters (IST) ---
 TRADE_START        = dt_time(9, 15)     # first tradable moment

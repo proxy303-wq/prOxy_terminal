@@ -73,6 +73,8 @@ class DhanBroker(Broker):
         self._api = dhanhq(self._ctx)
         self._lock = threading.Lock()
         self._security_cache = {}
+        self._forced_expiry = None   # set by the worker to the CHAIN's expiry
+                                     # (defaults to resolve_expiry(0) = nearest)
         # CRITICAL: the engine only places REAL orders and enforces the LIVE
         # risk gates (6-trade cap, daily-target stop) when broker.live is
         # truthy.  PaperBroker stays live=False; this is the real-money path.
@@ -201,7 +203,14 @@ class DhanBroker(Broker):
         """Nearest Dhan expiry date string (YYYY-MM-DD), cached.
 
         Uses the IDX_I segment (index underlying) - NSE_FNO returns an
-        empty failure envelope for the expirylist API."""
+        empty failure envelope for the expirylist API.
+
+        If the worker pinned the CHAIN's expiry via set_expiry(), THAT is
+        used (the engine must trade the same expiry it planned from the
+        chain - the "nearest" expiry can be a different week, which caused
+        wrong-expiry orders on 2026-08-31)."""
+        if self._forced_expiry and index == 0:
+            return self._forced_expiry
         if not hasattr(self, "_expiries") or not self._expiries:
             with self._lock:
                 res = self._api.expiry_list(NIFTY_INDEX_ID, "IDX_I")
@@ -212,6 +221,14 @@ class DhanBroker(Broker):
         if not self._expiries:
             return None
         return self._expiries[min(index, len(self._expiries) - 1)]
+
+    def set_expiry(self, date_str):
+        """Pin the broker's expiry to the CHAIN's expiry (YYYY-MM-DD) so the
+        order resolves to the SAME contract the engine planned from the chain,
+        not the "nearest" (possibly different-week) expiry.  The worker calls
+        this after picking the trade expiry."""
+        self._forced_expiry = date_str
+        self._expiries = None   # drop cache so the cached nearest is bypassed
 
     def normalize_symbol(self, symbol):
         """

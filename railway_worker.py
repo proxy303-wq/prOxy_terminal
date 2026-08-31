@@ -40,6 +40,10 @@ IST = ZoneInfo("Asia/Kolkata")
 
 SLEEP_SECONDS = 60
 NO_BAR_FALLBACK_SECONDS = 90       # no live bars -> synthetic replay
+CHAIN_REFRESH_SECONDS = 1800       # re-fetch the option chain every 30 min so
+                                   # strike selection / IV / expiry stay fresh
+                                   # (2026-08-31: a once-per-session chain gave
+                                   # stale spot/premiums that mis-priced entries)
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "reports", "worker_state.json"
 )
@@ -90,12 +94,12 @@ def _write_heartbeat(status, trade_date=None):
         pass
 
 
-def _fetch_today_bars(trade_date):
-    """Recent NIFTY 5-min bars from Dhan's REST charts API (works from any
-    region - the user has a historical-data subscription)."""
+def _fetch_today_bars(trade_date, security_id=13):
+    """Recent NIFTY/BANKNIFTY 5-min bars from Dhan's REST charts API (works
+    from any region - the user has a historical-data subscription)."""
     try:
         from proxy.dhan_data import fetch_intraday_last_days
-        df = fetch_intraday_last_days(days=5, end=trade_date)
+        df = fetch_intraday_last_days(days=5, end=trade_date, security_id=security_id)
         if df is None or df.empty:
             return None
         bars = [{
@@ -131,13 +135,19 @@ def _expectancy_line(tracker, trade_date):
         return f"Expectancy: unavailable ({exc})"
 
 
-def run_trading_day(notifier, trade_date):
+def run_trading_day(notifier, trade_date, variant="nifty"):
     """Run one paper session; send the daily summary afterwards.
 
     Live Dhan REST marketfeed first, synthetic fallback after
     NO_BAR_FALLBACK_SECONDS without any bar so the day always completes
-    and notifications fire."""
-    import proxy.config as cfg
+    and notifications fire.  variant: "nifty" (default) or "banknifty"
+    (dual engine - own cfg geometry, DB, index id 25)."""
+    if variant == "banknifty":
+        from proxy.dual import banknifty_config
+        cfg = banknifty_config()
+    else:
+        import proxy.config as cfg
+    _index_id = int(getattr(cfg, "INDEX_ID", 13))
     from proxy.data import FastForwardFeed
     from proxy.engine import PaperEngine
     from proxy.tracker import Tracker
@@ -164,7 +174,7 @@ def run_trading_day(notifier, trade_date):
         from proxy.broker import PaperBroker
         broker = PaperBroker(cfg.CAPITAL)
         notifier.log("PAPER mode - no real orders (toggle LIVE from the Telegram menu)", "INFO")
-    tracker = Tracker(cfg)
+    tracker = Tracker(cfg, db_path=getattr(cfg, "DB_PATH", None))
     # every notifier line lands in the DB so the dashboard shows paper
     # trades/signals even if the container stdout stream is lost
     from proxy import notifier as _notifier_mod
@@ -175,7 +185,7 @@ def run_trading_day(notifier, trade_date):
         from proxy.dhan_rest_feed import DhanRestFeed
         # 1.8s poll (0.56 req/s): the dashboard poller shares the same
         # client-id, so stay comfortably under Dhan's 1 req/s limit
-        feed = DhanRestFeed(poll_interval=1.8)
+        feed = DhanRestFeed(poll_interval=1.8, security_id=_index_id)
         feed.connect()
         time.sleep(3)
         if feed._thread is None or not feed._thread.is_alive():
@@ -210,9 +220,19 @@ def run_trading_day(notifier, trade_date):
                 notifier.log(f"LIVE India VIX: {_vix:.2f} - stops anchored to market forward vol", "INFO")
         except Exception as exc:
             notifier.log(f"LIVE VIX fetch failed ({exc}) - stops use GARCH vol only", "WARN")
-        exps = fetch_expiries()
+        exps = fetch_expiries(underlying_id=_index_id)
         trade_expiry = pick_expiry_date(cfg, exps) if exps else None
-        chain = fetch_option_chain(underlying_id=13,
+        # EXPIRY CONSISTENCY (2026-08-31): pin the broker's expiry to the
+        # CHAIN's expiry so orders resolve to the SAME contract the engine
+        # planned (the "nearest" expiry can be a different WEEK -> wrong-
+        # expiry filled orders, the -2,706 loss).  Refresh the chain later in
+        # the session too (CHAIN_REFRESH_SECONDS) so spot/IV stay fresh.
+        if trade_expiry and getattr(broker, "set_expiry", None):
+            try:
+                broker.set_expiry(str(trade_expiry))
+            except Exception:
+                pass
+        chain = fetch_option_chain(underlying_id=_index_id,
                                    expiry=str(trade_expiry) if trade_expiry else None)
         if chain and chain.get("rows"):
             spot = chain["spot"]
@@ -222,7 +242,7 @@ def run_trading_day(notifier, trade_date):
             if atm["ltp"] < prem_floor and len(exps) > 1:
                 # the current expiry is melting - roll to the upcoming expiry
                 trade_expiry = pick_expiry_date(cfg, exps[1:])
-                chain = fetch_option_chain(underlying_id=13,
+                chain = fetch_option_chain(underlying_id=_index_id,
                                            expiry=str(trade_expiry) if trade_expiry else None)
                 rolled_for_premium = True
             if chain and chain.get("rows"):
@@ -286,7 +306,7 @@ def run_trading_day(notifier, trade_date):
     # context).  Fallback: recent bars from the shipped warmup CSV.
     # warm-up: today's real bars (REST) for accurate context, topped up with
     # recent CSV bars so the 30-bar indicator window is satisfied instantly.
-    _warm = _fetch_today_bars(trade_date) or []
+    _warm = _fetch_today_bars(trade_date, security_id=_index_id) or []
     try:
         from proxy.data import load_csv, csv_bars_for_day
         import os as _os
@@ -321,6 +341,7 @@ def run_trading_day(notifier, trade_date):
         # synthetic only after several failed reconnects.
         started = now_ist()
         last_bar_time = time.time()
+        last_chain_refresh = time.time()
         reconnect_attempts = 0
         while now_ist().time() <= dt_time(15, 31) and (now_ist() - started).total_seconds() < 6 * 3600:
             bar = feed._next_5m_bar(block=False)
@@ -329,6 +350,22 @@ def run_trading_day(notifier, trade_date):
                 last_bar_time = time.time()
                 reconnect_attempts = 0
                 engine.process_bar(bar)
+                # refresh the option chain periodically (keeps the strike/
+                # IV/expiry the engine plans from fresh, not a 09:35 snapshot)
+                if time.time() - last_chain_refresh > CHAIN_REFRESH_SECONDS:
+                    last_chain_refresh = time.time()
+                    try:
+                        _exps = fetch_expiries(underlying_id=_index_id)
+                        _exp = pick_expiry_date(cfg, _exps) if _exps else None
+                        if _exp and getattr(broker, "set_expiry", None):
+                            broker.set_expiry(str(_exp))
+                        _chain = fetch_option_chain(underlying_id=_index_id,
+                                                    expiry=str(_exp) if _exp else None)
+                        if _chain and _chain.get("rows"):
+                            engine.set_expiries([e for e in (_exps or []) if not _exp or e >= str(_exp)])
+                            engine.set_chain(_chain)
+                    except Exception:
+                        pass
             else:
                 dead = feed._thread is None or not feed._thread.is_alive()
                 if dead and time.time() - last_bar_time > 20:
@@ -477,20 +514,43 @@ def probe_dhan_feed(notifier):
         notifier.log(f"LIVE Dhan REST probe failed: {exc}", "WARN")
 
 
-def main():
+def main(variant=None):
+    import argparse
+    if variant is None:
+        _ap = argparse.ArgumentParser()
+        _ap.add_argument("--variant", choices=["nifty", "banknifty"], default="nifty")
+        variant = _ap.parse_args().variant
+
+    global STATE_FILE
+    if variant == "banknifty":
+        STATE_FILE = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "reports", "worker_state_banknifty.json")
+        from proxy.dual import banknifty_config
+        _cfg = banknifty_config()
+    else:
+        import proxy.config as _cfg
+
     load_env()
     from proxy.notifier import Notifier
     notifier = Notifier(quiet=False)
-    notifier.log("LIVE PAPER-LIVE worker started - runs paper trades on the LIVE market feed every morning (9:15 IST); signals, trades and the daily summary are posted here", "INFO")
+
+    if variant == "banknifty":
+        class _Tagged:
+            def __init__(self, inner, tag):
+                self._inner, self._tag = inner, tag
+            def log(self, msg, level="INFO"):
+                self._inner.log(f"{self._tag} {msg}", level)
+        notifier = _Tagged(notifier, "[BANKNIFTY]")
+
+    notifier.log(f"LIVE {variant.upper()} worker started - runs paper trades on the LIVE market feed every morning (9:15 IST); signals, trades and the daily summary are posted here", "INFO")
     ensure_token(notifier)
     probe_dhan_feed(notifier)
     # create the tracker DB + schema on the volume at startup (not only
     # during sessions) so the dashboard never reports Database UNAVAILABLE
     try:
-        import proxy.config as _cfg
         from proxy.tracker import Tracker
-        Tracker(_cfg)
-        notifier.log("LIVE tracker DB ready (reports/proxy_state.sqlite)", "INFO")
+        Tracker(_cfg, db_path=getattr(_cfg, "DB_PATH", None))
+        notifier.log(f"LIVE tracker DB ready ({getattr(_cfg, 'DB_PATH', 'reports/proxy_state.sqlite')})", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE tracker DB init failed: {exc}", "WARN")
     # Telegram command menu (balance / prices / sentiment / report / mode)
@@ -513,9 +573,9 @@ def main():
 
             if market_open and str(now.date()) != str(last_run):
                 ensure_token(notifier)
-                notifier.log(f"Market open - running paper session for {now.date()}", "INFO")
+                notifier.log(f"Market open - running {variant} session for {now.date()}", "INFO")
                 _write_heartbeat("session-start", now.date())
-                run_trading_day(notifier, now.date())
+                run_trading_day(notifier, now.date(), variant=variant)
                 _save_state({"last_run_date": str(now.date())})
                 notifier.log("Session complete - will resume tomorrow", "INFO")
             else:

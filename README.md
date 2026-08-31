@@ -509,16 +509,39 @@ horizon), OOS prediction series in `reports/oos_<symbol>_<horizon>.csv`.
 Deployed artifacts in `models/ml_lab/` (best model + ensemble per symbol &
 horizon), OOS prediction series in `reports/oos_<symbol>_<horizon>.csv`.
 
-**Option-chain data (Dhan) - pilot + live recorder.** Dhan gives the full
-live chain (LTP/OI/volume/IV) but only ~5 days of option history. We built
-the paper-1 feature set (PCR-volume, ATM IV/skew, premium flow) on those 5
-days: in a leave-one-day-out pilot at the 30-min horizon the option features
-were actively used and nudged accuracy from 59.5% -> 59.8% (tiny sample,
-indicative only). The `ml-lab --record` command now snapshots the full chain
-every 5 min during market hours into `data/options/live_chain_history/` -
-after a few weeks that data enables a proper retrain with option features.
-`ml-lab --predict` already prints the live PCR/IV/skew/support-resistance
-readout next to the forecast.
+**Option-chain data (Dhan) - 5 years available, result: small extra edge.**
+The official DhanHQ docs (rolling option endpoint /charts/rollingoption)
+serve up to **5 years** of expired-option intraday data with IV/OI/volume/
+spot - we downloaded the full 2-year window for both indices (700 files,
+ATM+/-3 strikes, 5-min bars) and built the paper-1 feature set (PCR-volume,
+PCR-OI, ATM IV/skew, OI buildup, max-OI support/resistance). Two findings:
+
+1. **Alignment leak caught and fixed.** Dhan timestamps option bars at the
+   interval START while the NIFTY csv timestamps at the interval END - naive
+   alignment fed next-bar info into the model (fake 80% at 5 min). The fix
+   (option bar tau -> nifty bar tau+1) drops the implied-return correlation
+   to ~0 and is enforced in mlab/options_features.py.
+2. **Honest result (walk-forward, leak-free):** option features are roughly
+   neutral vs price-only, with a stable +0.7pp improvement at the 5-min
+   horizon for BANKNIFTY (51.0% -> 51.7%). The paper's ~70% at 30 min does
+   not reproduce under strict chronological validation - the option signal
+   exists but is far smaller than the paper's random-split numbers suggest.
+
+| Symbol | Horizon | price-only | +option (best) |
+|---|---|---|---|
+| NIFTY | 5 min | 50.9% | 51.0% |
+| NIFTY | 15 min | 51.1% | 50.9% |
+| NIFTY | 30 min | 51.7% | 51.3% |
+| NIFTY | 60 min | 50.3% | 50.1% (no edge) |
+| BANKNIFTY | 5 min | 51.0% | **51.7%** |
+| BANKNIFTY | 15 min | 51.5% | 51.4% |
+| BANKNIFTY | 30 min | 52.1% | 51.8% |
+| BANKNIFTY | 60 min | 51.6% | 51.3% |
+
+`ml-lab --predict` shows the live PCR/IV/skew/support-resistance readout
+next to the forecast, and `ml-lab --record` still accumulates true
+5-minute chain snapshots (cleaner OI than the rolling endpoint) for future
+retrains. Full details: [docs/ML_LAB.md](docs/ML_LAB.md).
 
 ## Risk warning
 

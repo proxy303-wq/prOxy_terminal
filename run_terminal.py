@@ -722,7 +722,20 @@ def cmd_ml_lab(args=None):
         from mlab.predict import predict
         nifty = load_csv(os.path.join(cfg.DATA_DIR, "NIFTY_5m.csv"))
         bank = load_csv(os.path.join(cfg.DATA_DIR, "BANKNIFTY_5m.csv"))
-        res = predict(symbol, horizon, nifty, bank)
+        opt_n = opt_b = None
+        try:
+            from mlab.options_live import live_band_features
+            from proxy.dhan_data import fetch_option_chain
+            from proxy.athena_env import load_athena_env
+            load_athena_env()
+            ch_n = fetch_option_chain(13)
+            ch_b = fetch_option_chain(25)
+            opt_n = live_band_features(ch_n) if ch_n else None
+            opt_b = live_band_features(ch_b) if ch_b else None
+        except Exception:
+            pass
+        res = predict(symbol, horizon, nifty, bank, live_option_nifty=opt_n,
+                      live_option_bank=opt_b)
         print(f"  as of ........... {res['as_of']}")
         print(f"  direction ....... {res['direction']}  (P(up) = {res['prob_up']}%)")
         print(f"  confidence ...... {res['confidence']}")
@@ -742,8 +755,7 @@ def cmd_ml_lab(args=None):
         except Exception:
             pass
         print(f"\n  {YE}Advisory only - ML direction is not a trade signal.{R}")
-        print(f"  {YE}Option-chain features are NOT yet in the model - the live recorder{ R}\n"
-              f"     (ml-lab --record) accumulates the data to add them at next retrain.{R}")
+        print(f"  {CY}Option-chain features (PCR/IV/OI) from the live Dhan chain are in the model.{R}")
         return
     if getattr(args, "record", False):
         print(f"{MG}ML Lab option-chain recorder - snapshots every 5 min during market hours{R}\n")

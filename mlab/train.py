@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import joblib
 
-from .config import HORIZONS, MODELS_DIR, REPORT_DIR, GRU_PARAMS
+from .config import HORIZONS, MODELS_DIR, REPORT_DIR, GRU_PARAMS, N_FOLDS
 from .data import load_aligned, build_targets, walk_forward_splits, split_features_labels
 from .features import build_all_features
 from .models import build_model, available_models

@@ -98,26 +98,26 @@ band still needs the post-week cleanup**: reset `state["capital"]` to 500k
 (or use `cfg.CAPITAL` in paper mode) + prune the stale equity-curve peak.
 ML labels are premium % moves, so lot size never changed the data.
 
-### 3d. LUNCH FILTER WAS NOT ENFORCED IN THE LIVE PATH (fixed, deploy pending)
+### 3d. LUNCH FILTER WAS NOT ENFORCED IN THE LIVE PATH (fixed + DEPLOYED 01-Sep 15:35)
 
 `LUNCH_DOLDRUMS_ENABLED` was enforced only in `backtest.py` and
 `crypto_engine.py` — the **live NIFTY gate (`engine._check_exits`/entry
 gate) never checked it** (same class of gap as NO_STOP_LOSS). On 01-Sep the
-box took **5 lunch-window entries** (12:00–14:00): rows 45–48 (closed,
-all LOCK_PROFIT) + open trade #50 (24200 PE @ 13:35). 31-Aug (live day-1)
-happened to have none.
+box took **8 lunch-window entries** (12:00–14:00): rows 45–52, net
+**+39,622.06** — all LOCK_PROFIT winners (lunch was the day's best stretch;
+consistent with the July A/B that lunch is mildly profitable in-model).
+31-Aug (live day-1) happened to have none.
 
 **Fix `fcc6382`**: `PaperEngine._in_lunch` mirrors `backtest._in_lunch`
 and is wired into the fresh-entry gate (silent skip, no notify spam).
-Committed + pushed but **NOT yet deployed** — the box still runs the
-unfiltered engine. Deploy after market close (safe: no open trades) or
-pre-market: single-file scp of `proxy/engine.py` + restart
-(`tools/_deploy_engine.py`, abort-guards on open trades).
+**Deployed 01-Sep 15:35 IST** (post-market, guarded: no open trade, mode
+paper): single-file scp of `proxy/engine.py` + restart — verified box sha
+`da008a25…` == local HEAD. Active from Wed 02-Sep.
 
-**ML data hygiene:** flag all lunch-window entries for 01-Sep (rows 45–48,
-open #50) as out-of-spec — the live profile will not take them once the
-filter ships; today they were all winners, so they flatter the sample
-slightly.
+**ML data hygiene:** flag all lunch-window entries for 01-Sep (rows 45–52)
+as out-of-spec — the live profile will not take them once the filter
+ships; today they were all winners, so they flatter the sample
+(+39.6k of the day's +164k).
 
 **After the data week**: revert to a LIVE profile (ADX 18, confidence
 60–70, RSI 50/50 or 45/55, `NO_STOP_LOSS=False`,
@@ -235,20 +235,22 @@ before live.
    not the 5-min transplant.
 7. **Day-1 data quality** — 2 truncated trades (rows 36, 39) to exclude
    from clean ML labels (§3a); box code was patched 11:49 + `bcff009`
-   committed, so Tue afternoon→Fri collection is clean. Plus 5 lunch-window
-   entries (rows 45-48, open #50) to flag (§3d) — filter not enforced in
-   the live path until `fcc6382` deploys.
+   committed, so Tue afternoon→Fri collection is clean. Plus 8 lunch-window
+   entries (rows 45–52, +39.6k) to flag (§3d) — live path never enforced
+   the filter until `fcc6382` deployed 15:35.
 8. **Sizing/taper cleanup (post-week)** — taper already disabled for data
-   mode (`d130a4c`, deployed ~12:37) so sizing is the full 0.5% (5 lots at
-   ~357k paper equity); the stale `state["capital"]` (285,568.47 live
-   balance) + phantom-era 545k peak remain — reset to 500k / prune peak to
-   restore the 8-lot band (§3c).
-9. **Day-1 tally (paper, 01-Sep, through ~13:44)**: 14 closed (12W/2L) +
-   1 open (#50) = 15 signals. Closed net ≈ **+48,642 INR** — morning
-   rows 35-42 (+37.8k incl. the 11:05-11:35 CE run +33.8k), lunch rows
-   45-48 all LOCK_PROFIT (+1.0k/+1.2k/+0.8k/+7.2k). 2 truncated stops
-   (rows 36, 39) pre-11:49 patch. Direction mix: 12 PE / 3 CE — PUT bias
-   still dominates.
+   mode (`d130a4c`, deployed ~12:37) so sizing is the full 0.5%; as the
+   day's paper wins piled up, equity (285,568.47 capital + realized P&L)
+   grew ~360k → ~520k and lots scaled 5→6→7 (rows 45→57). The stale
+   `state["capital"]` (285,568.47 live balance) + phantom-era 545k peak
+   remain — reset to 500k / prune peak to restore the 8-lot band (§3c).
+9. **Day-1 tally (paper, 01-Sep, FINAL)**: **23 trades, net ≈
+   +164,035 INR** (21W/2L, PF ~31) — rows 35–57. Morning 09:15–11:35
+   +37.8k (incl. the CE run +33.8k); lunch rows 45–52 +39.6k (out-of-spec,
+   all winners); post-lunch 14:00–14:45 rows 53–57 +85.9k (monster
+   afternoon — PUTs paid as NIFTY fell). Direction: 20 PE / 3 CE — the
+   all-puts bias is extreme and the day's P&L rides it. Reminder: this is
+   PAPER, stop-less, every-signal data — NOT live-achievable P&L.
 10. **Concurrent operator** — a second session (same repo) is active:
     committed `d130a4c` (taper off) at 12:28 and deployed it to the box
     ~12:37 (restart). Coordinate engine/config deploys with it; it may

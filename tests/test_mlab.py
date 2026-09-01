@@ -3,6 +3,7 @@ import os
 import sys
 import unittest
 
+import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -127,6 +128,29 @@ class TestOptionsData(unittest.TestCase):
         self.assertIn("pcr_vol", feat)
         self.assertIn("pcr_oi", feat)
         self.assertIn("atm_iv_ce", feat)
+
+
+class TestLabGate(unittest.TestCase):
+    def test_gate_loads_and_predicts(self):
+        from proxy import config as cfg
+        from proxy.ml_lab_gate import LabGate
+        gate = LabGate(cfg)
+        if not gate.ready:
+            self.skipTest("no deployed ml_lab model")
+        import pandas as pd
+        df = pd.DataFrame({
+            "time": pd.date_range("2026-08-01 09:15", periods=200, freq="5min"),
+            "open": 24000 + np.arange(200) * 0.5,
+            "high": 24005 + np.arange(200) * 0.5,
+            "low": 23995 + np.arange(200) * 0.5,
+            "close": 24002 + np.arange(200) * 0.5,
+            "volume": 1000.0,
+        }).set_index("time")
+        ml = gate.predict(df)
+        self.assertIsNotNone(ml)
+        self.assertIn(ml["direction"], ("BUY", "SELL"))
+        self.assertGreater(ml["probability"], 0)
+        self.assertLessEqual(ml["probability"], 100)
 
 
 if __name__ == "__main__":

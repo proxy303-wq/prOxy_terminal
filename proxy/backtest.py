@@ -78,6 +78,7 @@ class Backtest:
                  target_date=None, df=None, df1m=None, regime_fn=None, vix_df=None):
         self.cfg = cfg
         self.regime_fn = regime_fn   # optional callable(history) -> 'trend'|'flat'
+        self._lab_gate = None        # lazy ML Lab gate (mirrors the live engine)
         # VIX anchor: {trade_date: annualized-vix-as-fraction} for vol anchoring
         self.vix_by_day = {}
         if vix_df is not None and not vix_df.empty:
@@ -258,6 +259,26 @@ class Backtest:
                     frame = calculate_indicators(frame)
                     signal = generate_signal(frame, self.cfg)
                 last_signal = signal
+                # ML Lab gate on entries (mirrors the live engine).  Default
+                # "veto" mode blocks trades AGAINST a confident ML call;
+                # "confirm" requires ML agreement (ML_LAB_MIN_PROB).
+                if signal is not None and signal.direction in ("BUY", "SELL") \
+                        and getattr(self.cfg, "ML_LAB_ENABLED", True) \
+                        and str(getattr(self.cfg, "ML_LAB_MODE", "veto")).lower() != "advisory":
+                    try:
+                        if self._lab_gate is None:
+                            from .ml_lab_gate import LabGate
+                            self._lab_gate = LabGate(self.cfg)
+                        ml = self._lab_gate.predict(frame) if self._lab_gate.ready else None
+                        if ml is not None:
+                            from .ml_lab_gate import gate_decision
+                            allow, why = gate_decision(self.cfg, signal.direction, ml)
+                            if not allow:
+                                if self.verbose:
+                                    print(f"  GATE LAB {why} @ {bar['time']} - {signal.direction} blocked")
+                                signal = None
+                    except Exception:
+                        pass
 
                 # ---- 3) fresh entry ----
                 if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and not self._in_lunch(bar)                         and signal is not None and signal.direction in ("BUY", "SELL"):

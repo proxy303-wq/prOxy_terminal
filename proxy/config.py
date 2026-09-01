@@ -329,7 +329,9 @@ ML_LAB_ENABLED = os.environ.get("PROXY_ML_LAB_ENABLED", "true").lower() != "fals
 ML_LAB_MODE = "veto"
 ML_LAB_CONFIRM = False              # legacy == mode "confirm"
 ML_LAB_MIN_PROB = 55.0              # confirm-mode threshold
-ML_LAB_VETO_PROB = 55.0             # veto-mode: opposite call confidence to block
+ML_LAB_VETO_PROB = 70.0             # veto-mode: opposite call confidence to block
+                                    #   (40-day backtest: 70 blocks only net-negative trades;
+                                    #    55 removes winners too - PF 1.55 but -17% net)
 ML_LAB_HORIZON = "h3"               # h1=5m | h3=15m (best with the engine) | h6=30m | h12=60m
 ML_LAB_SYMBOL = "nifty"
 

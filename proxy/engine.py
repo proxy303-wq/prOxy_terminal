@@ -101,14 +101,25 @@ class PaperEngine:
         # India VIX annualized (set via set_vix): anchors the stop sizing
         # to the market's own forward vol forecast
         self.vix_annual = None
-        # ML prediction layer (LSTM per the research paper) - advisory/gate
+        # ML prediction layer - advisory/gate.  ML Lab models (walk-forward
+        # validated, option-chain aware) are preferred; the old LSTM is the
+        # fallback when no ML Lab artifacts exist.
         self.ml_predict = None
         self.ml_meta = None
-        if getattr(self.cfg, "ML_ENABLED", False):
+        self.ml_lab_horizon = None
+        if getattr(self.cfg, "ML_ENABLED", False) or getattr(self.cfg, "ML_LAB_ENABLED", False):
             try:
-                from .ml_model import load, model_meta
-                self.ml_predict = load(getattr(self.cfg, "ML_MODEL", "lstm"))
-                self.ml_meta = model_meta(getattr(self.cfg, "ML_MODEL", "lstm"))
+                if getattr(self.cfg, "ML_LAB_ENABLED", False):
+                    from .ml_lab_gate import load as lab_load
+                    gate = lab_load(self.cfg)
+                    if gate is not None:
+                        self.ml_predict = gate
+                        self.ml_meta = {"model": "ml_lab"}
+                        self.ml_lab_horizon = getattr(self.cfg, "ML_LAB_HORIZON", "h6")
+                if self.ml_predict is None and getattr(self.cfg, "ML_ENABLED", False):
+                    from .ml_model import load, model_meta
+                    self.ml_predict = load(getattr(self.cfg, "ML_MODEL", "lstm"))
+                    self.ml_meta = model_meta(getattr(self.cfg, "ML_MODEL", "lstm"))
             except Exception:
                 self.ml_predict = None
         # Meta-label precision layer (mlfinlab style) - advisory/gate
@@ -849,13 +860,23 @@ class PaperEngine:
                     if gate.allowed and self.ml_predict is not None:
                         ml = self.ml_predict(df)
                         if ml is not None:
-                            ml_note = f" | ML {ml['direction']} {ml['probability']:.0f}%"
-                            if getattr(self.cfg, "ML_CONFIRM", False):
-                                want_bull = (signal.direction == "BUY")
-                                agree = (ml["direction"] == "BUY") == want_bull
-                                ml_ok = agree and ml["probability"] >= getattr(self.cfg, "ML_MIN_PROB", 55.0)
+                            _hz = ml.get("horizon") or self.ml_lab_horizon or "?"
+                            ml_note = f" | LAB {ml['direction']} {ml['probability']:.0f}%@{_hz}"
+                            # ML Lab gate (veto/confirm modes); the old LSTM uses ML_CONFIRM
+                            if self.ml_lab_horizon is not None:
+                                from .ml_lab_gate import gate_decision
+                                ml_ok, _why = gate_decision(self.cfg, signal.direction, ml)
                                 if not ml_ok:
-                                    self.notify(f"GATE  ML disagrees ({ml['direction']} {ml['probability']:.0f}%) - {signal.direction} blocked")
+                                    self.notify(f"GATE  LAB {_why} - {signal.direction} blocked")
+                            else:
+                                _confirm = getattr(self.cfg, "ML_CONFIRM", False)
+                                _min_prob = getattr(self.cfg, "ML_MIN_PROB", 55.0)
+                                if _confirm:
+                                    want_bull = (signal.direction == "BUY")
+                                    agree = (ml["direction"] == "BUY") == want_bull
+                                    ml_ok = agree and ml["probability"] >= _min_prob
+                                    if not ml_ok:
+                                        self.notify(f"GATE  ML disagrees ({ml['direction']} {ml['probability']:.0f}%) - {signal.direction} blocked")
                     # meta-label advisory: P(this signal wins) from past outcomes
                     if gate.allowed and ml_ok and self.meta_predict is not None:
                         try:

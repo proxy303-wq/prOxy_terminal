@@ -133,32 +133,54 @@ def resolve_mcx_contract(symbol, expiry=None, near=True):
 
 
 def fetch_mcx_intraday(symbol, days=5, interval=5, contract=None, retries=2):
-    """5-min OHLCV for an MCX futures symbol (charts API, last N trading
-    days).  Returns a DataFrame (date/open/high/low/close/volume) or empty.
-    Dhan's charts API intermittently returns empty for a wide window - retry
-    once on a shorter window.
+    """5-min OHLCV for an MCX futures symbol (charts API).
+
+    Dhan's intraday endpoint is unreliable for WIDE windows (returns empty
+    or drops the connection outside ~5-7 calendar days, observed 01-Sep
+    evening), so anything > 6 days is fetched in ~5-day CHUNKS and
+    concatenated.  Returns a DataFrame (date/open/high/low/close/volume)
+    or empty.
     """
     c = contract or resolve_mcx_contract(symbol)
     if c is None:
         return pd.DataFrame()
     sid = c.get("SEM_SMST_SECURITY_ID")
     end = pd.Timestamp.now(IST)
-    df = pd.DataFrame()
-    for attempt in range(retries + 1):
-        start = end - pd.Timedelta(days=days * 2)
-        df = fetch_intraday(start.date(), end.date(), interval=interval,
-                            security_id=str(sid), segment=MCX_SEGMENT,
-                            instrument=MCX_INSTRUMENT)
-        if not df.empty:
+    chunks = []
+    cursor = end
+    remaining = days
+    while remaining > 0 and cursor.date() >= (end - pd.Timedelta(days=days + 8)).date():
+        span = min(5, remaining)
+        got = False
+        for attempt in range(retries + 1):
+            try:
+                start = cursor - pd.Timedelta(days=span)
+                df = fetch_intraday(start.date(), cursor.date(), interval=interval,
+                                    security_id=str(sid), segment=MCX_SEGMENT,
+                                    instrument=MCX_INSTRUMENT)
+                if not df.empty:
+                    chunks.append(df)
+                    got = True
+                    break
+            except Exception:
+                pass
+            span = max(2, span - 1)
+        if not got:
             break
-        days = max(2, days - 1)   # shrink the window and retry
-    if not df.empty:
-        stem = mcx_symbol_stem(symbol)
-        df.attrs["symbol"] = symbol
-        df.attrs["contract"] = c.get("SEM_TRADING_SYMBOL")
-        df.attrs["security_id"] = sid
-        df.attrs["lot_size"] = mcx_lot_size(stem)
-    return df
+        # move the cursor to just before the chunk's earliest bar (dedupe overlap)
+        earliest = pd.Timestamp(chunks[-1]["date"].min()) - pd.Timedelta(days=1)
+        cursor = min(cursor - pd.Timedelta(days=span), earliest)
+        remaining -= span
+    if not chunks:
+        return pd.DataFrame()
+    out = pd.concat(chunks)
+    out = out[~out["date"].duplicated(keep="last")].sort_values("date").reset_index(drop=True)
+    stem = mcx_symbol_stem(symbol)
+    out.attrs["symbol"] = symbol
+    out.attrs["contract"] = c.get("SEM_TRADING_SYMBOL")
+    out.attrs["security_id"] = sid
+    out.attrs["lot_size"] = mcx_lot_size(stem)
+    return out
 
 
 def mcx_ticker(symbol, contract=None):

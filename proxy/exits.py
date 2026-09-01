@@ -39,6 +39,8 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
     # the 15:15 force-exit).  Used for ML training-data collection - the
     # outcome distribution is not truncated by a stop.
     no_stop = bool(getattr(cfg, "NO_STOP_LOSS", False))
+    armed = False   # default: never armed when the lock is off (so the
+                    # UNARMED_TIME_STOP below can still evaluate)
 
     if lock_on:
         prior_peak = trade.get("pnl_peak") or entry_premium

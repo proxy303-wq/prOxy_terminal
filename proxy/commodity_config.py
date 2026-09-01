@@ -55,6 +55,18 @@ def commodity_config(full_session=False, symbol="CRUDEOIL"):
     c.TRAIL_SL_TO_ENTRY = True            # stop -> breakeven once armed
     c.LOSS_COOLDOWN_BARS = 6              # 30 min after a stop-out
     c.NOTIONAL_LEVERAGE_CAP = 10.0        # lots capped so notional <= 10x equity
+    # ---- commodity-native exits (book: vol differs per symbol) ----
+    c.STOP_MODE = "atr"                   # "atr" (vol-scaled) | "pct" (fixed %)
+    c.STOP_ATR_MULT = 1.5                 # stop = 1.5 x ATR(14)
+    c.TARGET_ATR_MULT = 3.0               # target = 3 x ATR (R:R 2)
+    c.LOCK_ARM_ATR = 0.75                 # arm lock at +0.75 x ATR
+    c.LOCK_FLOOR_ATR = 0.25               # floor +0.25 x ATR
+    c.LOCK_TRAIL_ATR = 0.5                # trail peak - 0.5 x ATR
+    # ---- regime + news filters (book) ----
+    c.MACD_TREND_FILTER = False           # book pp.195-199: trade only with
+                                          # MACD(12,26,9) trend (tune via A/B)
+    c.NEWS_BLACKOUT_START = dt_time(19, 45)   # EIA crude ~Wed 20:00 IST:
+    c.NEWS_BLACKOUT_END = dt_time(20, 30)     # no entries until the print settles
     # ---- sessions (IST) ----
     if full_session:
         c.TRADE_START = dt_time(9, 0)

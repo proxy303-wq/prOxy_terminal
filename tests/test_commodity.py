@@ -83,5 +83,59 @@ class TestBacktestRuns(unittest.TestCase):
         self.assertIn("15:45", r["session"])
 
 
+class TestCommodityNative(unittest.TestCase):
+    """ATR-scaled exits, MACD regime filter, news blackout (book rules)."""
+
+    def test_atr_exit_params(self):
+        from proxy.commodity_engine import commodity_exit_params
+        cfg = commodity_config(symbol="CRUDEOIL")
+        cfg.STOP_MODE = "atr"
+        cfg.STOP_ATR_MULT, cfg.TARGET_ATR_MULT = 1.5, 3.0
+        cfg.LOCK_ARM_ATR, cfg.LOCK_FLOOR_ATR, cfg.LOCK_TRAIL_ATR = 0.75, 0.25, 0.5
+        df = _synthetic_df()
+        from proxy.indicators import calculate_indicators
+        fr = calculate_indicators(df.copy())
+        entry = float(fr["close"].iloc[-1])
+        stop, target, lock = commodity_exit_params(fr, cfg, entry)
+        atr = float(fr["atr"].iloc[-1])
+        self.assertAlmostEqual(stop, 1.5 * atr, delta=1e-6)
+        self.assertAlmostEqual(target, 3.0 * atr, delta=1e-6)
+        self.assertIsNotNone(lock)
+        self.assertAlmostEqual(lock["lock_arm_pct"], 0.75 * atr / entry, delta=1e-9)
+
+    def test_atr_exit_params_pct_fallback(self):
+        from proxy.commodity_engine import commodity_exit_params
+        cfg = commodity_config(symbol="CRUDEOIL")
+        stop, target, lock = commodity_exit_params(None, cfg, 100.0)
+        self.assertAlmostEqual(stop, 100.0 * cfg.STOP_LOSS_PCT, delta=1e-9)
+        self.assertAlmostEqual(target, 100.0 * cfg.PROFIT_TARGET_PCT, delta=1e-9)
+        self.assertIsNone(lock)
+
+    def test_macd_trend(self):
+        from proxy.commodity_engine import macd_trend
+        # strongly rising series -> bullish
+        up = pd.DataFrame({"close": [100 + i * 0.5 for i in range(60)]})
+        self.assertEqual(macd_trend(up), 1)
+        down = pd.DataFrame({"close": [200 - i * 0.5 for i in range(60)]})
+        self.assertEqual(macd_trend(down), -1)
+        flat = pd.DataFrame({"close": [100.0] * 60})
+        self.assertEqual(macd_trend(flat), 0)
+        self.assertEqual(macd_trend(pd.DataFrame({"close": [1.0, 2.0]})), 0)  # too short
+
+    def test_news_blackout(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from proxy.commodity_engine import news_blackout
+        cfg = commodity_config(symbol="CRUDEOIL")
+        IST = ZoneInfo("Asia/Kolkata")
+        inside = datetime(2026, 9, 1, 20, 0, tzinfo=IST)
+        outside = datetime(2026, 9, 1, 18, 0, tzinfo=IST)
+        self.assertTrue(news_blackout(cfg, inside))
+        self.assertFalse(news_blackout(cfg, outside))
+        cfg.NEWS_BLACKOUT_START = None
+        cfg.NEWS_BLACKOUT_END = None
+        self.assertFalse(news_blackout(cfg, inside))
+
+
 if __name__ == "__main__":
     unittest.main()

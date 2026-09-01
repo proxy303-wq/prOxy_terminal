@@ -21,6 +21,7 @@ import sys
 import types
 from datetime import datetime, time as dt_time
 
+import numpy as np
 import pandas as pd
 
 from .config import CAPITAL, REPORT_DIR
@@ -61,6 +62,70 @@ def size_mcx_lots(cfg, equity, entry, stop_dist, lot_size):
     if cap > 0:
         lots = min(lots, max_lots)
     return lots
+
+
+def commodity_exit_params(frame, cfg, entry):
+    """Stop/target/lock distances for one entry, honouring STOP_MODE.
+
+    "pct" (default): fixed % of price (cfg.STOP_LOSS_PCT etc.).
+    "atr": ATR(14)-scaled (commodity vol differs per symbol - a fixed %
+    stop that is 2 daily ranges on gold is noise on crude).  Lock levels
+    become per-trade % overrides so proxy/exits.py (which reads
+    trade.lock_arm_pct etc.) applies them.
+
+    Returns (stop_dist, target_dist, lock_overrides_dict | None).
+    """
+    mode = str(getattr(cfg, "STOP_MODE", "pct")).lower()
+    if mode == "atr" and frame is not None and len(frame) > 15 and entry > 0:
+        try:
+            atr = float(frame["atr"].iloc[-1])
+            if atr and atr > 0:
+                stop_dist = atr * float(getattr(cfg, "STOP_ATR_MULT", 1.5))
+                target_dist = atr * float(getattr(cfg, "TARGET_ATR_MULT", 3.0))
+                lock = None
+                if getattr(cfg, "LOCK_PROFIT_ENABLED", True):
+                    lock = {
+                        "lock_arm_pct": (float(getattr(cfg, "LOCK_ARM_ATR", 0.75)) * atr) / entry,
+                        "lock_floor_pct": (float(getattr(cfg, "LOCK_FLOOR_ATR", 0.25)) * atr) / entry,
+                        "lock_trail_step_pct": (float(getattr(cfg, "LOCK_TRAIL_ATR", 0.5)) * atr) / entry,
+                    }
+                return stop_dist, target_dist, lock
+        except Exception:
+            pass
+    return (entry * cfg.STOP_LOSS_PCT, entry * cfg.PROFIT_TARGET_PCT, None)
+
+
+def macd_trend(frame, fast=12, slow=26, signal=9):
+    """Book rule (pp. 195-199): MACD(12,26,9) trend alignment.  Returns
+    +1 (bullish: macd > signal), -1 (bearish), 0 (flat/undefined)."""
+    if frame is None or len(frame) < slow + signal + 2:
+        return 0
+    try:
+        close = frame["close"].astype(float)
+        ema_fast = close.ewm(span=fast, adjust=False).mean()
+        ema_slow = close.ewm(span=slow, adjust=False).mean()
+        macd = ema_fast - ema_slow
+        sig = macd.ewm(span=signal, adjust=False).mean()
+        m, s = float(macd.iloc[-1]), float(sig.iloc[-1])
+        if not (np.isfinite(m) and np.isfinite(s)) or abs(m - s) < 1e-12:
+            return 0
+        return 1 if m > s else -1
+    except Exception:
+        return 0
+
+
+def news_blackout(cfg, ts):
+    """Book rule: treat scheduled data windows (EIA crude ~Wed 20:00 IST,
+    API ~Tue night) as blackouts until the print settles.  Returns True
+    when the timestamp is inside the configured window."""
+    start = getattr(cfg, "NEWS_BLACKOUT_START", None)
+    end = getattr(cfg, "NEWS_BLACKOUT_END", None)
+    if start is None or end is None:
+        return False
+    t = ts.time()
+    if start <= end:
+        return start <= t <= end
+    return t >= start or t <= end   # overnight window
 
 
 class CommodityBacktest:
@@ -185,35 +250,47 @@ class CommodityBacktest:
                 if (active is None
                         and (cooldown_until is None or bar["time"] >= cooldown_until)
                         and self._in_window(bar["time"])
+                        and not news_blackout(self.cfg(), bar["time"])
                         and signal is not None and signal.direction in ("BUY", "SELL")):
-                    entry = float(bar["close"])
-                    direction = "LONG" if signal.direction == "BUY" else "SHORT"
-                    _cfg = self.cfg()
-                    stop_dist = entry * _cfg.STOP_LOSS_PCT
-                    if stop_dist > 0:
-                        equity = current_equity(self.state, _cfg)
-                        lots = size_mcx_lots(_cfg, equity, entry, stop_dist, self.lot_size)
-                        if lots > 0:
-                            stop_p = entry - stop_dist if direction == "LONG" else entry + stop_dist
-                            target_p = (entry * (1.0 + _cfg.PROFIT_TARGET_PCT) if direction == "LONG"
-                                        else entry * (1.0 - _cfg.PROFIT_TARGET_PCT))
-                            plan = {
-                                "instrument": self.label, "symbol": self.symbol,
-                                "direction": direction, "lots": lots,
-                                "entry_premium": entry, "stop_premium": stop_p,
-                                "target_premium": target_p,
-                                "entry_time": bar["time"].isoformat(),
-                                "signal_score": signal.score, "confidence": signal.confidence,
-                                "setup_type": signal.setup_type, "setup_strength": signal.setup_strength,
-                                "trend": signal.trend, "reason": signal.reason,
-                                "bars_held": 0, "lock_enabled": True,
-                                "rr": _cfg.PROFIT_TARGET_PCT / _cfg.STOP_LOSS_PCT,
-                                "risk_inr": round(lots * self.lot_size * stop_dist, 2),
-                            }
-                            gate = check_trade_allowed(self.state, self.cfg(), signal=signal,
-                                                       pending_trade=plan, live=False)
-                            if gate.allowed:
-                                active = plan
+                    # book regime filter (pp. 195-199): only trade WITH the
+                    # MACD(12,26,9) trend - signals against it whipsaw in chop
+                    _macd_ok = True
+                    if getattr(self.cfg(), "MACD_TREND_FILTER", False):
+                        _mt = macd_trend(frame)
+                        if (signal.direction == "BUY" and _mt < 0) \
+                                or (signal.direction == "SELL" and _mt > 0):
+                            _macd_ok = False
+                    if _macd_ok:
+                        entry = float(bar["close"])
+                        direction = "LONG" if signal.direction == "BUY" else "SHORT"
+                        _cfg = self.cfg()
+                        stop_dist, target_dist, lock = commodity_exit_params(
+                            frame, _cfg, entry)
+                        if stop_dist > 0:
+                            equity = current_equity(self.state, _cfg)
+                            lots = size_mcx_lots(_cfg, equity, entry, stop_dist, self.lot_size)
+                            if lots > 0:
+                                stop_p = entry - stop_dist if direction == "LONG" else entry + stop_dist
+                                target_p = entry + target_dist if direction == "LONG" else entry - target_dist
+                                plan = {
+                                    "instrument": self.label, "symbol": self.symbol,
+                                    "direction": direction, "lots": lots,
+                                    "entry_premium": entry, "stop_premium": stop_p,
+                                    "target_premium": target_p,
+                                    "entry_time": bar["time"].isoformat(),
+                                    "signal_score": signal.score, "confidence": signal.confidence,
+                                    "setup_type": signal.setup_type, "setup_strength": signal.setup_strength,
+                                    "trend": signal.trend, "reason": signal.reason,
+                                    "bars_held": 0, "lock_enabled": True,
+                                    "rr": round(target_dist / stop_dist, 2) if stop_dist > 0 else 0.0,
+                                    "risk_inr": round(lots * self.lot_size * stop_dist, 2),
+                                }
+                                if lock:
+                                    plan.update(lock)
+                                gate = check_trade_allowed(self.state, self.cfg(), signal=signal,
+                                                           pending_trade=plan, live=False)
+                                if gate.allowed:
+                                    active = plan
 
             if active is not None:
                 last_bar = bars[-1]
@@ -371,32 +448,41 @@ class CommodityPaperEngine:
                 and not self.state.get("trading_halted_month")
                 and (self.cooldown_until is None or ts >= self.cooldown_until)
                 and self._in_window(ts)
+                and not news_blackout(cfg, ts)
                 and signal is not None and signal.direction in ("BUY", "SELL")):
-            entry = float(bar["close"])
-            direction = "LONG" if signal.direction == "BUY" else "SHORT"
-            stop_dist = entry * cfg.STOP_LOSS_PCT
-            if stop_dist > 0:
-                equity = current_equity(self.state, cfg)
-                lots = size_mcx_lots(cfg, equity, entry, stop_dist, self.lot_size)
-                if lots > 0:
-                    stop_p = entry - stop_dist if direction == "LONG" else entry + stop_dist
-                    target_p = (entry * (1.0 + cfg.PROFIT_TARGET_PCT) if direction == "LONG"
-                                else entry * (1.0 - cfg.PROFIT_TARGET_PCT))
-                    plan = {
-                        "instrument": self.label, "symbol": self.symbol,
-                        "direction": direction, "lots": lots,
-                        "entry_premium": entry, "stop_premium": stop_p, "target_premium": target_p,
-                        "entry_time": ts.isoformat(), "signal_score": signal.score,
-                        "confidence": signal.confidence, "setup_type": signal.setup_type,
-                        "setup_strength": signal.setup_strength, "trend": signal.trend,
-                        "reason": signal.reason, "bars_held": 0, "lock_enabled": True,
-                        "rr": cfg.PROFIT_TARGET_PCT / cfg.STOP_LOSS_PCT,
-                        "risk_inr": round(lots * self.lot_size * stop_dist, 2),
-                    }
-                    gate = check_trade_allowed(self.state, cfg, signal=signal,
-                                               pending_trade=plan, live=False)
-                    if gate.allowed:
-                        self.active = plan
+            _macd_ok = True
+            if getattr(cfg, "MACD_TREND_FILTER", False):
+                _mt = macd_trend(frame)
+                if (signal.direction == "BUY" and _mt < 0) \
+                        or (signal.direction == "SELL" and _mt > 0):
+                    _macd_ok = False
+            if _macd_ok:
+                entry = float(bar["close"])
+                direction = "LONG" if signal.direction == "BUY" else "SHORT"
+                stop_dist, target_dist, lock = commodity_exit_params(frame, cfg, entry)
+                if stop_dist > 0:
+                    equity = current_equity(self.state, cfg)
+                    lots = size_mcx_lots(cfg, equity, entry, stop_dist, self.lot_size)
+                    if lots > 0:
+                        stop_p = entry - stop_dist if direction == "LONG" else entry + stop_dist
+                        target_p = entry + target_dist if direction == "LONG" else entry - target_dist
+                        plan = {
+                            "instrument": self.label, "symbol": self.symbol,
+                            "direction": direction, "lots": lots,
+                            "entry_premium": entry, "stop_premium": stop_p, "target_premium": target_p,
+                            "entry_time": ts.isoformat(), "signal_score": signal.score,
+                            "confidence": signal.confidence, "setup_type": signal.setup_type,
+                            "setup_strength": signal.setup_strength, "trend": signal.trend,
+                            "reason": signal.reason, "bars_held": 0, "lock_enabled": True,
+                            "rr": round(target_dist / stop_dist, 2) if stop_dist > 0 else 0.0,
+                            "risk_inr": round(lots * self.lot_size * stop_dist, 2),
+                        }
+                        if lock:
+                            plan.update(lock)
+                        gate = check_trade_allowed(self.state, cfg, signal=signal,
+                                                   pending_trade=plan, live=False)
+                        if gate.allowed:
+                            self.active = plan
         return records
 
     def _in_window(self, ts):

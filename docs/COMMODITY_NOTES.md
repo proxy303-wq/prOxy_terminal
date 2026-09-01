@@ -175,26 +175,25 @@ context, not rules.
 
 ## Implementation status (2026-09-01)
 
-- ✅ **Adopt now, no code needed:**
-  - Regime filter before momentum entries — "identify what kind of market you
-    are in" (p. 197): reuse the existing choppiness gate; do not take
-    MACD-style signals in flat regimes.
-  - **Daily-trend context**: 9/18-day MA or MACD(12,26,9) on the daily chart
-    as a one-way filter for the evening session (pp. 196–198) — mirrors the
-    Miner HTF gate (`MOMENTUM_FILTER_ENABLED` family in `proxy/config.py`).
-  - Curve-state feature: front-month − next-month spread sign = contango/
-    backwardation regime (pp. 18–19, 76) — expose in the engine; later a
-    filter for longs in steep contango.
-- 📊 **A/B candidates (`tools/strat_ab.py`):** evening-window blackout around
-  event prints (OPEC, US CPI/FOMC, EIA inventory) — cf. the lunch-doldrums
-  filter that shipped in `docs/STRATEGY_NOTES.md`; "small-win streak" taper —
-  after ≥3 consecutive small winners, cut size or stop (silver 2011 case,
-  p. 198, trend-death tell).
-- ⏳ **On the list (needs external data, not in book):** EIA weekly crude
-  inventory timing (~20:00/22:30 IST), USDA report calendar, COMEX/NYMEX
-  settlement times, MCX contract specs (price bands, expiry, margins), and
-  IST-mapped volatility-by-hour for crude/gold/NG.
-- ⚠️ **Risk defaults for the MCX evening desk (derived from pp. 37–38,
-  125–126): margin-aware sizing** — cap notional leverage ≤ ~10× (book: 5.7%
-  move = 91% ROI); daily loss halt well under the forced-liquidation reality;
-  treat intraday margin-change announcements as immediate risk events.
+- ✅ **Implemented in the commodity engine (`proxy/commodity_engine.py`):**
+  - Regime filter before momentum entries (p. 197): `MACD_TREND_FILTER`
+    (MACD 12/26/9 on the 5m frame) + existing `MIN_TREND_ADX` gate — A/B
+    tunable, OFF by default pending the tuning pass.
+  - **ATR-scaled exits** (`STOP_MODE="atr"`): stop 1.5×ATR(14), target 3×ATR,
+    lock arm 0.75×ATR / floor 0.25×ATR / trail 0.5×ATR — per-symbol vol
+    differs (a fixed % stop that is noise on crude is 2 ranges on gold).
+  - **News blackout** (`NEWS_BLACKOUT_START/END`, default 19:45–20:30 IST):
+    no entries around the EIA crude print (book: stand aside through the
+    print, pp. 18–22).
+  - **Margin-aware sizing** (pp. 37–38, 125–126): `NOTIONAL_LEVERAGE_CAP`
+    ≈ 10× — a 1-lot GOLD (≈₹1.5Cr notional) is skipped, not traded.
+- 📊 **Tuning pass (2026-09-01, tools/_commodity_tune.py):** 60-day MCX
+  sample (≈43 trading days/symbol, cached in `data/commodities/`), grid over
+  exit style × regime × session × blackout + walk-forward (train 60% / test
+  40%). Defaults updated to the winning variant — see the tuning note.
+- ⏳ **Still open:** EIA/API exact timestamps, USDA calendar, MCX contract
+  specs (price bands, margins), volatility-by-hour per symbol; a longer
+  sample (Dhan serves ~65 trading days of MCX 5m) for a real walk-forward.
+- ⚠️ **Live reality:** paper-only; the NIFTY scalper's edge does NOT
+  transplant to MCX untuned — verify PF ≥ 1.3 with ≥100 trades (Aronson)
+  before any real money.

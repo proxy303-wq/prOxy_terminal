@@ -163,6 +163,21 @@ class PaperEngine:
             return t.time()
         return pd.Timestamp(t).time()
 
+    def _in_lunch(self, bar):
+        """Volman's lunch-doldrums filter (pp. 182/184): no NEW entries in
+        the 12:00-14:00 IST window (open trades keep their exits).  Mirrors
+        backtest.py._in_lunch - the LIVE engine path must enforce the same
+        filter the backtest ships with (found missing 2026-09-01: 4 entries
+        fired inside lunch).  Silent by design (no per-bar notify spam)."""
+        if not getattr(self.cfg, "LUNCH_DOLDRUMS_ENABLED", False):
+            return False
+        start = getattr(self.cfg, "LUNCH_DOLDRUMS_START", None)
+        end = getattr(self.cfg, "LUNCH_DOLDRUMS_END", None)
+        if start is None or end is None:
+            return False
+        t = self._bar_time(bar)
+        return start <= t < end
+
     # ----------------------------------------------------------
     # entry planning
     # ----------------------------------------------------------
@@ -258,10 +273,14 @@ class PaperEngine:
                              premium=chain_prem, expiries=self.expiries, roll_days=_roll)
             sigma = chain_sigma
         self._last_entry_sigma = sigma
-        # ---- STRIKE-SHIFT RULE (LIVE): a same-direction re-entry moves 1-2
-        # steps away from an already-traded strike instead of repeating it ----
+        # ---- STRIKE-SHIFT RULE: a same-direction re-entry moves 1-2
+        # steps toward ITM from an already-traded strike instead of
+        # repeating it (CE -> lower strike, PE -> higher strike).  Applies
+        # in ALL modes (2026-09-01: was live-only, so paper data mode
+        # re-traded the same strike - e.g. 24250 PE x3).  Deeper ITM =
+        # more delta, less theta decay; also gives the ML varied strikes.
         strike_shift = 0
-        if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True) and getattr(self.broker, "live", False):
+        if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True):
             day_strikes = self._strike_trades.setdefault(str(self.trade_date), {})
             max_per = int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1))
             max_shift = int(getattr(self.cfg, "MAX_STRIKE_SHIFTS", 2))
@@ -841,7 +860,7 @@ class PaperEngine:
             if self.cooldown_until is not None and bar["time"] < self.cooldown_until:
                 self.notify("GATE  cooling down after stop-loss")
                 events["cooldown"] = True
-            elif self._bar_time(bar) >= TRADE_START and self._bar_time(bar) <= NO_NEW_ENTRY_AFTER:
+            elif self._bar_time(bar) >= TRADE_START and self._bar_time(bar) <= NO_NEW_ENTRY_AFTER and not self._in_lunch(bar):
                 if signal.direction in ("BUY", "SELL"):
                     equity = current_equity(self.state, self.cfg)
                     plan = self._plan_entry(signal, spot, equity)

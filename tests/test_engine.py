@@ -112,7 +112,14 @@ class TestRealPremiumExits(unittest.TestCase):
     def _check(self, plan, real_bar=None):
         self.engine.active_trade = plan
         self.engine._active_trade = plan
-        return self.engine._check_exits(self.bar, None, 24900.0, real_bar=real_bar)
+        # stop/target/lock exit tests need REAL stops - PAPER DATA MODE
+        # (NO_STOP_LOSS=True) would suppress the stop path under test.
+        _old = getattr(self.engine.cfg, "NO_STOP_LOSS", False)
+        try:
+            self.engine.cfg.NO_STOP_LOSS = False
+            return self.engine._check_exits(self.bar, None, 24900.0, real_bar=real_bar)
+        finally:
+            self.engine.cfg.NO_STOP_LOSS = _old
 
     def test_real_option_bar_drives_stop(self):
         """Real premium low crosses the stop even though the delta model

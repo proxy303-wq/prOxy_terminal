@@ -255,6 +255,16 @@ before live.
     committed `d130a4c` (taper off) at 12:28 and deployed it to the box
     ~12:37 (restart). Coordinate engine/config deploys with it; it may
     also be pushing ML Lab work.
+11. **ML veto replay (day-1, h3): the gate was OFF and would have been a
+    NO-OP anyway** — replayed today's 23 entries through the deployed
+    nifty-h3 model + `gate_decision` (tools/_gate_replay.py; Dhan-fetched
+    today's bars, price-only features): **veto70 blocked 0/23** (model
+    calls stayed 34–65%, never ≥70% opposite). veto55 would have blocked
+    10 incl. the afternoon winners (net +164k → +40.5k); confirm55 blocks
+    all 23 (model never ≥55% agreeing — low-confidence calibration, a
+    kill-switch). Live gate choice with the ML chat: veto70 stays the
+    conservative default; today's data says it never fires, so it can't
+    be blamed for day-1's all-puts P&L either way.
 
 ## 7. The plan (this week)
 

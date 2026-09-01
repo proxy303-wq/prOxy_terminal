@@ -100,7 +100,10 @@ LUNCH_DOLDRUMS_END = dt_time(14, 0)
 # ---- TURTLE DRAWDOWN TAPER (Faith, "The Complete Turtle Trader",
 # pp. 92-93): cut risk per trade 20% for every 10% drawdown from the
 # equity peak, restore automatically as equity recovers.
-RISK_DD_TAPER = True
+# PAPER DATA MODE (2026-08-31): OFF - the taper shrank size to 2 lots
+# (paper equity ~34% below its Aug peak); data collection wants FULL
+# consistent 0.5% risk sizing.  Re-enable for live trading.
+RISK_DD_TAPER = False
 TAPER_STEP_PCT = 10.0          # one taper step per 10% drawdown
 TAPER_FACTOR = 0.8             # risk x 0.8 per step (2.0% -> 1.6% -> 1.28%)
 

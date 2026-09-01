@@ -219,6 +219,32 @@ feed. Windows scheduled task **`PrOxyPushDhanToken` at 08:45 IST daily**
 (next run 02-Sep 08:45). Run manually with `--no-push` to test generation
 only.
 
+### 4f. Commodities engine + dashboard tab (NEW, 01-Sep evening)
+- **MCX data path PROVEN**: Dhan scrip master (`images.dhan.co/api-data/api-scrip-master.csv`,
+  24 MB — needs a browser UA, 403 otherwise; gitignored, regenerable via
+  `proxy.commodity_data.download_mcx_master`) → near-month FUTCOM contract
+  → charts API with `MCX_COMM`/`FUTCOM` 5m candles (real volume, works
+  intraday incl. evening). CRUDEOIL/GOLD/SILVER/NG/COPPER all resolved.
+- **`proxy/commodity_engine.py`**: `CommodityBacktest` + `CommodityPaperEngine`
+  (shared scoring/exits/risk pipeline; INR lot PnL; sizing = 0.3% risk with
+  a hard notional-leverage cap 10× — full-size GOLD/SILVER 1-lot notional
+  exceeds it and is skipped; the playable set is the minis + CRUDEOIL).
+  CLI: `python -m proxy.commodity_engine backtest --symbol CRUDEOIL`.
+- **`proxy/commodity_config.py`**: evening session 15:45–23:00 + 23:30
+  force-exit (`full_session=True` for 09:00 backtests); 0.4% stop / 0.8%
+  target / lock arm +0.2% floor +0.05% trail 0.15%; 0.3% risk, 1%/5% halts.
+- **Dashboard tab**: sidebar → "Commodities" (MCX open status, symbol LTP +
+  lot, leverage-cap playability, paper-engine DB if present, on-demand
+  backtest with an honest "<100 trades not significant" note).
+- **Book mining**: `docs/COMMODITY_NOTES.md` (200 lines, page-cited) —
+  key rules: evening = the two liquid global sessions (16:15–21:30 IST),
+  cap leverage ~10×, trade the front month (roll drag), regime first.
+- **HONEST result**: default knobs LOSE on the recent 7-day sample
+  (CRUDEOIL 35 trades PF 0.37; every lock/stop variant tested loses).
+  This is machinery + data path — the scalper's edge does NOT transplant
+  to MCX untuned. Next: collect data + walk-forward/strat_ab tuning, or
+  use it as-is for evening data collection (paper).
+
 ## 5. Runbooks
 
 **Deploy/sync to the VPS** (paramiko, creds from `C:\Athena_X\.env`
@@ -296,6 +322,12 @@ before live.
     kill-switch). Live gate choice with the ML chat: veto70 stays the
     conservative default; today's data says it never fires, so it can't
     be blamed for day-1's all-puts P&L either way.
+12. **Commodities (NEW, committed 833a755)** — engine + dashboard tab +
+    MCX data path built and tested (7 tests). NOT tuned: default knobs
+    lose on the 7-day sample. Deploy to the box (new modules +
+    streamlit_app.py) when the user wants the tab live there; a paper
+    worker for the evening session is the next step (schedule ~15:45 IST,
+    reuse `CommodityPaperEngine.step` + `fetch_mcx_intraday` polling).
 
 ## 7. The plan (this week)
 

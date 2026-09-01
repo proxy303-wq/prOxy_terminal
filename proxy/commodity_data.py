@@ -70,12 +70,15 @@ def load_mcx_master(path=None):
     return rows
 
 
-# Known MCX lot sizes (contract specs; the scrip master's SEM_LOT_UNITS is
-# always '1.0' for MCX and cannot be used).  Keyed by the symbol STEM as it
-# appears in SEM_TRADING_SYMBOL (e.g. "GOLDM" for GOLDM-04Sep2026-FUT).
+# Known MCX lot sizes expressed in PRICE-QUOTED units per lot (the scrip
+# master's SEM_LOT_UNITS is always '1.0' for MCX and cannot be used).
+# NOTE: GOLD/GOLDM/GOLDTEN/GOLDGUINEA/GOLDPETAL quote in INR per 10g, so
+# their "units per lot" = grams/10 (GOLD 1kg = 100 x 10g units, GOLDM 100g
+# = 10 units).  SILVER quotes per kg, CRUDEOIL per barrel, NG per mmBtu,
+# base metals per kg - those are already in quoted units.
 MCX_LOT_SIZES = {
     "CRUDEOIL": 100, "CRUDEOILM": 10,
-    "GOLD": 1000, "GOLDM": 100, "GOLDTEN": 10, "GOLDGUINEA": 8, "GOLDPETAL": 1,
+    "GOLD": 100, "GOLDM": 10, "GOLDTEN": 1, "GOLDGUINEA": 0.8, "GOLDPETAL": 0.1,
     "SILVER": 30, "SILVERM": 5, "SILVERMIC": 1, "SILVER100": 100,
     "NATURALGAS": 1250, "NATGASMINI": 250,
     "COPPER": 2500,

@@ -17,8 +17,9 @@ from proxy.config import CAPITAL
 class TestLotSizes(unittest.TestCase):
     def test_known_stems(self):
         self.assertEqual(mcx_lot_size("CRUDEOIL"), 100)
-        self.assertEqual(mcx_lot_size("GOLDM"), 100)
-        self.assertEqual(mcx_lot_size("GOLD"), 1000)
+        # gold family quotes in INR per 10g -> units per lot = grams/10
+        self.assertEqual(mcx_lot_size("GOLDM"), 10)
+        self.assertEqual(mcx_lot_size("GOLD"), 100)
         self.assertEqual(mcx_lot_size("SILVERM"), 5)
         self.assertEqual(mcx_lot_size("NATGASMINI"), 250)
         self.assertEqual(mcx_lot_size("COPPER"), 2500)

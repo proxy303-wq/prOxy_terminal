@@ -691,13 +691,17 @@ class PaperEngine:
         # GTT: for an unarmed trade the stop is checked first
         # (conservative).  LONG: loss when premium falls, win when it rises.
         # SHORT: loss when premium rises, win when it falls.
+        # PAPER DATA MODE: NO_STOP_LOSS disables the stop entirely so trades
+        # run to lock/target/15:15 (mirrors proxy/exits.py; the LIVE engine
+        # path is engine._check_exits, not exits.py).
+        no_stop = bool(getattr(self.cfg, "NO_STOP_LOSS", False))
         if is_long:
-            if prem_low <= stop_p:
+            if not no_stop and prem_low <= stop_p:
                 return stop_p, "STOP_LOSS_HIT (-0.5%)"
             if prem_high >= target_p:
                 return target_p, "TARGET_HIT (+1%)"
         else:
-            if prem_high >= stop_p:
+            if not no_stop and prem_high >= stop_p:
                 return stop_p, "STOP_LOSS_HIT (-0.5%)"
             if prem_low <= target_p:
                 return target_p, "TARGET_HIT (+1%)"

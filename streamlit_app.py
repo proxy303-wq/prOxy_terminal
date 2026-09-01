@@ -163,6 +163,7 @@ with st.sidebar:
             "Dashboard",
             "Portfolio",
             "Trading",
+            "Commodities",
             "Wealth",
             "Risk",
             "Analytics",
@@ -713,6 +714,126 @@ elif page == "Trading":
             width="stretch",
             hide_index=True,
         )
+
+
+# ------------------------------------------------------------
+# Commodities (MCX futures, evening session)
+# ------------------------------------------------------------
+
+elif page == "Commodities":
+    st.subheader("Commodities — MCX futures (evening session)")
+    st.caption("Runs AFTER the NIFTY options session closes (~15:30); MCX trades 09:00–23:30 IST. "
+               "Paper-only for now. Book mining: `docs/COMMODITY_NOTES.md`.")
+
+    try:
+        from proxy.commodity_config import commodity_config
+        from proxy.commodity_data import (mcx_ticker, mcx_lot_size, resolve_mcx_contract,
+                                          load_mcx_master)
+        from proxy.commodity_engine import CommodityBacktest, commodity_lot_size, MCX_COST_PCT
+        _cok = True
+    except Exception as _ce:
+        st.error(f"Commodity module unavailable: {_ce}")
+        _cok = False
+
+    if _cok:
+        import sqlite3 as _sq
+        from datetime import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        _ist = _dt.now(_ZI("Asia/Kolkata"))
+        mcx_open = _dt(_ist.year, _ist.month, _ist.day, 9, 0, tzinfo=_ZI("Asia/Kolkata")) <= _ist <= \
+                   _dt(_ist.year, _ist.month, _ist.day, 23, 30, tzinfo=_ZI("Asia/Kolkata")) and _ist.weekday() < 5
+        _cfg = commodity_config()
+        _sel = st.selectbox("Symbol", _cfg.MCX_SYMBOLS + ["GOLD", "SILVER", "NATURALGAS"],
+                            index=0, key="mcx_symbol")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("MCX Market", "OPEN" if mcx_open else "CLOSED",
+                  "09:00–23:30 IST" if mcx_open else "opens 09:00 IST")
+        try:
+            ltp, prev = mcx_ticker(_sel)
+            chg = (ltp - prev) if (ltp and prev) else None
+            c2.metric(f"{_sel} LTP", f"₹{ltp:,.2f}" if ltp else "—",
+                      f"{chg:+,.2f}" if chg is not None else None)
+        except Exception:
+            c2.metric(f"{_sel} LTP", "—")
+        lot = mcx_lot_size(_sel)
+        c3.metric("Lot size", f"{lot:,}")
+
+        # playability under the notional-leverage cap (book: margin risk)
+        try:
+            _eq = 500_000.0
+            _cap = float(getattr(_cfg, "NOTIONAL_LEVERAGE_CAP", 10.0))
+            _notional = (ltp or 0.0) * lot
+            play = _notional > 0 and _notional <= _eq * _cap
+            st.info(f"1-lot notional ≈ ₹{_notional:,.0f} vs leverage cap {_cap:.0f}× ₹{_eq:,.0f} "
+                    f"= ₹{_eq * _cap:,.0f} → {'PLAYABLE' if play else 'SKIPPED (exceeds cap)'}")
+        except Exception:
+            pass
+
+        st.divider()
+
+        # ---- paper engine DB (reports/commodity_state.sqlite) ----
+        st.subheader("Paper engine state")
+        _db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", "commodity_state.sqlite")
+        if os.path.exists(_db):
+            try:
+                _conn = _sq.connect(f"file:{_db}?mode=ro", uri=True)
+                _rows = _conn.execute(
+                    "SELECT symbol,direction,lots,entry_premium,exit_premium,entry_time,exit_time,exit_reason,pnl "
+                    "FROM commodity_trades ORDER BY id DESC LIMIT 15").fetchall()
+                _agg = _conn.execute(
+                    "SELECT COUNT(*), SUM(pnl), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END) FROM commodity_trades").fetchone()
+                _conn.close()
+                if _rows:
+                    st.dataframe(
+                        pd.DataFrame(_rows, columns=["symbol", "dir", "lots", "entry", "exit",
+                                                     "in", "out", "reason", "pnl"]),
+                        width="stretch", hide_index=True)
+                    st.metric("All-time (paper)", f"₹{_agg[1]:+,.2f}",
+                              f"{_agg[0]} trades · {_agg[2]} wins")
+                else:
+                    st.info("Commodity paper engine DB exists but has no trades yet.")
+            except Exception as _de:
+                st.warning(f"Could not read commodity state DB: {_de}")
+        else:
+            st.info("No commodity paper-engine DB yet — run the commodity worker or a backtest first.")
+
+        st.divider()
+
+        # ---- on-demand backtest ----
+        st.subheader("Backtest (on demand)")
+        b1, b2, b3 = st.columns([1, 1, 1])
+        _days = b1.slider("Days of data", 3, 10, 5)
+        _full = b2.checkbox("Full session (09:00)", value=False,
+                            help="Off = evening window 15:45–23:00 (post NIFTY close)")
+        if b3.button("Run backtest", type="primary"):
+            import time as _t
+            _t0 = _t.time()
+            with st.spinner(f"Fetching {_days}d of {_sel} 5m bars + replaying..."):
+                from proxy.commodity_data import fetch_mcx_intraday
+                from proxy.config import CAPITAL
+                _df = fetch_mcx_intraday(_sel, days=_days)
+            if _df.empty:
+                st.error(f"No MCX data for {_sel}")
+            else:
+                _cfg2 = commodity_config(full_session=_full, symbol=_sel)
+                _bt = CommodityBacktest(_df, symbol=_sel, cfg=_cfg2, capital=CAPITAL)
+                _r = _bt.run()
+                _m1, _m2, _m3, _m4 = st.columns(4)
+                _m1.metric("Trades", _r["trades"])
+                _m2.metric("Net P&L", f"₹{_r['net_pnl_inr']:+,.0f}",
+                           f"{_r['net_pct']:+.2f}%")
+                _m3.metric("Win rate", f"{_r['win_rate']:.1f}%")
+                _m4.metric("Profit factor", f"{_r['profit_factor']:.2f}" if _r["profit_factor"] else "—")
+                if _r.get("daily_pnl"):
+                    _dp = pd.DataFrame([{"day": k, "pnl": v} for k, v in _r["daily_pnl"].items()])
+                    st.line_chart(_dp.set_index("day")["pnl"])
+                st.caption(f"session {_r['session']} · exits {_r['exit_reason_counts']} · "
+                           f"ran in {_t.time() - _t0:.1f}s · sample too small to be significant "
+                           f"(<100 trades: Aronson)")
+                st.caption("Honest note: on recent samples the scalper LOSES on commodities with the "
+                           "default knobs — treat this as machinery + data, tune via walk-forward "
+                           "before any real use (same as NIFTY was).")
 
 
 # ------------------------------------------------------------

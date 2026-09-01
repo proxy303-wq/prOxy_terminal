@@ -19,6 +19,9 @@ data/*.csv
 # downloadable Dhan option-chain history (regenerate: python -m mlab.options_hist)
 data/options/
 
+# Dhan scrip master (24 MB, regenerable: proxy.commodity_data.download_mcx_master)
+data/scrip_master/
+
 # trained ML models (regenerate with: python run_terminal.py ml-train)
 models/
 

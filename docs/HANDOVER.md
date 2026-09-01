@@ -85,17 +85,39 @@ Friday; on the post-week redeploy set `ML_LAB_MODE = "advisory"` (or
 `ML_LAB_ENABLED = False`) first, then decide veto vs advisory for live
 with the ML chat.
 
-### 3c. Sizing quirk (2 lots instead of 8) — known, harmless for labels
+### 3c. Sizing (was 2 lots, now 5) — resolved for data mode, capital basis still stale
 
 Paper sizing uses `state["capital"]` = **285,568.47** (the stale LIVE Dhan
 balance from 31-Aug) + realized P&L ≈ 357k equity, while the equity-curve
-peak is 545,148.22 (phantom-profit era) → a bogus ~34.5% "drawdown" →
-Turtle taper ×0.512 → **2 lots** from 11:49 onward (morning trades used 8
-lots because the pre-restart process sized on the old capital basis).
-ML labels are premium **%** moves, so lot size does NOT change the data;
-flagging so nobody chases the 8-lot line. Fix for the post-week cleanup:
-reset `state["capital"]` to 500k (or use `cfg.CAPITAL` in paper mode) and
-prune the stale equity-curve peak so the taper goes dormant again.
+peak is 545,148.22 (phantom-profit era). That bogus ~34.5% "drawdown" fed
+the Turtle taper → **2 lots** from the 11:49 restart until **12:28**, when
+a concurrent session disabled the taper for data mode (`d130a4c`:
+`RISK_DD_TAPER = False`, deployed to the box ~12:37, restart). Sizing is
+now **5 lots = full 0.5% of ~357k paper equity** (rows 45+). The **8-lot
+band still needs the post-week cleanup**: reset `state["capital"]` to 500k
+(or use `cfg.CAPITAL` in paper mode) + prune the stale equity-curve peak.
+ML labels are premium % moves, so lot size never changed the data.
+
+### 3d. LUNCH FILTER WAS NOT ENFORCED IN THE LIVE PATH (fixed, deploy pending)
+
+`LUNCH_DOLDRUMS_ENABLED` was enforced only in `backtest.py` and
+`crypto_engine.py` — the **live NIFTY gate (`engine._check_exits`/entry
+gate) never checked it** (same class of gap as NO_STOP_LOSS). On 01-Sep the
+box took **5 lunch-window entries** (12:00–14:00): rows 45–48 (closed,
+all LOCK_PROFIT) + open trade #50 (24200 PE @ 13:35). 31-Aug (live day-1)
+happened to have none.
+
+**Fix `fcc6382`**: `PaperEngine._in_lunch` mirrors `backtest._in_lunch`
+and is wired into the fresh-entry gate (silent skip, no notify spam).
+Committed + pushed but **NOT yet deployed** — the box still runs the
+unfiltered engine. Deploy after market close (safe: no open trades) or
+pre-market: single-file scp of `proxy/engine.py` + restart
+(`tools/_deploy_engine.py`, abort-guards on open trades).
+
+**ML data hygiene:** flag all lunch-window entries for 01-Sep (rows 45–48,
+open #50) as out-of-spec — the live profile will not take them once the
+filter ships; today they were all winners, so they flatter the sample
+slightly.
 
 **After the data week**: revert to a LIVE profile (ADX 18, confidence
 60–70, RSI 50/50 or 45/55, `NO_STOP_LOSS=False`,
@@ -213,16 +235,24 @@ before live.
    not the 5-min transplant.
 7. **Day-1 data quality** — 2 truncated trades (rows 36, 39) to exclude
    from clean ML labels (§3a); box code was patched 11:49 + `bcff009`
-   committed, so Tue afternoon→Fri collection is clean.
-8. **Sizing/taper cleanup (post-week)** — stale `state["capital"]`
-   (285,568.47 live balance) + phantom-era 545k equity peak drive a bogus
-   taper to 2 lots (§3c); reset capital to 500k / prune peak so paper
-   sizing returns to the 8-lot band.
-9. **Day-1 tally (paper, 01-Sep, rows 35-43)**: 9 trades, 7 LOCK_PROFIT /
-   2 STOP_LOSS_HIT (pre-patch), net ≈ **+37,982 INR** — dominated by the
-   11:05-11:35 CE run (+33.8k across 3 trades).
-   Direction mix was still mostly PUTs early (bias unchanged); CE streak
-   came in the UPTREND after 11:00.
+   committed, so Tue afternoon→Fri collection is clean. Plus 5 lunch-window
+   entries (rows 45-48, open #50) to flag (§3d) — filter not enforced in
+   the live path until `fcc6382` deploys.
+8. **Sizing/taper cleanup (post-week)** — taper already disabled for data
+   mode (`d130a4c`, deployed ~12:37) so sizing is the full 0.5% (5 lots at
+   ~357k paper equity); the stale `state["capital"]` (285,568.47 live
+   balance) + phantom-era 545k peak remain — reset to 500k / prune peak to
+   restore the 8-lot band (§3c).
+9. **Day-1 tally (paper, 01-Sep, through ~13:44)**: 14 closed (12W/2L) +
+   1 open (#50) = 15 signals. Closed net ≈ **+48,642 INR** — morning
+   rows 35-42 (+37.8k incl. the 11:05-11:35 CE run +33.8k), lunch rows
+   45-48 all LOCK_PROFIT (+1.0k/+1.2k/+0.8k/+7.2k). 2 truncated stops
+   (rows 36, 39) pre-11:49 patch. Direction mix: 12 PE / 3 CE — PUT bias
+   still dominates.
+10. **Concurrent operator** — a second session (same repo) is active:
+    committed `d130a4c` (taper off) at 12:28 and deployed it to the box
+    ~12:37 (restart). Coordinate engine/config deploys with it; it may
+    also be pushing ML Lab work.
 
 ## 7. The plan (this week)
 

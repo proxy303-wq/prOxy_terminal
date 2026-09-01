@@ -54,6 +54,49 @@ Purpose: capture the **untruncated outcome distribution** of every signal
 for the user's ML predictor (being wired in a SEPARATE chat). Backtest
 sanity (July): 36 trades, 0 stop exits.
 
+### 3a. Day-1 incident (Tue 01-Sep): stops fired until 11:49 patch — READ THIS
+
+The box's `engine.py` was **older than the data-mode commit** (last full
+deploy 31-Aug; only `config.py` was file-synced), so the LIVE exit path
+(`engine._check_exits`) checked the 0.5% stop even though
+`NO_STOP_LOSS=True`:
+
+- 09:30 & 10:35 trades hit **STOP_LOSS_HIT** → 2 truncated outcomes
+  (tracker rows **36** and **39**; the rest of the day ran untruncated).
+- Hot-patched the box at 11:49 IST (guard added + restart) — since then
+  every trade runs to lock/target/reverse/15:15 as intended.
+- **Commit `bcff009`** puts the same guard in the repo's `engine.py`
+  (HEAD previously lacked it — a deploy from HEAD would have silently
+  re-enabled stops). The repo and box are now behaviorally equal on
+  this point.
+- **ML data hygiene:** exclude/flag rows 36 & 39 for 01-Sep
+  (`exit_reason='STOP_LOSS_HIT (-0.5%)'`) — they are censored, not clean
+  data-mode labels.
+
+### 3b. Box ≠ HEAD until the post-week redeploy (do NOT deploy mid-week)
+
+The box is intentionally running **HEAD minus the ML-Lab wiring** (old
+LSTM advisory only) + the no-stop guard. That is CORRECT for data mode:
+`config.py` on HEAD sets `ML_LAB_MODE = "veto"` (blocks entries AGAINST a
+confident ML call, verified live at 08:56: "GATE LAB veto: ML BUY 79% vs
+SELL - SELL blocked") — **deploying HEAD config now would filter signals
+and pollute the "every signal" collection.** Keep the box as-is through
+Friday; on the post-week redeploy set `ML_LAB_MODE = "advisory"` (or
+`ML_LAB_ENABLED = False`) first, then decide veto vs advisory for live
+with the ML chat.
+
+### 3c. Sizing quirk (2 lots instead of 8) — known, harmless for labels
+
+Paper sizing uses `state["capital"]` = **285,568.47** (the stale LIVE Dhan
+balance from 31-Aug) + realized P&L ≈ 357k equity, while the equity-curve
+peak is 545,148.22 (phantom-profit era) → a bogus ~34.5% "drawdown" →
+Turtle taper ×0.512 → **2 lots** from 11:49 onward (morning trades used 8
+lots because the pre-restart process sized on the old capital basis).
+ML labels are premium **%** moves, so lot size does NOT change the data;
+flagging so nobody chases the 8-lot line. Fix for the post-week cleanup:
+reset `state["capital"]` to 500k (or use `cfg.CAPITAL` in paper mode) and
+prune the stale equity-curve peak so the taper goes dormant again.
+
 **After the data week**: revert to a LIVE profile (ADX 18, confidence
 60–70, RSI 50/50 or 45/55, `NO_STOP_LOSS=False`,
 `MAX_UNARMED_BARS=4`) BEFORE any real money.
@@ -150,9 +193,10 @@ before live.
 
 ## 6. Known issues / next steps
 
-1. **ML Lab wiring UNCOMMITTED** — `proxy/engine.py`, `proxy/backtest.py`,
-   `tests/test_mlab.py`, `mlab/` are the OTHER chat's work (their ML
-   predictor). Do NOT commit/overwrite; coordinate with that chat.
+1. **ML Lab wiring is COMMITTED (17707f0, 08:59) and NOT in the box** — the
+   earlier "uncommitted" note is stale. The veto gate is a data-mode hazard:
+   deploying HEAD config mid-week filters signals (see §3b). Coordinate the
+   live veto/advisory choice with the ML chat after Friday.
 2. **All-puts directional bias + win/loss asymmetry** — the ML should gate
    direction (Miner-style: only trade ML-aligned direction). Exit
    asymmetry A/B done: current tight-lock is profit-optimal; wider
@@ -167,6 +211,18 @@ before live.
    the first automated run).
 6. **Crypto** — held; if reactivated, use the Goodman daily-trend system,
    not the 5-min transplant.
+7. **Day-1 data quality** — 2 truncated trades (rows 36, 39) to exclude
+   from clean ML labels (§3a); box code was patched 11:49 + `bcff009`
+   committed, so Tue afternoon→Fri collection is clean.
+8. **Sizing/taper cleanup (post-week)** — stale `state["capital"]`
+   (285,568.47 live balance) + phantom-era 545k equity peak drive a bogus
+   taper to 2 lots (§3c); reset capital to 500k / prune peak so paper
+   sizing returns to the 8-lot band.
+9. **Day-1 tally (paper, 01-Sep, rows 35-43)**: 9 trades, 7 LOCK_PROFIT /
+   2 STOP_LOSS_HIT (pre-patch), net ≈ **+37,982 INR** — dominated by the
+   11:05-11:35 CE run (+33.8k across 3 trades).
+   Direction mix was still mostly PUTs early (bias unchanged); CE streak
+   came in the UPTREND after 11:00.
 
 ## 7. The plan (this week)
 

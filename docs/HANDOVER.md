@@ -119,6 +119,37 @@ as out-of-spec — the live profile will not take them once the filter
 ships; today they were all winners, so they flatter the sample
 (+39.6k of the day's +164k).
 
+### 3e. LIVE GATE DECISION (user, 01-Sep): veto70 / h3 — no change to default
+
+User confirmed: the live ML gate = **`ML_LAB_MODE="veto"`,
+`ML_LAB_VETO_PROB=70`, `ML_LAB_HORIZON="h3"`** (the shipped default,
+committed `17707f0`). Evidence: 40-day A/B +19,287 → +19,377 with win
+58.9 → 59.7% ("removes only net-negative trades"); day-1 replay
+(`tools/_gate_replay.py`) — veto70 blocked 0/23 (inert on winners).
+
+**Current box state (01-Sep): config already carries veto70** (the 12:37
+config deploy brought HEAD's ML_LAB block) **but the gate is INERT** —
+the box has NO `mlab/`, NO `proxy/ml_lab_gate.py`, NO `models/ml_lab/`,
+NO lightgbm, so the engine degrades to "no ML → allow all". That is
+exactly right for the data week: every signal still collected, veto70
+staged for live.
+
+**Activation checklist (post-week, with the full redeploy — veto does
+NOTHING until all four land):**
+1. Full HEAD deploy → brings `mlab/` + `proxy/ml_lab_gate.py` (missing).
+2. Copy `models/ml_lab/` → box (gitignored; ~50 joblib/meta files, scp
+   from this machine).
+3. `pip install lightgbm` into `/opt/proxy/venv` (missing; xgboost 2.1.4
+   present). Without it the lgbm "best" model fails to load → inert.
+4. Restart + verify the gate is ALIVE: entry logs carry `| LAB SELL
+   42%@h3` notes; `python -m unittest tests.test_mlab -v`;
+   `python run_terminal.py ml-lab --predict nifty,h3`.
+5. Same redeploy flips the rest of the live profile (NO_STOP_LOSS=False,
+   MAX_UNARMED_BARS=4, ADX 18, conf 60–70, RSI 50/50 or 45/55) + the
+   taper re-enable AFTER the equity-curve/capital cleanup (§3c/§6-8).
+   Verify `ML_LAB_ENABLED` can be forced off via
+   `PROXY_ML_LAB_ENABLED=false` if the gate ever needs bypassing.
+
 **After the data week**: revert to a LIVE profile (ADX 18, confidence
 60–70, RSI 50/50 or 45/55, `NO_STOP_LOSS=False`,
 `MAX_UNARMED_BARS=4`) BEFORE any real money.

@@ -239,11 +239,44 @@ only.
 - **Book mining**: `docs/COMMODITY_NOTES.md` (200 lines, page-cited) —
   key rules: evening = the two liquid global sessions (16:15–21:30 IST),
   cap leverage ~10×, trade the front month (roll drag), regime first.
-- **HONEST result**: default knobs LOSE on the recent 7-day sample
-  (CRUDEOIL 35 trades PF 0.37; every lock/stop variant tested loses).
-  This is machinery + data path — the scalper's edge does NOT transplant
-  to MCX untuned. Next: collect data + walk-forward/strat_ab tuning, or
-  use it as-is for evening data collection (paper).
+- **HONEST result (tuning pass, 01-Sep night)**: the scalper has NO edge
+  on MCX. 120-config grid (5 symbols × 4 exit styles × 3 regime filters ×
+  2 sessions, ~36 trading days each, chunked Dhan fetch) — every variant
+  loses; most hit the −5% monthly halt. The one "positive" (NATGASMINI
+  trend-nolock+MACD+overlap) was flat (PF 1.02) and flipped sign
+  train−13.7k / test+15.8k = noise. Commodities = data/analysis tool +
+  dashboard tab; NOT tradable with this strategy. Engine supports
+  ATR-scaled exits, MACD regime filter, news blackout (EIA ~20:00 IST)
+  for whoever wants to try a different (trend-following) system on the
+  data. Tuning harness: `tools/_commodity_tune.py` (parallel), data
+  cached in `data/commodities/` (gitignored).
+
+### 4g. Index options variants — BANKNIFTY / FINNIFTY / SENSEX (01-Sep)
+The NIFTY strategy ports cleanly to the sibling index options (same
+engine, per-index geometry only). **`proxy/dual.py` now COMMITTED**
+(was untracked) with `banknifty_config()` (lot 35, strike 100, idx 25,
+ADX 0) + new `finnifty_config()` (lot 40, strike 50, idx 27, Friday
+expiry, ADX 0) + `sensex_config()` (lot 20, strike 100, idx 51,
+Wednesday expiry, ADX 0). Worker: `railway_worker.py --variant
+banknifty|finnifty|sensex` (tagged notifier, own DB/state per index).
+
+Backtests (delta-premium proxy — same overstatement caveat as every
+NIFTY backtest; untuned ADX 0; FIN/SENSEX 64 trading days Jun–Sep 01):
+
+| index | trades | win% | net | PF | maxDD |
+|---|---|---|---|---|---|
+| FINNIFTY | 200 | 72.5% | +146,615 | 2.15 | 2.65% |
+| SENSEX | 256 | 70.3% | +288,708 | 3.02 | 2.72% |
+| BANKNIFTY (2y, ref) | — | — | Jul +86.8k / Jun +221k | ~2.2 | — |
+
+Exit profile identical to NIFTY (100% LOCK_PROFIT/REVERSE_SIGNAL).
+**Before live (per index): walk-forward ADX (NIFTY=18, BN=0 — each its
+own), 1m exit resolution data (BN needs it, FIN/SENSEX same), a
+real-premium backtest, and PROXY_ALLOCATION_PCT split when running
+multiple engines.** Test runner: `tools/_index_bt.py` (unbuffered);
+data: `data/FINNIFTY_5m.csv`, `data/SENSEX_5m.csv` (gitignored; fetched
+by Dhan chunked fetch — note the OTHER session also fetched these at
+16:57, coordinate).
 
 ## 5. Runbooks
 

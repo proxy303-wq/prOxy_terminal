@@ -140,13 +140,11 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
 
     Live Dhan REST marketfeed first, synthetic fallback after
     NO_BAR_FALLBACK_SECONDS without any bar so the day always completes
-    and notifications fire.  variant: "nifty" (default) or "banknifty"
-    (dual engine - own cfg geometry, DB, index id 25)."""
-    if variant == "banknifty":
-        from proxy.dual import banknifty_config
-        cfg = banknifty_config()
-    else:
-        import proxy.config as cfg
+    and notifications fire.  variant: nifty/banknifty/finnifty/sensex -
+    config from proxy/dual.variant_config (shared engine, per-index
+    geometry + own DB + index id)."""
+    from proxy.dual import variant_config
+    cfg = variant_config(variant)
     _index_id = int(getattr(cfg, "INDEX_ID", 13))
     from proxy.data import FastForwardFeed
     from proxy.engine import PaperEngine
@@ -518,29 +516,28 @@ def main(variant=None):
     import argparse
     if variant is None:
         _ap = argparse.ArgumentParser()
-        _ap.add_argument("--variant", choices=["nifty", "banknifty"], default="nifty")
+        _ap.add_argument("--variant", choices=["nifty", "banknifty", "finnifty", "sensex"],
+                         default="nifty")
         variant = _ap.parse_args().variant
 
     global STATE_FILE
-    if variant == "banknifty":
-        STATE_FILE = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "reports", "worker_state_banknifty.json")
-        from proxy.dual import banknifty_config
-        _cfg = banknifty_config()
-    else:
-        import proxy.config as _cfg
+    from proxy.dual import variant_config
+    _cfg = variant_config(variant)   # nifty -> proxy.config; else the dual variant
+    STATE_FILE = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "reports",
+        f"worker_state_{variant}.json" if variant != "nifty" else "worker_state.json")
 
     load_env()
     from proxy.notifier import Notifier
     notifier = Notifier(quiet=False)
 
-    if variant == "banknifty":
+    if variant != "nifty":
         class _Tagged:
             def __init__(self, inner, tag):
                 self._inner, self._tag = inner, tag
             def log(self, msg, level="INFO"):
                 self._inner.log(f"{self._tag} {msg}", level)
-        notifier = _Tagged(notifier, "[BANKNIFTY]")
+        notifier = _Tagged(notifier, f"[{variant.upper()}]")
 
     notifier.log(f"LIVE {variant.upper()} worker started - runs paper trades on the LIVE market feed every morning (9:15 IST); signals, trades and the daily summary are posted here", "INFO")
     ensure_token(notifier)

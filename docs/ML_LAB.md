@@ -149,3 +149,34 @@ Sanity check on the VPS after deploy:
     python -m unittest tests.test_mlab -v        # 10 tests
     python -m mlab.train --symbol nifty --horizons h6 --with-options --quick
     python run_terminal.py ml-lab --predict nifty,h6
+
+## Engine integration (the signal gate)
+
+The ML Lab is wired into BOTH the live engine and the backtest simulator via
+`proxy/ml_lab_gate.py` (LabGate - engine-ready callable that runs the best
+deployed model on the engine's bar frame, live option features included).
+
+`ML_LAB_MODE` in proxy/config.py:
+
+| Mode | Behavior |
+|---|---|
+| advisory | log the LAB call on every signal, never block (default for the old ML layer) |
+| veto (default) | block entries AGAINST a confident ML call (opposite direction at >= ML_LAB_VETO_PROB, default 70) |
+| confirm | require ML agreement >= ML_LAB_MIN_PROB |
+
+40-day backtest (last_days=40, NIFTY h3):
+
+| Config | Trades | Win% | Net | PF |
+|---|---|---|---|---|
+| no gate | 124 | 58.9% | +19,287 | 1.36 |
+| veto55 h3 | 83 | 60.2% | +15,894 | 1.55 |
+| **veto70 h3** | 119 | 59.7% | **+19,377** | 1.37 |
+| veto70 h6 | 105 | 58.1% | +18,939 | 1.55 |
+
+Conclusion: the engine's own price-action signal already carries most of the
+edge; a 55%-confidence veto removes winning trades (higher PF but -17% net).
+At 70% the veto only removes net-negative trades - a small, free quality
+boost (net slightly up, win rate up).  Higher-confidence variants (h6 70%)
+cut more trades for a better PF but lower net - pick by capital/goal.
+
+Every entry log now carries the LAB call, e.g. `| LAB SELL 42%@h3`.

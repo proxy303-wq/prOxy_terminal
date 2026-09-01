@@ -58,10 +58,10 @@ MAX_TRADES_PER_STRIKE = 2       # allow ONE re-entry on the same strike (trendin
 # RSI alignment gate used by the signal engine: BUY needs RSI > BULL,
 # SELL needs RSI < BEAR.  50/50 = neutral momentum (spec default);
 # 62/38 = stricter "RSI > 70 or < 30 confirms trend strength" reading.
-# FORCE-OPEN (2026-08-31, user chose full throughput): relaxed to 45/55 so
-# the engine takes more signals (more total P&L, lower per-trade quality).
-RSI_ENTRY_GATE_BULL = 45.0
-RSI_ENTRY_GATE_BEAR = 55.0
+# PAPER DATA MODE (2026-08-31): fully open (0/100) - every signal is taken
+# for ML training data.  Restore 50/50 (or 45/55) for live trading.
+RSI_ENTRY_GATE_BULL = 0.0
+RSI_ENTRY_GATE_BEAR = 100.0
 
 # ---- DUAL-TIMEFRAME MOMENTUM GATE (from Robert Miner, "High Probability
 # Trading Strategies", Ch.2 - Table 2.1) ----
@@ -104,13 +104,17 @@ RISK_DD_TAPER = True
 TAPER_STEP_PCT = 10.0          # one taper step per 10% drawdown
 TAPER_FACTOR = 0.8             # risk x 0.8 per step (2.0% -> 1.6% -> 1.28%)
 
+# ---- PAPER DATA MODE (ML training collection, 2026-08-31 -> Sep-04) ----
+# Full confidence + NO stop-loss: take EVERY signal (all quality gates off)
+# and let each trade run its FULL course (to lock-profit / target / the
+# 15:15 force-exit) so the ML sees the true outcome distribution, NOT one
+# truncated by a 5pt stop.  PAPER ONLY - never live with this.
+NO_STOP_LOSS = True
+
 # Trend-strength gate: BUY/SELL only when ADX >= MIN_TREND_ADX (0 = off).
-# The 5/10/20 moving averages already lean this way; ADX adds persistence.
-# Walk-forward (tools/walk_forward.py, train 2026-01..05 / test 2026-06..08)
-# shows ADX 18 is best on BOTH train (PF 2.71) and held-out test (PF 2.53 vs
-# 2.14 with ADX off) - not curve-fit.  KEPT at 18 per user (2026-08-31) -
-# only confidence/RSI were force-opened, NOT the trend gate.
-MIN_TREND_ADX = 18.0
+# PAPER DATA MODE: 0 = every signal (the walk-forward-validated 18 is the
+# live robustness setting; data mode takes everything for the ML).
+MIN_TREND_ADX = 0.0
 
 # --- Time filters (IST) ---
 TRADE_START        = dt_time(9, 15)     # first tradable moment
@@ -230,8 +234,10 @@ EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
 
 # ---- UNARMED TIME-STOP: if a trade has not armed the lock-profit within N
 # 5-min bars, cut it at market - the maximals stop is so wide that losers
-# otherwise bleed to the 15:15 time-stop (the -17.7k day)
-MAX_UNARMED_BARS = 4            # 20 minutes: sweep cut worst loss -3.7k -> -1.9k, P&L ~same
+# otherwise bleed to the 15:15 time-stop (the -17.7k day).
+# PAPER DATA MODE (2026-08-31): 0 = no time-cut, losers run to force-exit
+# (ML data collection wants the full outcome, not a 20-min truncation).
+MAX_UNARMED_BARS = 0
 
 # ---- VOLATILITY MODEL for the maximals stops ----
 # "window" = flat realized std over MAXIMALS_VOL_WINDOW bars
@@ -299,9 +305,9 @@ SCORE_VOLUME_W   = 0.20
 SCORE_BUY_THRESHOLD  =  0.15
 SCORE_SELL_THRESHOLD = -0.15
 
-MIN_CONFIDENCE_PCT   = 60.0    # FORCE-OPEN (2026-08-31): 70 -> 60 = more signals
-                               # ("Signal Strength > 70% confidence" plan rule, relaxed for throughput)
-MIN_SETUP_STRENGTH   = 55.0    # price-action setup strength floor (0-100)
+MIN_CONFIDENCE_PCT   = 0.0     # PAPER DATA MODE: 0 = take every signal
+                               # (live = 60-70; "Signal Strength > 70%" plan rule)
+MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
 
 # --- ML prediction layer (LSTM per the research paper) ---
 # The paper (Srivastava et al. 2023) found LSTM the best model for NIFTY
@@ -312,6 +318,20 @@ ML_ENABLED = os.environ.get("PROXY_ML_ENABLED", "true").lower() != "false"   # s
 ML_MODEL = "lstm"               # "lstm" | "xgboost"
 ML_CONFIRM = False              # advisory by default
 ML_MIN_PROB = 55.0              # minimum agreed probability for the gate
+
+# --- ML Lab layer (walk-forward validated direction models + option chain) ---
+# The ML Lab (mlab/) replaces the old LSTM with walk-forward-validated models
+# that also consume Dhan option-chain features (PCR, IV, OI) live.
+# ML_LAB_MODE: "advisory" (log only) | "veto" (default: block trades AGAINST
+# a confident ML call) | "confirm" (require ML agreement >= ML_LAB_MIN_PROB).
+# Train with:  python -m mlab.train --symbol all --horizons all --with-options
+ML_LAB_ENABLED = os.environ.get("PROXY_ML_LAB_ENABLED", "true").lower() != "false"
+ML_LAB_MODE = "veto"
+ML_LAB_CONFIRM = False              # legacy == mode "confirm"
+ML_LAB_MIN_PROB = 55.0              # confirm-mode threshold
+ML_LAB_VETO_PROB = 55.0             # veto-mode: opposite call confidence to block
+ML_LAB_HORIZON = "h3"               # h1=5m | h3=15m (best with the engine) | h6=30m | h12=60m
+ML_LAB_SYMBOL = "nifty"
 
 # Meta-label precision layer (mlfinlab style): a second model that learns
 # from past outcomes whether an approved signal will win.  Advisory by

@@ -34,6 +34,11 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
     target_p = trade["target_premium"]
     is_long = trade["direction"] == "LONG"
     lock_on = bool(getattr(cfg, "LOCK_PROFIT_ENABLED", False)) and bool(trade.get("lock_enabled", True))
+    # PAPER DATA MODE (2026-08-31): NO_STOP_LOSS = True disables the
+    # stop-loss entirely so trades run their FULL course (to lock/target or
+    # the 15:15 force-exit).  Used for ML training-data collection - the
+    # outcome distribution is not truncated by a stop.
+    no_stop = bool(getattr(cfg, "NO_STOP_LOSS", False))
 
     if lock_on:
         prior_peak = trade.get("pnl_peak") or entry_premium
@@ -77,12 +82,12 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
         return prem_now, "UNARMED_TIME_STOP"
 
     if is_long:
-        if prem_low <= stop_p:
+        if not no_stop and prem_low <= stop_p:
             return stop_p, "STOP_LOSS_HIT (-0.5%)"
         if prem_high >= target_p:
             return target_p, "TARGET_HIT (+1%)"
     else:
-        if prem_high >= stop_p:
+        if not no_stop and prem_high >= stop_p:
             return stop_p, "STOP_LOSS_HIT (-0.5%)"
         if prem_low <= target_p:
             return target_p, "TARGET_HIT (+1%)"

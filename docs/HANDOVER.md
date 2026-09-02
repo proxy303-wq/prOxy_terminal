@@ -143,6 +143,14 @@ not 8.  NEVER flip the data-mode config (NO_STOP_LOSS=True) to real
 orders — real-money risk would be unbounded.  Exit-knob A/B (bag-more
 trails) runs `tools/_exit_ab.py` — decide the final lock/trail with
 Friday's review.  Data week Thu–Fri: box untouched, paper, collection on.
+⚡ **MOVED UP 03-Sep 02:30 IST: GOING LIVE THURSDAY 03-Sep.** The user
+decided to go live same-day (~6h out) — the data week is now Tue–Wed
+only (~38 ML labels; Thu's collection sacrificed — acceptable since ML
+is OFF for live). `tools/_golive_today.py` auto-flips the live profile
+at 08:30 IST (7 knobs incl. NO_STOP_LOSS→False, DEFAULT_LOTS→4),
+verifies post-08:45-token-push restart at 08:52, and the HUMAN taps
+Telegram GO LIVE at ~09:10. Box already runs HEAD (deployed 03-Sep
+02:22).
 
 User confirmed: the live ML gate = **`ML_LAB_MODE="veto"`,
 `ML_LAB_VETO_PROB=70`, `ML_LAB_HORIZON="h3"`** (the shipped default,

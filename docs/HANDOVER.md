@@ -428,6 +428,15 @@ before live.
    + a CE fired and won when 02-Sep revived (row 69 @14:30); 28-Aug paper
    fired both directions and won both ways (10 CE/17 PE). Reminder: this
    is PAPER, stop-less, every-signal data — NOT live-achievable P&L.
+   📊 **8-month direction-mix (tools/_dir_mix.py, pure engine Jan-Aug
+   2026, 339 trades): the profit engine is the CALLS.** CE net +381k
+   (positive 7/8 months incl. +150k in the Mar crash — bear-market
+   rallies); PE net **−57.8k** (lost Jan-Apr & Aug; only May-Jul positive).
+   Direction flow does NOT cleanly track monthly regime (Jul up-month =
+   66% PE; Mar down-month = 32% PE). So: recent 2 bearish days' PUT
+   accuracy is real but the 8-month PUT side is the drag. Precision
+   lever: Miner/Goodman daily-direction gate A/B (PE only when the day
+   is red / below day-open) — queued.
 10. **Concurrent operator** — a second session (same repo) is active:
     committed `d130a4c` (taper off) at 12:28 and deployed it to the box
     ~12:37 (restart). Coordinate engine/config deploys with it; it may

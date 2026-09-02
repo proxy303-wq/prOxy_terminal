@@ -167,7 +167,8 @@ class Backtest:
     def _close_trade(self, trade, exit_price, exit_reason, bar, day_trades):
         sign = 1.0 if trade["direction"] == "LONG" else -1.0
         pnl = (exit_price - trade["entry_premium"]) * trade["quantity"] * sign
-        pnl -= trade["quantity"] * (exit_price + trade["entry_premium"]) * TRANSACTION_COST_PCT
+        pnl -= trade["quantity"] * (exit_price + trade["entry_premium"]) \
+            * getattr(self.cfg, "TRANSACTION_COST_PCT", TRANSACTION_COST_PCT)
         rec = {**trade, "exit_premium": round(exit_price, 2),
                "exit_reason": exit_reason, "pnl": round(pnl, 2),
                "exit_time": bar["time"].isoformat()}
@@ -231,7 +232,8 @@ class Backtest:
 
                         exit_price, exit_reason = check_exits(active, prem_high, prem_low, prem_now, self.cfg)
 
-                        slip = 1.0 - SLIPPAGE_PCT if active["direction"] == "LONG" else 1.0 + SLIPPAGE_PCT
+                        slip = 1.0 - getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT) \
+                            if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
                         if exit_price is None and self._bar_time(sub) >= self.cfg.FORCE_EXIT_TIME:
                             exit_price, exit_reason = prem_now * slip, "TIME_STOP (15:15)"
                         if exit_price is None and last_signal is not None and last_signal.direction != "WAIT":

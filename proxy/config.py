@@ -325,11 +325,15 @@ ML_MIN_PROB = 55.0              # minimum agreed probability for the gate
 # --- ML Lab layer (walk-forward validated direction models + option chain) ---
 # The ML Lab (mlab/) replaces the old LSTM with walk-forward-validated models
 # that also consume Dhan option-chain features (PCR, IV, OI) live.
-# ML_LAB_MODE: "advisory" (log only) | "veto" (default: block trades AGAINST
-# a confident ML call) | "confirm" (require ML agreement >= ML_LAB_MIN_PROB).
-# Train with:  python -m mlab.train --symbol all --horizons all --with-options
+# ML_LAB_MODE: "advisory" (log only) | "veto" (block trades AGAINST a
+# confident ML call) | "confirm" (require ML agreement >= ML_LAB_MIN_PROB).
+# USER DECISION 02-Sep: "don't push the model for prediction - exercise what
+# actually works."  The engine's own edge (signals + tight lock + ADX 18) is
+# the live system; the ML is ADVISORY (logs its calls, NEVER blocks).  The
+# veto70 gate is SHELVED until a retrained model proves itself out-of-sample
+# (>=53% with live option-chain features over >=200 calls) - docs/HANDOVER.md.
 ML_LAB_ENABLED = os.environ.get("PROXY_ML_LAB_ENABLED", "true").lower() != "false"
-ML_LAB_MODE = "veto"
+ML_LAB_MODE = "advisory"
 ML_LAB_CONFIRM = False              # legacy == mode "confirm"
 ML_LAB_MIN_PROB = 55.0              # confirm-mode threshold
 ML_LAB_VETO_PROB = 70.0             # veto-mode: opposite call confidence to block

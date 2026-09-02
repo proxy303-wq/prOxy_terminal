@@ -121,6 +121,17 @@ ships; today they were all winners, so they flatter the sample
 
 ### 3e. LIVE GATE DECISION (user, 01-Sep): veto70 / h3 — no change to default
 
+**⚡ SUPERSEDED 02-Sep — "don't push the model for prediction, exercise what
+actually works."** After the 2-day ML verdict (pre-week models: direction
+36% h3 / 27% h6; confident calls 33%/24% correct — confidently wrong on
+the winners; h6 bullish 33/35 into a fall), the user decided the ML does
+NOT get a gate. Live runs on the ENGINE edge (signals + tight lock + ADX
+18, PF ~2.18 @ honest costs); `ML_LAB_MODE = "advisory"` (logs, never
+blocks) in config.py; veto70 SHELVED until a retrained model proves
+itself OOS (≥53% with live option-chain features over ≥200 calls). The
+box stays data-mode through Fri; the advisory setting lands with the
+live profile flip.
+
 **GO-LIVE PLAN (user decision, 02-Sep): finish the data week Thu–Fri → Friday
 review (data quality + ML results + copy veto70 models to the box) → go
 LIVE-SMALL MONDAY 07-Sep** with the full live profile (stops ON, ADX 18,

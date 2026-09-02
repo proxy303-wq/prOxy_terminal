@@ -53,15 +53,27 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
         trade["pnl_peak"] = peak
         trade["peak_pct"] = peak_pct
         armed = bool(trade.get("lock_armed", False))
-        # per-trade overrides (sureshot trades arm later + trail wider so
-        # winners run further); fall back to the global config
-        arm_pct = float(trade.get("lock_arm_pct") or getattr(cfg, "LOCK_ARM_PCT", 0.003))
-        trail_step = float(trade.get("lock_trail_step_pct") or getattr(cfg, "LOCK_TRAIL_STEP_PCT", 0.002))
+        # per-trade overrides (sureshot / ATR-scaled trades arm later + trail
+        # wider so winners run further); fall back to the config.  Points mode
+        # (SL_MODE="points") converts the point knobs to % of the entry so the
+        # BACKTEST simulates the same lock as the LIVE engine (engine._check_exits
+        # does this conversion; exits.py must too - they were diverging, so exit
+        # A/Bs on the points knobs were no-ops).
+        if getattr(cfg, "SL_MODE", "flat") == "points" and entry_premium > 0:
+            base_arm = float(getattr(cfg, "LOCK_ARM_POINTS", 2.0)) / entry_premium
+            base_floor = float(getattr(cfg, "LOCK_FLOOR_POINTS", 1.0)) / entry_premium
+            base_trail = float(getattr(cfg, "LOCK_TRAIL_STEP_POINTS", 1.0)) / entry_premium
+        else:
+            base_arm = float(getattr(cfg, "LOCK_ARM_PCT", 0.003))
+            base_floor = float(getattr(cfg, "LOCK_FLOOR_PCT", 0.001))
+            base_trail = float(getattr(cfg, "LOCK_TRAIL_STEP_PCT", 0.002))
+        arm_pct = float(trade.get("lock_arm_pct") or base_arm)
+        trail_step = float(trade.get("lock_trail_step_pct") or base_trail)
         if not armed and peak_pct >= arm_pct:
             trade["lock_armed"] = True
             armed = True
         if armed:
-            floor = float(getattr(cfg, "LOCK_FLOOR_PCT", 0.001))
+            floor = float(trade.get("lock_floor_pct") or base_floor)
             if getattr(cfg, "LOCK_TRAIL_ENABLED", True):
                 floor = max(floor, peak_pct - trail_step)
             trade["lock_floor_pct"] = floor

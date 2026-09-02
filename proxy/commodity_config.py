@@ -42,6 +42,7 @@ def commodity_config(full_session=False, symbol="CRUDEOIL"):
     c.DAILY_TARGET_STOP = False           # paper: run the full session
     c.LONG_ONLY = False                   # futures are long AND short
     # ---- exits (% of futures price) ----
+    c.SL_MODE = "flat"                # %/ATR locks below; NOT the NIFTY points scalp
     c.STOP_LOSS_PCT = 0.0040              # 0.4% stop
     c.PROFIT_TARGET_PCT = 0.0080          # 0.8% target (R:R 2.0)
     c.MIN_RISK_REWARD = 2.0

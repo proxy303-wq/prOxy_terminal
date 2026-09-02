@@ -286,10 +286,13 @@ by Dhan chunked fetch — note the OTHER session also fetched these at
 - **Cost fix**: `proxy/backtest.py` read `TRANSACTION_COST_PCT` as a
   module constant (cost A/Bs were no-ops — all levels returned identical
   P&L) — now reads from cfg (`91b12fa`). Cost test rerun:
-  `tools/_nifty_costtest.py` (0.10/0.15/0.20/0.30% RT on 2026-01..08).
-  NOTE: the premium-proxy still overstates (+561k/342 trades over 8
-  months is fantasy) — real-premium + live are the truth test; costs are
-  only one leg.
+  `tools/_nifty_costtest.py` (2026-01..08, live profile, 342 trades):
+  0.10% RT → PF 3.00 (+561k) · 0.15% → 2.91 (+547k) · **0.20% → PF 2.92
+  (+541k, 66.9% win)** · 0.30% → 2.81 (+515k). **The edge survives
+  honest 0.2% round-trip costs** (≥2.8 PF vs the 1.3 bar). Caveat
+  stands: the premium-proxy overstates the moves themselves (+541k/8mo
+  is fantasy) — real-premium + live are the truth test; costs were only
+  one leg of the honesty gap.
 - **FULL DEPLOY to the box (02-Sep ~08:45 IST, HEAD tarball)** — verified:
   mlab/ + commodity modules + dual variants + Commodities dashboard tab
   live; `lightgbm 4.6.0` installed on the box (veto-activation prereq #3

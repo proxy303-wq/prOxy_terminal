@@ -292,6 +292,10 @@ by Dhan chunked fetch — note the OTHER session also fetched these at
   costs, train 2024-08..2025-12 / test 2026-01..2026-08): ADX 18 SURVIVES
   out-of-sample** — test PF 3.00 (ADX 18) vs 2.69 (ADX 0) / 2.81 (ADX 22);
   train PF ~2.25. The shipped ADX 18 is confirmed, not curve-fit.
+  ⚠️ **CORRECTED after the exits.py parity fix (02-Sep):** that run used
+  the %-lock. Re-verified on the correct points-lock path — **ADX 18 still
+  wins the held-out test (test PF 2.24 vs 2.02 ADX 0 / 2.03 ADX 22; train
+  PF ~1.44–1.54)**. The ADX-18 setting stands on the correct exit path.
 - **Cost fix**: `proxy/backtest.py` read `TRANSACTION_COST_PCT` as a
   module constant (cost A/Bs were no-ops — all levels returned identical
   P&L) — now reads from cfg (`91b12fa`). Cost test rerun:

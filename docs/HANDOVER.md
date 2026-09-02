@@ -278,6 +278,29 @@ data: `data/FINNIFTY_5m.csv`, `data/SENSEX_5m.csv` (gitignored; fetched
 by Dhan chunked fetch — note the OTHER session also fetched these at
 16:57, coordinate).
 
+### 4h. Honesty pass + deploy (02-Sep morning)
+- **Walk-forward (tools/_nifty_honesty.py, live profile, 0.20% all-in
+  costs, train 2024-08..2025-12 / test 2026-01..2026-08): ADX 18 SURVIVES
+  out-of-sample** — test PF 3.00 (ADX 18) vs 2.69 (ADX 0) / 2.81 (ADX 22);
+  train PF ~2.25. The shipped ADX 18 is confirmed, not curve-fit.
+- **Cost fix**: `proxy/backtest.py` read `TRANSACTION_COST_PCT` as a
+  module constant (cost A/Bs were no-ops — all levels returned identical
+  P&L) — now reads from cfg (`91b12fa`). Cost test rerun:
+  `tools/_nifty_costtest.py` (0.10/0.15/0.20/0.30% RT on 2026-01..08).
+  NOTE: the premium-proxy still overstates (+561k/342 trades over 8
+  months is fantasy) — real-premium + live are the truth test; costs are
+  only one leg.
+- **FULL DEPLOY to the box (02-Sep ~08:45 IST, HEAD tarball)** — verified:
+  mlab/ + commodity modules + dual variants + Commodities dashboard tab
+  live; `lightgbm 4.6.0` installed on the box (veto-activation prereq #3
+  of §3e now DONE); **the 08:45 automated token push WORKED** (first
+  automated run — journal: "type APP, expires in 24.0h", feed OK) — the
+  handover's 02-Sep verify item is closed. ML gate still INERT (no
+  models on box) → data week collection unaffected. mode paper.
+- **Repo cleanup** (`e428d03`): removed tracked `_dppi2.py` + 20 probe
+  scripts; gitignored book dumps (.mine/, tools/_books/, *_full.txt,
+  _mining/, deploy/oracle/); committed `railway_worker_banknifty.py`.
+
 ## 5. Runbooks
 
 **Deploy/sync to the VPS** (paramiko, creds from `C:\Athena_X\.env`

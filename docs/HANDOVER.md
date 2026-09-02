@@ -300,6 +300,17 @@ by Dhan chunked fetch — note the OTHER session also fetched these at
   automated run — journal: "type APP, expires in 24.0h", feed OK) — the
   handover's 02-Sep verify item is closed. ML gate still INERT (no
   models on box) → data week collection unaffected. mode paper.
+  ⚠️ **DEPLOY CAVEAT (02-Sep)**: `vps_deploy.py` uploads `.oracle/box.env`
+  and setup copies it over `/opt/proxy/.env` — box.env's token was STALE
+  (31-Aug), so the deploy clobbered the freshly-pushed token. The running
+  worker was unaffected (in-memory token) but a restart before the next
+  08:45 push would have loaded the expired token. FIXED via
+  `tools/_token_restore.py` (restores `reports/dhan_token.txt` into
+  `/opt/proxy/.env`, no restart). **Rule: after any full deploy, run
+  `tools/_token_restore.py` (or refresh box.env first).** The deploy also
+  does NOT restart the service if it is already running (`systemctl
+  enable --now` is a no-op on an active unit) — deployed code activates
+  at the next restart (the daily 08:45 token push does restart).
 - **Repo cleanup** (`e428d03`): removed tracked `_dppi2.py` + 20 probe
   scripts; gitignored book dumps (.mine/, tools/_books/, *_full.txt,
   _mining/, deploy/oracle/); committed `railway_worker_banknifty.py`.

@@ -302,6 +302,17 @@ by Dhan chunked fetch — note the OTHER session also fetched these at
   stands: the premium-proxy overstates the moves themselves (+541k/8mo
   is fantasy) — real-premium + live are the truth test; costs were only
   one leg of the honesty gap.
+- **⚠️ REVISED after the exits.py parity fix (02-Sep late)**: those cost
+  numbers used the WRONG lock (backtest ignored SL_MODE="points" and ran
+  a tighter %-lock). With the corrected points lock the same window is
+  **+380k / PF 2.18 @ 0.20% RT (317 trades, 60.3% win)** — the edge still
+  survives honest costs but more modestly. Exit A/B on the corrected
+  path (`tools/_exit_ab.py`, 5 variants): **the CURRENT tight lock
+  (arm2/f1/t1/target6.5) is optimal** — wider trails/raised targets LOSE
+  net (PF 2.18 → 1.60; avgW flat; REVERSE_SIGNAL/stop exits rise) and
+  the target is decorative (6.5 vs 10 identical). "Bag-more" lever =
+  regime/ML direction, NOT the trail knobs. ADX walk-forward is being
+  re-verified under the corrected lock (tools/_nifty_honesty.py rerun).
 - **FULL DEPLOY to the box (02-Sep ~08:45 IST, HEAD tarball)** — verified:
   mlab/ + commodity modules + dual variants + Commodities dashboard tab
   live; `lightgbm 4.6.0` installed on the box (veto-activation prereq #3

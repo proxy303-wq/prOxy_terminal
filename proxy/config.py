@@ -313,40 +313,35 @@ MIN_CONFIDENCE_PCT   = 0.0     # PAPER DATA MODE: 0 = take every signal
 MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
 
 # --- ML prediction layer (LSTM per the research paper) ---
-# The paper (Srivastava et al. 2023) found LSTM the best model for NIFTY
-# time-series direction.  ML_ENABLED logs an advisory opinion on every
-# signal; ML_CONFIRM=True turns it into a gate (trade only when the model
-# agrees).  Train with:  python run_terminal.py ml-train
-ML_ENABLED = os.environ.get("PROXY_ML_ENABLED", "true").lower() != "false"   # skip via env on low-RAM boxes
+# OFF (02-Sep, same decision as the ML Lab below): unvalidated confidence
+# printed on entries is misleading noise - pure engine mode.
+ML_ENABLED = False
 ML_MODEL = "lstm"               # "lstm" | "xgboost"
 ML_CONFIRM = False              # advisory by default
 ML_MIN_PROB = 55.0              # minimum agreed probability for the gate
 
 # --- ML Lab layer (walk-forward validated direction models + option chain) ---
-# The ML Lab (mlab/) replaces the old LSTM with walk-forward-validated models
-# that also consume Dhan option-chain features (PCR, IV, OI) live.
-# ML_LAB_MODE: "advisory" (log only) | "veto" (block trades AGAINST a
-# confident ML call) | "confirm" (require ML agreement >= ML_LAB_MIN_PROB).
-# USER DECISION 02-Sep: "don't push the model for prediction - exercise what
-# actually works."  The engine's own edge (signals + tight lock + ADX 18) is
-# the live system; the ML is ADVISORY (logs its calls, NEVER blocks).  The
-# veto70 gate is SHELVED until a retrained model proves itself out-of-sample
-# (>=53% with live option-chain features over >=200 calls) - docs/HANDOVER.md.
-ML_LAB_ENABLED = os.environ.get("PROXY_ML_LAB_ENABLED", "true").lower() != "false"
-ML_LAB_MODE = "advisory"
+# USER DECISION 02-Sep (refined): the ML direction models are MISLEADING -
+# their confidence is uncalibrated (70-87% confident calls were right 24-33%
+# on the real 2-day tape), so ANY gate threshold on that confidence (incl.
+# veto70) is a false-security device.  "Exercise what actually works":
+# ML layers are OFF - the engine's own edge (signals + tight lock + ADX 18)
+# is the system.  Re-engage ONLY with objective OOS proof (>=53% accuracy
+# with live option-chain features over >=200 calls AND calibrated
+# probabilities) - docs/HANDOVER.md §3e.
+ML_LAB_ENABLED = False
+ML_LAB_MODE = "advisory"            # moot while disabled (never blocks)
 ML_LAB_CONFIRM = False              # legacy == mode "confirm"
 ML_LAB_MIN_PROB = 55.0              # confirm-mode threshold
-ML_LAB_VETO_PROB = 70.0             # veto-mode: opposite call confidence to block
-                                    #   (40-day backtest: 70 blocks only net-negative trades;
-                                    #    55 removes winners too - PF 1.55 but -17% net)
+ML_LAB_VETO_PROB = 70.0             # veto-mode threshold (shelved)
 ML_LAB_HORIZON = "h3"               # h1=5m | h3=15m (best with the engine) | h6=30m | h12=60m
 ML_LAB_SYMBOL = "nifty"
 
 # Meta-label precision layer (mlfinlab style): a second model that learns
-# from past outcomes whether an approved signal will win.  Advisory by
-# default; META_CONFIRM=True gates entries below META_MIN_PROB.
-# Train with:  python run_terminal.py ml-train-meta
-META_ENABLED = True
+# from past outcomes whether an approved signal will win.  OFF (02-Sep,
+# same decision - its META xx% confidence on entries was unvalidated noise;
+# pure engine mode).  Re-engage only with OOS proof, like the ML Lab.
+META_ENABLED = False
 META_MODEL = "xgboost"
 META_CONFIRM = False
 META_MIN_PROB = 60.0

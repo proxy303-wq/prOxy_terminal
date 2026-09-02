@@ -35,6 +35,14 @@ _t*.txt
 .vscode/
 .idea/
 
+# book-mining source dumps (regenerable from the PDFs; digests live in docs/)
+.mine/
+tools/_books/
+_mining/
+*_full.txt
+_minings_w.txt
+deploy/oracle/
+
 # reference clone (Athena dashboard source)
 _athena_ref/
 

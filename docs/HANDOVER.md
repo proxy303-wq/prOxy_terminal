@@ -426,3 +426,37 @@ before live.
 - Review Friday: data quality, ML results, then decide the LIVE profile
   (ADX 18 / conf 60-70 / SL on / RSI 50-50 or 45-55 / 8 lots) + whether to
   enable the trailing-exit variant and/or BANKNIFTY.
+
+## 8. FRIDAY REVIEW → MONDAY GO-LIVE runbook (user decision 02-Sep)
+
+**Friday (05-Sep) review checklist:**
+1. Data: pull day-1..5 trades from the box; counts + the flagged outliers
+   (censored rows 36/39 day-1, 8 lunch rows 45–52) — export for the ML chat.
+2. ML results: coordinate with the ML chat (direction gate on the week's
+   labels, veto70 calibration at h3).
+3. **ADX re-verify verdict** (corrected points-lock run, tools/_nifty_honesty.py
+   rerun) — confirm ADX 18 stands on the correct exit path.
+4. Copy `models/ml_lab/` → box (scp ~50 joblib files; gitignored) — the last
+   veto70 activation prereq of §3e (mlab/ + lightgbm already done).
+5. Sanity on the box: `python -m unittest tests.test_mlab -v` +
+   `python run_terminal.py ml-lab --predict nifty,h3` → journal should show
+   `| LAB ...%@h3` notes on the first entries Friday-afternoon/Monday.
+6. **State cleanup BEFORE live sizing** (§3c): reset `state["capital"]` to
+   the real Dhan balance AND prune the stale 545k equity-curve peak, or the
+   Turtle taper (re-enabled for live) will crush lot size like it did in
+   data mode. Alternatively keep `RISK_DD_TAPER=False` for live week 1.
+7. Exit knobs: **KEEP the tight lock** (arm 2 / floor 1 / trail 1 / target
+   6.5) — exit A/B verdict (tools/_exit_ab.py): wider trails lose net.
+8. Decide live-small lots: 2–4 lots for the first days, not 8.
+
+**Monday (07-Sep) go-live:**
+1. Pre-market: the 08:45 token push auto-restarts the service → activates
+   whatever profile is deployed. If the live-profile config was deployed
+   Friday-after-close, Monday opens on it.
+2. Deploy live profile if not already: NO_STOP_LOSS=False, ADX per re-verify,
+   conf 65, RSI 50/50, MAX_UNARMED_BARS 4, halts ON. NEVER run real orders
+   on the data-mode config (no-stop = unbounded risk).
+3. Telegram: 🎛 Mode → 🟢 GO LIVE → CONFIRM-LIVE (mode.json → live).
+4. Watch the first signals: real fills anchored (real-fill anchor), expiry
+   pinned to the chain (wrong-expiry fix), veto70 LAB notes on entries.
+5. End of day 1: review vs the paper comparison; respect the 1%/5% halts.

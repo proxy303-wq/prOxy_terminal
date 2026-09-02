@@ -312,6 +312,13 @@ MIN_CONFIDENCE_PCT   = 0.0     # PAPER DATA MODE: 0 = take every signal
                                # (live = 60-70; "Signal Strength > 70%" plan rule)
 MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
 
+# ---- DAY-DIRECTION GATE (Miner p.13 / Goodman daily-trend, A/B 02-Sep) ----
+# Only trade WITH the day's move: BUY/CE when the index is above its
+# day-open (green day), SELL/PE when below (red day).  Direction-mix
+# analysis showed the 8-month PE side is net-negative (-57.8k) while CEs
+# made +381k - this gate tests whether filtering counter-day PUTs helps.
+DAY_DIRECTION_GATE = False
+
 # --- ML prediction layer (LSTM per the research paper) ---
 # OFF (02-Sep, same decision as the ML Lab below): unvalidated confidence
 # printed on entries is misleading noise - pure engine mode.

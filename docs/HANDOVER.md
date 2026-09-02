@@ -436,7 +436,10 @@ before live.
    66% PE; Mar down-month = 32% PE). So: recent 2 bearish days' PUT
    accuracy is real but the 8-month PUT side is the drag. Precision
    lever: Miner/Goodman daily-direction gate A/B (PE only when the day
-   is red / below day-open) — queued.
+   is red / below day-open) — **REJECTED (02-Sep)**: Jan-Apr +214k→+167k
+(PF 2.03→1.96), Jul-Aug −1.9k→−2.0k — it cuts the profitable counter-day
+CEs (Mar +150k rallies) while the PUT drag is with-day PEs it can't touch.
+`DAY_DIRECTION_GATE` stays OFF. Pure-engine edge = counter-day CEs.
 10. **Concurrent operator** — a second session (same repo) is active:
     committed `d130a4c` (taper off) at 12:28 and deployed it to the box
     ~12:37 (restart). Coordinate engine/config deploys with it; it may

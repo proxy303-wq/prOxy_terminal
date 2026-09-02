@@ -213,6 +213,9 @@ class Backtest:
             last_signal = None
             strikes_today = {}   # strike-once rule: strike -> times traded
             theta_per_bar = (BACKTEST_THETA_PER_BAR / 5.0) if self._has_1m else BACKTEST_THETA_PER_BAR
+            # Miner p.13 / Goodman daily-trend gate: the day's OPEN = the first
+            # session bar's open (the underlying index, NOT the option premium).
+            day_open = float(five[0]["open"]) if five else None
 
             for bi, bar in enumerate(five):
                 # ---- 1) exit simulation at 1m resolution ----
@@ -281,6 +284,17 @@ class Backtest:
                                 signal = None
                     except Exception:
                         pass
+
+                # DAY-DIRECTION GATE (Miner p.13 / Goodman daily-trend):
+                # only trade WITH the day's move - BUY/CE when the day is
+                # GREEN (close >= day open), SELL/PE when RED.  A/B knob
+                # (DAY_DIRECTION_GATE), default off.
+                if signal is not None and signal.direction in ("BUY", "SELL") \
+                        and getattr(self.cfg, "DAY_DIRECTION_GATE", False) \
+                        and day_open is not None:
+                    day_green = float(bar["close"]) >= day_open
+                    if (signal.direction == "BUY") != day_green:
+                        signal = None
 
                 # ---- 3) fresh entry ----
                 if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and not self._in_lunch(bar)                         and signal is not None and signal.direction in ("BUY", "SELL"):

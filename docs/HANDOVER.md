@@ -124,13 +124,16 @@ ships; today they were all winners, so they flatter the sample
 **⚡ SUPERSEDED 02-Sep (refined) — "the ML directional models are misleading,
 including veto70."** After the 2-day ML verdict (direction 36% h3 / 27% h6;
 confident calls 33%/24% correct — uncalibrated confidence; veto70 never
-fired but is a false-security device on noise), the user decided the ML
-layers are OFF ENTIRELY: `ML_LAB_ENABLED=False`, `ML_ENABLED=False`
-(old LSTM), `META_ENABLED=False` (meta-label) — PURE ENGINE mode
-(signals + tight lock + ADX 18, PF ~2.18 @ honest costs). Re-engage ANY
-model only with objective OOS proof: ≥53% accuracy with live
-option-chain features over ≥200 calls AND calibrated probabilities.
-Data week unaffected (all layers were advisory/inert on the box).
+fired on live tape but is a false-security device on noise), the user
+decided the ML layers are OFF ENTIRELY: `ML_LAB_ENABLED=False`,
+`ML_ENABLED=False` (old LSTM), `META_ENABLED=False` (meta-label) — PURE
+ENGINE mode. **PURE-engine validation numbers (bisect-confirmed):
+339 trades / 59.3% win / PF 1.84 @ 0.20% costs on 2026-01..08** (the
+earlier PF ~2.18 figures included the ML veto in the backtest — see
+§4h). Re-engage ANY model only with objective OOS proof: ≥53% accuracy
+with live option-chain features over ≥200 calls AND calibrated
+probabilities. Data week unaffected (all layers were advisory/inert on
+the box).
 
 **GO-LIVE PLAN (user decision, 02-Sep): finish the data week Thu–Fri → Friday
 review (data quality + ML results + copy veto70 models to the box) → go
@@ -317,17 +320,22 @@ by Dhan chunked fetch — note the OTHER session also fetched these at
   stands: the premium-proxy overstates the moves themselves (+541k/8mo
   is fantasy) — real-premium + live are the truth test; costs were only
   one leg of the honesty gap.
-- **⚠️ REVISED after the exits.py parity fix (02-Sep late)**: those cost
-  numbers used the WRONG lock (backtest ignored SL_MODE="points" and ran
-  a tighter %-lock). With the corrected points lock the same window is
-  **+380k / PF 2.18 @ 0.20% RT (317 trades, 60.3% win)** — the edge still
-  survives honest costs but more modestly. Exit A/B on the corrected
-  path (`tools/_exit_ab.py`, 5 variants): **the CURRENT tight lock
-  (arm2/f1/t1/target6.5) is optimal** — wider trails/raised targets LOSE
-  net (PF 2.18 → 1.60; avgW flat; REVERSE_SIGNAL/stop exits rise) and
-  the target is decorative (6.5 vs 10 identical). "Bag-more" lever =
-  regime/ML direction, NOT the trail knobs. ADX walk-forward is being
-  re-verified under the corrected lock (tools/_nifty_honesty.py rerun).
+- **⚠️⚠️ SECOND CORRECTION (02-Sep late): the ML VETO was silently in ALL
+  of those backtest runs.** `proxy/backtest.py` (lines ~266-277) applies
+  the ML Lab gate whenever `ML_LAB_ENABLED` + mode != "advisory" — and
+  every validation run since the start ran with the gate ON (config
+  defaulted to veto until cf7020b). So the "%+380k / PF 2.18 / 317
+  trades" numbers (cost test, exit A/B, ADX re-verify) were
+  ENGINE+VETO70, not pure engine — the gate vetoed 22 trades over the
+  window. **PURE ENGINE (post-cf7020b, ML off — the user's decision):
+  339 trades / 59.3% win / +323,632 / PF 1.84 @ 0.20% RT / maxDD 8.13%
+  on 2026-01..08** (reproducible; bisect-verified). The relative exit-A/B
+  shape (tight lock optimal) and the ADX-18 OOS preference were measured
+  with the veto on — a PURE re-verify is running
+  (tools/_nifty_honesty.py now forces ML off via live_profile). Note: in
+  THIS window the 22 vetoed trades were net-negative (+380k vs +324k),
+  so veto70 helped in-sample — but per the user's decision + the 2-day
+  real-tape misfit, no model gets power without OOS proof.
 - **FULL DEPLOY to the box (02-Sep ~08:45 IST, HEAD tarball)** — verified:
   mlab/ + commodity modules + dual variants + Commodities dashboard tab
   live; `lightgbm 4.6.0` installed on the box (veto-activation prereq #3

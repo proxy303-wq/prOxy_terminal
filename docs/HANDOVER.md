@@ -121,6 +121,15 @@ ships; today they were all winners, so they flatter the sample
 
 ### 3e. LIVE GATE DECISION (user, 01-Sep): veto70 / h3 — no change to default
 
+**GO-LIVE PLAN (user decision, 02-Sep): finish the data week Thu–Fri → Friday
+review (data quality + ML results + copy veto70 models to the box) → go
+LIVE-SMALL MONDAY 07-Sep** with the full live profile (stops ON, ADX 18,
+conf 65, RSI restored, MAX_UNARMED_BARS 4) + halts.  Start at 2–4 lots,
+not 8.  NEVER flip the data-mode config (NO_STOP_LOSS=True) to real
+orders — real-money risk would be unbounded.  Exit-knob A/B (bag-more
+trails) runs `tools/_exit_ab.py` — decide the final lock/trail with
+Friday's review.  Data week Thu–Fri: box untouched, paper, collection on.
+
 User confirmed: the live ML gate = **`ML_LAB_MODE="veto"`,
 `ML_LAB_VETO_PROB=70`, `ML_LAB_HORIZON="h3"`** (the shipped default,
 committed `17707f0`). Evidence: 40-day A/B +19,287 → +19,377 with win

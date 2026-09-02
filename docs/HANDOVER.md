@@ -418,9 +418,16 @@ before live.
    +164,035 INR** (21W/2L, PF ~31) — rows 35–57. Morning 09:15–11:35
    +37.8k (incl. the CE run +33.8k); lunch rows 45–52 +39.6k (out-of-spec,
    all winners); post-lunch 14:00–14:45 rows 53–57 +85.9k (monster
-   afternoon — PUTs paid as NIFTY fell). Direction: 20 PE / 3 CE — the
-   all-puts bias is extreme and the day's P&L rides it. Reminder: this is
-   PAPER, stop-less, every-signal data — NOT live-achievable P&L.
+   afternoon — PUTs paid as NIFTY fell). Direction: 20 PE / 3 CE.
+   ⚠️ **REVISED (02-Sep): the 'all-puts bias is extreme' framing was
+   WRONG.** 31-Aug/01-Sep/02-Sep were all bearish sessions (verified
+   −0.39%/−0.10%/−0.59%), so PUT-heavy flow matched the tape. 31-Aug is a
+   BUG-CORRUPTED sample (all 7 PUTs; the −2,706 loss = the wrong-expiry
+   bug, fixed before 01-Sep; afternoon PUTs stopped into a recovery). The
+   CLEAN 01-02 Sep samples show REGIME-RESPONSIVE flow: PUTs in the falls
+   + a CE fired and won when 02-Sep revived (row 69 @14:30); 28-Aug paper
+   fired both directions and won both ways (10 CE/17 PE). Reminder: this
+   is PAPER, stop-less, every-signal data — NOT live-achievable P&L.
 10. **Concurrent operator** — a second session (same repo) is active:
     committed `d130a4c` (taper off) at 12:28 and deployed it to the box
     ~12:37 (restart). Coordinate engine/config deploys with it; it may

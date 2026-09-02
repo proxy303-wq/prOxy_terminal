@@ -453,14 +453,17 @@ before live.
    6.5) — exit A/B verdict (tools/_exit_ab.py): wider trails lose net.
 8. Decide live-small lots: 2–4 lots for the first days, not 8.
 
-**ML verdict preview (02-Sep, tools/_gate_replay2.py, 35 real-paper trades
-day 1+2, PRE-week nifty-h3, price-only):** veto70 blocked 0/35 (inert,
-net unchanged +191,906); veto55 would have cut +122.6k of winners; ML
-direction vs outcome 13/35 (37%) but the **≥60% confident tail was 75%
-right (6/8)**; ML lean balanced (17/18) vs the engine's 31-PUT/4-CALL
-bias. Takeaway for Friday: veto70 is dormant-but-safe; the confident
-tail is where a gate could earn its keep; re-run this against the ML
-chat's FRESH week-trained models (this replay used pre-week artifacts).
+**ML verdict preview (02-Sep, tools/_gate_replay2.py, 33-35 real-paper
+trades day 1+2, PRE-week nifty models, price-only).** h3: veto70 blocked
+0 (inert, net unchanged +191,906); direction vs outcome 36%; **confident
+≥60% calls only 33% correct (3/9)** — the early "75% confident tail"
+claim was a metric bug (corrected; see tools/_conf_tail_fix.py).
+h6: WORSE — bullish 33/35 at 70-87% into a falling market; veto70 would
+have blocked +151.7k of winners (net → ~+40k); confident calls 24%
+correct. Takeaway: the pre-week models are regime-misfit (bullish bias)
+and NOT trustworthy as a direction filter on this tape; veto70+h3 is the
+only safe setting (inert); re-run against the ML chat's FRESH
+week-trained models Friday before any gate has power.
 
 **Monday (07-Sep) go-live:**
 1. Pre-market: the 08:45 token push auto-restarts the service → activates

@@ -420,7 +420,11 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                             last_bar = b
                             engine.process_bar(b)
                         break
-                time.sleep(2)
+                time.sleep(0.5)   # tight drain loop: bar-close signal -> order
+                                  # latency is bounded by ~1 feed poll + this
+                                  # (was 2s - the feed thread polls on its own
+                                  # interval, so a 0.5s drain costs no extra
+                                  # API calls; rate limits untouched)
 
     summary = engine.finish_day(last_bar) if last_bar is not None else None
 

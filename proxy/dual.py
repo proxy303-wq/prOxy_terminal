@@ -70,9 +70,10 @@ def banknifty_config():
     c.DEFAULT_LOTS = 2                 # BN lot 35 x ~400 premium = big notional;
                                        # start small alongside NIFTY
     # rate-limit headroom: the NIFTY worker polls its index at 1.8s (~0.56
-    # req/s) on the SAME Dhan client id - BN polls slower (0.25 req/s) so
-    # the two feeds + dashboard stay under Dhan's ~1 req/s.
-    c.FEED_POLL_INTERVAL = 4.0
+    # req/s) on the SAME Dhan client id - BN polls slower (0.4 req/s) so
+    # the two feeds + dashboard stay under Dhan's ~1 req/s.  The feed
+    # batches index + subscribed options into ONE request per poll.
+    c.FEED_POLL_INTERVAL = 2.5
     return c
 
 

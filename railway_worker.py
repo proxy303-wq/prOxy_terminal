@@ -190,32 +190,79 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
     from proxy import notifier as _notifier_mod
     _notifier_mod.PERSIST_HOOK = lambda line, level="INFO": tracker.log_activity(line, level)
 
+    # ---- index feed: WebSocket (tick-pushed, FEED_USE_WEBSOCKET) or REST ----
+    # WS: a 5-min bar close is detected in MILLISECONDS instead of at the
+    # next REST poll (~2s) - the low-latency path (Dhan egress IP
+    # 103.86.177.195 whitelisted on the account).  REST remains the proven
+    # default and the fallback.  The option-LTP source for the real-premium
+    # exits always lives on a REST feed (WS builds index bars only).
+    _use_ws = bool(getattr(cfg, "FEED_USE_WEBSOCKET", False))
+    _poll = float(getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8)
     feed = None
     try:
-        from proxy.dhan_rest_feed import DhanRestFeed
-        # poll interval per variant: NIFTY 1.8s (~0.56 req/s); the dual
-        # variants poll slower (cfg.FEED_POLL_INTERVAL) so two workers +
-        # the dashboard stay under Dhan's ~1 req/s on the shared client-id
-        _poll = float(getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8)
-        feed = DhanRestFeed(poll_interval=_poll, security_id=_index_id)
-        feed.connect()
-        time.sleep(3)
-        if feed._thread is None or not feed._thread.is_alive():
-            raise RuntimeError("REST feed thread died at startup")
-        notifier.log(f"LIVE Dhan REST feed connected - {mode.upper()} session {trade_date}", "INFO")
+        if _use_ws:
+            from proxy.dhan_live import DhanLiveFeed
+            feed = DhanLiveFeed(security_id=_index_id)
+            feed.connect()
+            time.sleep(3)
+            if feed._thread is None or not feed._thread.is_alive():
+                raise RuntimeError("WS feed thread died at startup")
+            notifier.log(f"LIVE Dhan WebSocket feed connected - {mode.upper()} session {trade_date} (index {_index_id})", "INFO")
+        else:
+            from proxy.dhan_rest_feed import DhanRestFeed
+            feed = DhanRestFeed(poll_interval=_poll, security_id=_index_id)
+            feed.connect()
+            time.sleep(3)
+            if feed._thread is None or not feed._thread.is_alive():
+                raise RuntimeError("REST feed thread died at startup")
+            notifier.log(f"LIVE Dhan REST feed connected - {mode.upper()} session {trade_date}", "INFO")
     except Exception as exc:
-        if mode == "live":
-            # LIVE SAFETY: NEVER trade real money on synthetic bars.  A
-            # dead feed at open aborts the session - no orders are placed;
-            # the supervisor restarts the worker and the next market-open
-            # check retries.  (Synthetic replay exists only for PAPER so a
-            # data-collection day still completes.)
-            notifier.log(
-                f"LIVE feed unavailable at open ({exc}) - SESSION ABORTED, "
-                f"NO orders placed (rate limit / token?). Worker will retry.", "WARN")
-            return None
-        notifier.log(f"LIVE Dhan REST feed unavailable ({exc}) - synthetic replay", "WARN")
-        feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
+        if _use_ws:
+            # WS unavailable -> REST fallback (the proven path); if that
+            # fails too, the live-abort below applies
+            notifier.log(f"Dhan WebSocket feed unavailable ({exc}) - falling back to REST", "WARN")
+            try:
+                from proxy.dhan_rest_feed import DhanRestFeed
+                feed = DhanRestFeed(poll_interval=_poll, security_id=_index_id)
+                feed.connect()
+                time.sleep(3)
+                if feed._thread is None or not feed._thread.is_alive():
+                    raise RuntimeError("REST feed thread died at startup")
+                _use_ws = False   # session sticks to REST after a WS failure
+                notifier.log(f"LIVE Dhan REST feed connected (WS fallback) - {mode.upper()} session {trade_date}", "INFO")
+            except Exception as exc2:
+                feed = None
+                exc = exc2
+        if feed is None:
+            if mode == "live":
+                # LIVE SAFETY: NEVER trade real money on synthetic bars.  A
+                # dead feed at open aborts the session - no orders are placed;
+                # the supervisor restarts the worker and the next market-open
+                # check retries.  (Synthetic replay exists only for PAPER so a
+                # data-collection day still completes.)
+                notifier.log(
+                    f"LIVE feed unavailable at open ({exc}) - SESSION ABORTED, "
+                    f"NO orders placed (rate limit / token / WS whitelist?). Worker will retry.", "WARN")
+                return None
+            notifier.log(f"LIVE feed unavailable ({exc}) - synthetic replay", "WARN")
+            feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
+
+    # ---- option-LTP feed (real-premium exits) ----
+    # REST mode: the main feed serves the traded option's LTP bars.  WS
+    # mode: a dedicated option-only REST feed (polls nothing while flat,
+    # one request per poll only while a trade is open).
+    from proxy.dhan_rest_feed import DhanRestFeed as _DRF
+    if isinstance(feed, _DRF):
+        opt_feed = feed
+    else:
+        try:
+            opt_feed = _DRF(poll_interval=_poll, option_only=True)
+            opt_feed.connect()
+            time.sleep(1)
+            notifier.log("LIVE option-LTP REST feed armed (option-only; polls only while a trade is open)", "INFO")
+        except Exception as exc:
+            notifier.log(f"LIVE option-LTP feed unavailable ({exc}) - exits use the delta model", "WARN")
+            opt_feed = None
 
     engine = PaperEngine(
         cfg, broker=broker, tracker=tracker, notifier=notifier,
@@ -294,13 +341,13 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
     # can be replayed offline (tools/replay_real_premium.py).
     try:
         from proxy.dhan_rest_feed import DhanRestFeed as _DRF
-        if isinstance(feed, _DRF):
+        if opt_feed is not None:
             _rec_path = os.path.join(cfg.REPORT_DIR, f"option_ltp_{trade_date}.csv")
 
             def _option_ltp_source(sid, bar_time):
                 try:
-                    feed.subscribe_option(sid)
-                    bar = feed.option_bar(sid, bar_time)
+                    opt_feed.subscribe_option(sid)
+                    bar = opt_feed.option_bar(sid, bar_time)
                     if bar:
                         try:
                             import csv as _csv
@@ -318,7 +365,7 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                     return None
 
             engine.set_option_ltp_source(_option_ltp_source)
-            engine.set_entry_ltp_fn(lambda sid: (feed.subscribe_option(sid), feed.live_ltps.get(str(sid)))[1])
+            engine.set_entry_ltp_fn(lambda sid: (opt_feed.subscribe_option(sid), opt_feed.live_ltps.get(str(sid)))[1])
             notifier.log("LIVE real-premium exits armed - engine polls the traded option's LTP per bar", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE real-premium exits unavailable ({exc}) - exits use the delta model", "WARN")
@@ -413,10 +460,27 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                         except Exception:
                             pass
                         try:
-                            from proxy.dhan_rest_feed import DhanRestFeed
-                            feed = DhanRestFeed(poll_interval=float(
-                                getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8))
-                            feed.connect()
+                            if _use_ws:
+                                # WS reconnect; on failure stick to REST
+                                try:
+                                    from proxy.dhan_live import DhanLiveFeed
+                                    _nf = DhanLiveFeed(security_id=_index_id)
+                                    _nf.connect()
+                                except Exception:
+                                    from proxy.dhan_rest_feed import DhanRestFeed
+                                    _nf = DhanRestFeed(poll_interval=float(
+                                        getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8),
+                                        security_id=_index_id)
+                                    _nf.connect()
+                                    _use_ws = False
+                                    notifier.log("LIVE WS reconnect failed - stuck on REST", "WARN")
+                            else:
+                                from proxy.dhan_rest_feed import DhanRestFeed
+                                _nf = DhanRestFeed(poll_interval=float(
+                                    getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8),
+                                    security_id=_index_id)
+                                _nf.connect()
+                            feed = _nf
                         except Exception as exc:
                             notifier.log(f"LIVE reconnect failed ({exc})", "WARN")
                         last_bar_time = time.time()  # give the new feed time
@@ -446,6 +510,15 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                                   # (was 2s - the feed thread polls on its own
                                   # interval, so a 0.5s drain costs no extra
                                   # API calls; rate limits untouched)
+
+    # session over: release the feeds (REST pollers and the WS socket stop
+    # hitting Dhan until the next session - the worker idles at night)
+    for _f in {id(feed): feed, id(opt_feed): opt_feed}.values():
+        try:
+            if _f is not None:
+                _f.close()
+        except Exception:
+            pass
 
     summary = engine.finish_day(last_bar) if last_bar is not None else None
 
@@ -503,7 +576,7 @@ def ensure_token(notifier):
         return None
 
 
-def probe_dhan_feed(notifier):
+def probe_dhan_feed(notifier, skip_poll_test=False):
     """Dhan REST marketfeed probe (works from ANY region), with retries.
 
     The WebSocket feed is egress-whitelist gated (only a handful of Railway
@@ -511,6 +584,10 @@ def probe_dhan_feed(notifier):
     returns live index values over plain HTTPS - no socket, no whitelist.
     Retries 3x: at startup the Streamlit dashboard poller can collide with
     Dhan's 1 req/s marketfeed limit (429).
+
+    skip_poll_test: when the session feed is the WebSocket transport, the
+    9-second REST poll-probe is skipped (it only proves the REST poller,
+    which is no longer the session's index source).
     """
     import time
     try:
@@ -536,23 +613,24 @@ def probe_dhan_feed(notifier):
                 "INFO",
             )
             # prove the continuous poller path too (the session feed uses it)
-            try:
-                feed = DhanRestFeed(poll_interval=1.8, timeout=8)
-                feed.connect()
-                time.sleep(9)
-                nifty_live = feed.live_ltps.get("13")
-                bn_live = feed.live_ltps.get("25")
-                alive = feed._thread is not None and feed._thread.is_alive()
-                feed.close()
-                if nifty_live:
-                    notifier.log(
-                        f"LIVE Dhan REST poller: ALIVE after 9s - NIFTY {nifty_live:,.2f} / BANKNIFTY {bn_live:,.2f} (thread {'OK' if alive else 'DEAD'})",
-                        "INFO",
-                    )
-                else:
-                    notifier.log("LIVE Dhan REST poller: no ticks in 9s - check rate limit", "WARN")
-            except Exception as exc:
-                notifier.log(f"LIVE Dhan REST poller check failed: {exc}", "WARN")
+            if not skip_poll_test:
+                try:
+                    feed = DhanRestFeed(poll_interval=1.8, timeout=8)
+                    feed.connect()
+                    time.sleep(9)
+                    nifty_live = feed.live_ltps.get("13")
+                    bn_live = feed.live_ltps.get("25")
+                    alive = feed._thread is not None and feed._thread.is_alive()
+                    feed.close()
+                    if nifty_live:
+                        notifier.log(
+                            f"LIVE Dhan REST poller: ALIVE after 9s - NIFTY {nifty_live:,.2f} / BANKNIFTY {bn_live:,.2f} (thread {'OK' if alive else 'DEAD'})",
+                            "INFO",
+                        )
+                    else:
+                        notifier.log("LIVE Dhan REST poller: no ticks in 9s - check rate limit", "WARN")
+                except Exception as exc:
+                    notifier.log(f"LIVE Dhan REST poller check failed: {exc}", "WARN")
         else:
             notifier.log(f"LIVE Dhan REST probe: empty response after 3 tries (last: {last_err or 'no data'})", "WARN")
     except Exception as exc:
@@ -588,7 +666,7 @@ def main(variant=None):
 
     notifier.log(f"LIVE {variant.upper()} worker started - runs paper trades on the LIVE market feed every morning (9:15 IST); signals, trades and the daily summary are posted here", "INFO")
     ensure_token(notifier)
-    probe_dhan_feed(notifier)
+    probe_dhan_feed(notifier, skip_poll_test=bool(getattr(_cfg, "FEED_USE_WEBSOCKET", False)))
     # create the tracker DB + schema on the volume at startup (not only
     # during sessions) so the dashboard never reports Database UNAVAILABLE
     try:

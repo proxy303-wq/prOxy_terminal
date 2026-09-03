@@ -130,7 +130,11 @@ class DhanLiveFeed:
     # ----------------------------------------------------------
 
     def _next_5m_bar(self, block=True):
-        """Accumulate ticks until a 5-minute bar closes; return the bar."""
+        """Accumulate ticks until a 5-minute bar closes; return the bar.
+
+        block=False (the live worker's drain loop, polled every ~0.5s)
+        returns None IMMEDIATELY when nothing is ready - never blocks on
+        the queue (a blocking get would stall protective exits)."""
         deadline = time.time() + self.timeout if not block else None
         idle_since = time.time()
         while not self._closed:
@@ -139,11 +143,16 @@ class DhanLiveFeed:
             if deadline is not None and time.time() > deadline:
                 return None
             try:
-                tick = self._ticks.get(timeout=5)
+                if block:
+                    tick = self._ticks.get(timeout=5)
+                else:
+                    tick = self._ticks.get_nowait()
             except queue.Empty:
+                if not block:
+                    return None   # no tick ready - the drain loop polls again
                 # blocking callers (engine.run_feed) must not hang forever if
                 # the socket dies silently - raise after max_idle_seconds
-                if block and time.time() - idle_since > self.max_idle_seconds:
+                if time.time() - idle_since > self.max_idle_seconds:
                     raise RuntimeError(
                         f"Dhan WS feed idle for >{self.max_idle_seconds}s - no market data"
                     )

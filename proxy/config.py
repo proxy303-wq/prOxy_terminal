@@ -205,6 +205,15 @@ SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R
 # for instant).  LIVE box runs 1 (set by tools/_live_flip.py).
 REVERSE_EXIT_DELAY_BARS = 0
 
+# INDEX FEED TRANSPORT (03-Sep): False = Dhan REST poller (proven, ~1.8s
+# poll).  True = Dhan WebSocket marketfeed (tick-pushed: a 5-min bar close
+# is detected in milliseconds, no REST poll latency, no rate-limit
+# contention between the two workers) - requires the server's egress IP in
+# Dhan's static-IP whitelist (the VPS 103.86.177.195 is whitelisted).  The
+# traded option's LTP (real-premium exits) always stays on a dedicated
+# option-only REST feed.  REST remains the automatic fallback.
+FEED_USE_WEBSOCKET = False
+
 # ---- VOL-SCALED STOP (C. 2026-08-31) ----
 # A fixed 5pt stop on an option premium that swings ±20% intraday is a
 # stop-out ticket inside the noise (Natenberg).  A/B 2026-07/06 (8 lots):

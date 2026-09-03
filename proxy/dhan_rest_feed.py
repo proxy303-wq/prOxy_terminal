@@ -109,10 +109,16 @@ class DhanRestFeed:
 
     def __init__(self, client_id=None, access_token=None, security_id=NIFTY_INDEX_ID,
                  poll_interval=_POLL_INTERVAL, timeout=30, max_idle_seconds=300,
-                 notify=print):
+                 notify=print, option_only=False):
+        """option_only=True: poll ONLY the subscribed NSE_FNO options (no
+        index defaults) and skip the request entirely while nothing is
+        subscribed - the dedicated option-LTP feed used beside a WebSocket
+        index feed (zero API cost when flat, one request per poll only
+        while a trade is open)."""
         self.client_id = client_id or os.getenv("DHAN_CLIENT_ID")
         self.access_token = access_token or os.getenv("DHAN_ACCESS_TOKEN")
         self.security_id = security_id
+        self.option_only = option_only
         self.max_idle_seconds = max_idle_seconds
         if not self.client_id or not self.access_token:
             # token file fallback (reports/dhan_token.txt)
@@ -138,7 +144,8 @@ class DhanRestFeed:
         self.poll_interval = poll_interval
         self.timeout = timeout
         self.notify = notify
-        self.instruments = [("IDX_I", NIFTY_INDEX_ID), ("IDX_I", BANKNIFTY_INDEX_ID)]
+        self.instruments = [] if option_only else [
+            ("IDX_I", NIFTY_INDEX_ID), ("IDX_I", BANKNIFTY_INDEX_ID)]
         self.live_ltps = {}           # sid (str) -> last price
         # REAL option LTP bars (NSE_FNO): polled continuously, finalised
         # per 5-min bucket so the engine can trigger exits on the ACTUAL
@@ -253,6 +260,10 @@ class DhanRestFeed:
     def _poll_loop(self):
         while not self._stop.is_set():
             try:
+                if self.option_only and not self.instruments:
+                    # nothing subscribed (no open trade): zero API cost
+                    self._stop.wait(self.poll_interval)
+                    continue
                 prices = fetch_ltp(self.client_id, self.access_token, self.instruments)
                 if prices:
                     self._last_error = None

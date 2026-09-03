@@ -225,9 +225,14 @@ def detect_candlestick_patterns(df, lookback=5, swings=None):
             add("BEARISH_ENGULFING", 0, False, min(90.0, 60 + 30 * min(1.0, body.iloc[i] / max(body.iloc[j], 1e-9) / 1.5)))
 
     # ---- hammer / shooting star (last bar, small body at one end) ----
+    # HAMMER is a BULLISH-reversal candle regardless of close color - a red
+    # hammer is a weaker (unconfirmed) reversal, NOT a bearish signal.  It was
+    # stored as bullish=(close>=open), so a red hammer became a BEARISH PA
+    # confirmation (the SELL gate accepts any bullish=False pattern) - a real
+    # asymmetry source of the PUT lean.  Fixed: hammers confirm BUY only.
     if body.iloc[i] > 0 and rng.iloc[i] > 0:
         if lower_ratio.iloc[i] >= 0.60 and body_ratio.iloc[i] <= 0.30:
-            add("HAMMER", 0, c.iloc[i] >= o.iloc[i], 70)
+            add("HAMMER", 0, True, 70 if c.iloc[i] >= o.iloc[i] else 58)
         if upper_ratio.iloc[i] >= 0.60 and body_ratio.iloc[i] <= 0.30:
             add("SHOOTING_STAR", 0, False, 70)
 

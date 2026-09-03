@@ -204,6 +204,16 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             raise RuntimeError("REST feed thread died at startup")
         notifier.log(f"LIVE Dhan REST feed connected - {mode.upper()} session {trade_date}", "INFO")
     except Exception as exc:
+        if mode == "live":
+            # LIVE SAFETY: NEVER trade real money on synthetic bars.  A
+            # dead feed at open aborts the session - no orders are placed;
+            # the supervisor restarts the worker and the next market-open
+            # check retries.  (Synthetic replay exists only for PAPER so a
+            # data-collection day still completes.)
+            notifier.log(
+                f"LIVE feed unavailable at open ({exc}) - SESSION ABORTED, "
+                f"NO orders placed (rate limit / token?). Worker will retry.", "WARN")
+            return None
         notifier.log(f"LIVE Dhan REST feed unavailable ({exc}) - synthetic replay", "WARN")
         feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
 
@@ -411,6 +421,17 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                             notifier.log(f"LIVE reconnect failed ({exc})", "WARN")
                         last_bar_time = time.time()  # give the new feed time
                     elif time.time() - last_bar_time > NO_BAR_FALLBACK_SECONDS:
+                        if mode == "live":
+                            # LIVE SAFETY: a stalled feed mid-session ends
+                            # the session - never replay synthetic bars with
+                            # real money (the open-trade position is left for
+                            # manual review; protective exits were live until
+                            # the feed died).
+                            notifier.log(
+                                f"LIVE feed stalled {NO_BAR_FALLBACK_SECONDS}s after "
+                                f"{reconnect_attempts} reconnects - SESSION ABORTED, "
+                                f"NO further orders (rate limit?)", "WARN")
+                            break
                         notifier.log(
                             f"No live bars after {NO_BAR_FALLBACK_SECONDS}s and {reconnect_attempts} reconnects - switching to synthetic replay",
                             "WARN",

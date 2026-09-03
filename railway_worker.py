@@ -151,17 +151,29 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
     from proxy.tracker import Tracker
     from proxy.mode import get_mode
 
-    # the Telegram mode toggle is the master switch for the engines
-    mode = get_mode()
+    # the Telegram mode toggle is the master switch for the engines.
+    # NIFTY reads mode.json; the dual variants read mode_<variant>.json
+    # and stay PAPER while that file is absent (never live by accident).
+    mode = get_mode(variant=variant)
+    # LIVE capital split: when both engines run on one account, size each
+    # on its PROXY_ALLOCATION_PCT share of the balance (start.sh sets it
+    # per worker; default 1.0 = the whole balance).  Paper capital gets the
+    # same split so paper sizing mirrors live.
+    _alloc = 1.0
+    try:
+        _alloc = float(os.environ.get("PROXY_ALLOCATION_PCT", "1.0") or 1.0)
+        _alloc = _alloc if 0.0 < _alloc <= 1.0 else 1.0
+    except Exception:
+        _alloc = 1.0
     capital = None
     if mode == "live":
         try:
             from proxy.dhan_broker import DhanBroker
             broker = DhanBroker()
-            capital = float((broker.get_balance() or {}).get("cash") or cfg.CAPITAL)
+            capital = float((broker.get_balance() or {}).get("cash") or cfg.CAPITAL) * _alloc
             notifier.log(
                 f"LIVE MODE ACTIVE - REAL ORDERS on the Dhan account "
-                f"(balance {capital:,.2f} INR, mode from Telegram menu)", "WARN")
+                f"(allocated {capital:,.2f} INR = balance x {_alloc:.2f}, mode from Telegram menu)", "WARN")
             notifier.log("LIVE MODE ACTIVE - REAL ORDERS (selected via Telegram)", "TRADE")
         except Exception as exc:
             notifier.log(
@@ -170,7 +182,7 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             return None
     else:
         from proxy.broker import PaperBroker
-        broker = PaperBroker(cfg.CAPITAL)
+        broker = PaperBroker(cfg.CAPITAL * _alloc)
         notifier.log("PAPER mode - no real orders (toggle LIVE from the Telegram menu)", "INFO")
     tracker = Tracker(cfg, db_path=getattr(cfg, "DB_PATH", None))
     # every notifier line lands in the DB so the dashboard shows paper
@@ -181,9 +193,11 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
     feed = None
     try:
         from proxy.dhan_rest_feed import DhanRestFeed
-        # 1.8s poll (0.56 req/s): the dashboard poller shares the same
-        # client-id, so stay comfortably under Dhan's 1 req/s limit
-        feed = DhanRestFeed(poll_interval=1.8, security_id=_index_id)
+        # poll interval per variant: NIFTY 1.8s (~0.56 req/s); the dual
+        # variants poll slower (cfg.FEED_POLL_INTERVAL) so two workers +
+        # the dashboard stay under Dhan's ~1 req/s on the shared client-id
+        _poll = float(getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8)
+        feed = DhanRestFeed(poll_interval=_poll, security_id=_index_id)
         feed.connect()
         time.sleep(3)
         if feed._thread is None or not feed._thread.is_alive():
@@ -390,7 +404,8 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                             pass
                         try:
                             from proxy.dhan_rest_feed import DhanRestFeed
-                            feed = DhanRestFeed(poll_interval=1.8)
+                            feed = DhanRestFeed(poll_interval=float(
+                                getattr(cfg, "FEED_POLL_INTERVAL", 1.8) or 1.8))
                             feed.connect()
                         except Exception as exc:
                             notifier.log(f"LIVE reconnect failed ({exc})", "WARN")

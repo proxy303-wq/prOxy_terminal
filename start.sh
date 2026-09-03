@@ -1,12 +1,24 @@
 #!/bin/bash
-# Railway web process: run the PAPER trading worker alongside the dashboard.
-# The worker loop is supervised (restarts on crash OR hang via timeout);
-# Streamlit runs in the foreground so Railway healthchecks track it.
+# PrOxy supervisor: run the paper/live workers alongside the dashboard.
+# Both worker loops are supervised (restarts on crash OR hang via timeout).
+# NIFTY reads reports/mode.json (the Telegram master switch).  BANKNIFTY
+# reads reports/mode_banknifty.json and stays PAPER while that file is
+# absent - flip it with tools/_bn_live.py (never live by accident).
+# Streamlit runs in the foreground so healthchecks track it.
 (
   while true; do
-    echo "[supervisor] starting railway_worker.py"
+    echo "[supervisor] starting railway_worker.py (NIFTY)"
     timeout 12h python railway_worker.py
-    echo "[supervisor] worker exited (code $?) - restarting in 30s"
+    echo "[supervisor] nifty worker exited (code $?) - restarting in 30s"
+    sleep 30
+  done
+) &
+
+(
+  while true; do
+    echo "[supervisor] starting railway_worker.py --variant banknifty (paper until mode_banknifty.json says live)"
+    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_BANKNIFTY:-0.4}" timeout 12h python railway_worker.py --variant banknifty
+    echo "[supervisor] banknifty worker exited (code $?) - restarting in 30s"
     sleep 30
   done
 ) &

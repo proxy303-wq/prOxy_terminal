@@ -27,7 +27,7 @@ def banknifty_config():
     c.LOT_SIZE = 35                    # BANKNIFTY lot size
     c.OPTION_STRIKE_STEP = 100.0       # BANKNIFTY strike ladder
     c.CSV_PATH = os.path.join(_base.DATA_DIR, "BANKNIFTY_5m.csv")
-    c.CSV_PATH_1M = os.path.join(_base.DATA_DIR, "BANKNIFTY_1m.csv")  # may not exist
+    c.CSV_PATH_1M = os.path.join(_base.DATA_DIR, "BANKNIFTY_1m.csv")  # fetched 03-Sep (188k rows)
     c.DB_PATH = os.path.join(_base.REPORT_DIR, "proxy_state_banknifty.sqlite")
     c.DASHBOARD_HTML = os.path.join(_base.REPORT_DIR, "dashboard_banknifty.html")
     c.INDEX_ID = 25                    # Dhan BANKNIFTY security id
@@ -35,9 +35,44 @@ def banknifty_config():
     # train 2026-01..05 / test 2026-06..08): ADX 0 (off) is best on BOTH
     # train (PF 2.49) and held-out test (PF 3.04 vs 2.89 at ADX 18) -
     # the ADX trend gate CUTS profitable BANKNIFTY trades (opposite of
-    # NIFTY, where ADX 18 won).  Per-index configs are the point of the
-    # dual engine.
+    # NIFTY, where ADX 18 won).  Re-confirmed 03-Sep on the honest 1m
+    # exit model (+610k/PF 3.44 at ADX 0 vs +488k/PF 3.40 at ADX 18).
     c.MIN_TREND_ADX = 0.0
+    # ---- FULL LIVE PROFILE (03-Sep, honest 1m-model A/B) ----
+    # The dual variants are SELF-CONTAINED live profiles: they must NOT
+    # inherit whatever the box's config.py holds (that file carries the
+    # NIFTY live profile / data-mode defaults depending on the last deploy).
+    # BN exit knobs are the %-EQUIVALENT of the NIFTY profile on BN's
+    # ~2.4x premium scale (BN ATM ~390 at 60k vs NIFTY ~155 at 24k):
+    #   NIFTY: arm 1.0 / floor 1.0 / trail 1.0 / stop 5 / target 6.5
+    #   BN:    arm 2.4 / floor 2.4 / trail 2.4 / stop 12 / target 16
+    # A/B 03-Sep (V4 policy, 1m exits, 0.20% RT): TRAIN +648k/PF 2.05/78%,
+    # TEST +610k/PF 3.44/82% (the raw NIFTY points on BN - arm1/stop5 -
+    # score too high on the model because a 5pt stop on ~390 premium is
+    # inside real BN noise; the proxy cannot see sub-minute fills).
+    c.SL_MODE = "points"
+    c.LOCK_ARM_POINTS = 2.4
+    c.LOCK_FLOOR_POINTS = 2.4
+    c.LOCK_TRAIL_STEP_POINTS = 2.4
+    c.SL_POINTS = 12.0
+    c.TARGET_POINTS = 16.0
+    c.REVERSE_EXIT_DELAY_BARS = 1      # V4 policy (validated on BN too:
+                                       # instant reverse -24k train/+157k test
+                                       # vs delayed +648k/+610k)
+    c.NO_STOP_LOSS = False
+    c.MIN_CONFIDENCE_PCT = 65.0
+    c.MAX_UNARMED_BARS = 4
+    c.RSI_ENTRY_GATE_BULL = 50.0
+    c.RSI_ENTRY_GATE_BEAR = 50.0
+    c.ML_LAB_ENABLED = False
+    c.ML_ENABLED = False
+    c.META_ENABLED = False
+    c.DEFAULT_LOTS = 2                 # BN lot 35 x ~400 premium = big notional;
+                                       # start small alongside NIFTY
+    # rate-limit headroom: the NIFTY worker polls its index at 1.8s (~0.56
+    # req/s) on the SAME Dhan client id - BN polls slower (0.25 req/s) so
+    # the two feeds + dashboard stay under Dhan's ~1 req/s.
+    c.FEED_POLL_INTERVAL = 4.0
     return c
 
 

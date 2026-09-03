@@ -21,17 +21,28 @@ from .config import REPORT_DIR
 MODE_FILE = os.path.join(REPORT_DIR, "mode.json")
 
 
-def get_mode():
+def mode_file_for(variant=None):
+    """NIFTY (and the default) uses the shared Telegram master switch
+    reports/mode.json.  The dual variants (banknifty/...) read
+    reports/mode_<variant>.json and default to PAPER while that file is
+    absent - a second engine must never go live accidentally just because
+    the NIFTY mode is live."""
+    if variant and str(variant) != "nifty":
+        return os.path.join(REPORT_DIR, "mode_%s.json" % variant)
+    return MODE_FILE
+
+
+def get_mode(variant=None):
     try:
-        with open(MODE_FILE, "r", encoding="utf-8") as fh:
+        with open(mode_file_for(variant), "r", encoding="utf-8") as fh:
             return json.load(fh).get("mode", "paper")
     except Exception:
         return "paper"
 
 
-def set_mode(mode):
+def set_mode(mode, variant=None):
     os.makedirs(REPORT_DIR, exist_ok=True)
-    with open(MODE_FILE, "w", encoding="utf-8") as fh:
+    with open(mode_file_for(variant), "w", encoding="utf-8") as fh:
         json.dump({"mode": mode}, fh)
     return mode
 

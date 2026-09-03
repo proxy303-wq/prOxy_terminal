@@ -287,6 +287,7 @@ class Backtest:
                         if exit_price is None and self._bar_time(sub) >= self.cfg.FORCE_EXIT_TIME:
                             exit_price, exit_reason = prem_now * slip, "TIME_STOP (15:15)"
                         if exit_price is None and last_signal is not None and last_signal.direction != "WAIT" \
+                                and not bool(getattr(self.cfg, "BT_REVERSE_DISABLED", False)) \
                                 and not (bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False)) and sub is not sub_bars[-1]):
                             want_long = active["direction"] == "LONG"
                             if (last_signal.direction == "BUY") != want_long                                     and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
@@ -326,6 +327,7 @@ class Backtest:
                     # first, so a position that locked/stopped this bar never
                     # reaches the reverse check.
                     if _px is None and _why is None \
+                            and not bool(getattr(self.cfg, "BT_REVERSE_DISABLED", False)) \
                             and bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False)) \
                             and last_signal is not None and last_signal.direction != "WAIT":
                         want_long = active["direction"] == "LONG"
@@ -391,6 +393,7 @@ class Backtest:
                 # left the trade open; the fresh entry below may then re-enter
                 # on this same signal (live ordering).
                 if active is not None and _rev_at_close \
+                        and not bool(getattr(self.cfg, "BT_REVERSE_DISABLED", False)) \
                         and signal is not None and signal.direction != "WAIT":
                     want_long = active["direction"] == "LONG"
                     if (signal.direction == "BUY") != want_long \

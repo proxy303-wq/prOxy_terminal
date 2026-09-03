@@ -595,3 +595,46 @@ protects profit from +1pt instead of +2pt), live profile intact
 off), Dhan token valid through ~16:44 IST 04-Sep. Intra-bar exit fix live
 since 16:15; V4 reverse delay live since 18:31; arm 1.0 live since 19:17.
 First V4+arm1.0 session = 04-Sep.
+
+## 10. BANKNIFTY (03-Sep evening) — validated, profile committed, worker prepared
+
+**BN 1m data:** backfilled from Dhan's charts API (tools/_fetch_bn_1m.py,
+chunked ~4 calendar days/call) → data/BANKNIFTY_1m.csv, 188,289 rows,
+2024-08-26 → 2026-09-03 (gitignored like the other CSVs). Load
+C:\Athena_X\.env before running any fetch (missing env = silent empty).
+
+**BN honest validation (V4 policy, 1m exits, month-reset, 0.20% RT):**
+recommended profile = V4 reverse-delay, ADX 0, arm 2.4 / floor 2.4 / trail
+2.4 / stop 12 / target 16, conf 65, MAX_UNARMED 4, RSI 50/50, stops on.
+TRAIN 2024-08..25-12: 896 tr, 77.6% win, +648,075, PF 2.05, maxDD 4.46%.
+TEST 2026-01..08: 456 tr, 82.0% win, +609,827, PF 3.44, maxDD 1.82%.
+- The BN exit knobs are the %-EQUIVALENT of the NIFTY profile on BN's
+  ~2.4x premium scale (proxy ATM = spot x 0.0065 ≈ 390 at 60k vs NIFTY
+  ~155).  The raw NIFTY points on BN (arm1/stop5) score too high on the
+  model (PF 5.5-11.6) because a 5pt stop on ~390 premium is inside real
+  BN noise the proxy cannot see — NOT a trustworthy profile.
+- V4 confirmed on BN: instant reverse −24k train / +157k test vs delayed
+  +648k / +610k.  ADX-0 verdict survives the 1m model (+610k vs +488k at
+  ADX 18).
+
+**Committed (`7b8aab3`) + DEPLOYED (19:58 IST, commit `7b8aab3`):**
+- dual.banknifty_config() is now a COMPLETE self-contained live profile
+  (exit knobs, V4 delay, conf/RSI/unarmed/stops/ML, DEFAULT_LOTS 2, feed
+  poll 4.0s) — never inherits the box config's NIFTY/data-mode knobs.
+- mode.get_mode(variant): BN reads reports/mode_banknifty.json and stays
+  PAPER while absent — a second engine can't go live when NIFTY's mode.json
+  says live.  Flip with tools/_bn_live.py (paper|live).
+- railway_worker: live/paper capital x PROXY_ALLOCATION_PCT (start.sh sets
+  0.4 for the BN loop); per-variant FEED_POLL_INTERVAL (two feeds on one
+  Dhan client stay under ~1 req/s).
+- start.sh now runs BOTH workers: NIFTY (mode.json → live) + BANKNIFTY
+  (mode_banknifty.json absent → paper).  BN paper day-1 = 04-Sep: real BN
+  feed, paper trades into proxy_state_banknifty.sqlite, [BANKNIFTY]-tagged
+  Telegram lines.
+
+**BN live checklist (when the user says go):** tools/_bn_live.py live →
+mode_banknifty.json = {"mode":"live"} (read at the next market open or
+restart); watch both engines' sizing on the real balance (~399k; BN lot 35
+x ~400 premium ≈ 14k/lot — DEFAULT_LOTS 2 is the cautious start); watch the
+journal for Dhan 429s (two feeds + dashboard on one client id); expect the
+BN dashboard DB proxy_state_banknifty.sqlite to populate on paper day-1.

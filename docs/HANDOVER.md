@@ -676,3 +676,35 @@ mode_banknifty.json both live), both feeds ALIVE, engine == local HEAD
 sizing on ~2L.  Watch: startup feed contention (both probes fired at once —
 one "no ticks in 9s" seen once, cleared on restart), Dhan 429s in the
 journal, and the first BN real fills (entry anchoring + order fills).
+
+## 12. WebSocket index feed (built 03-Sep night, DEPLOY pre-market 04-Sep)
+
+Dhan egress IP `103.86.177.195` added to the account's static-IP whitelist
+(user, 03-Sep ~20:50).  Built behind `FEED_USE_WEBSOCKET` (repo default
+False; commits `4c216a1` + `29d2a36`, 100 tests OK, hermetic checks pass):
+- WS (DhanLiveFeed) streams the index: a 5-min bar close is detected in
+  milliseconds instead of at the next REST poll (~2s), and two workers no
+  longer contend for the ~1 req/s REST budget.
+- The traded option's LTP (real-premium exits) stays on a dedicated
+  option-only REST feed (DhanRestFeed `option_only=True`: polls NOTHING
+  while flat, one request per poll only in trades).
+- Fallback chain: WS connect error OR **silent socket (tick-proof: no index
+  LTP within 12s at open)** -> proven REST feed; WS failure mid-session
+  reconnects WS then sticks to REST; LIVE never trades synthetic.
+- Session-end close releases feeds (no overnight polling); the startup
+  probe skips its redundant 9s REST poll-test in WS mode.
+
+**04-Sep PRE-MARKET runbook (~08:45-09:00 IST, market closed):**
+1. `python tools/_deploy_ws_premarket.py` — uploads the 3 WS files (never
+   the repo config — it would clobber the live profile), sets
+   `FEED_USE_WEBSOCKET = True` in /opt/proxy/proxy/config.py, restarts.
+2. At 09:15 the sessions self-verify.  Journal watch:
+   - `LIVE Dhan WebSocket feed connected + streaming ... first tick X` = WS
+     live for that engine.
+   - `WS connected but no index ticks ... REST fallback` = WS silent -> the
+     day still runs on the proven REST path (safe by design).
+3. If WS falls back: the whitelist isn't covering market data - keep the
+     flag True (fallback is automatic) or set False and re-run the flip
+     later; do NOT chase it mid-session.
+4. Confirm intra-bar exits still fire (option-LTP REST feed) and check the
+   journal for 429s at ~09:30.

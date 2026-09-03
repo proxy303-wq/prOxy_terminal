@@ -638,3 +638,41 @@ restart); watch both engines' sizing on the real balance (~399k; BN lot 35
 x ~400 premium ≈ 14k/lot — DEFAULT_LOTS 2 is the cautious start); watch the
 journal for Dhan 429s (two feeds + dashboard on one client id); expect the
 BN dashboard DB proxy_state_banknifty.sqlite to populate on paper day-1.
+
+## 11. BOTH ENGINES LIVE (03-Sep 20:36 IST) — NIFTY + BANKNIFTY
+
+**User decision:** both live side by side, ~₹2L sizing basis per index
+(0.5x0.5 PROXY_ALLOCATION_PCT on the ~4.1L real balance).
+
+**BANKNIFTY real-contract reality check (found before flipping):**
+- Dhan lists BANKNIFTY **MONTHLY-only expiries** (6; nearest 29-Sep, DTE 26)
+  vs NIFTY's weeklies.  The nearest BN ATM (29-Sep) real LTP = **828.70** vs
+  the backtest proxy spot*0.0065 = 373 (2.22x).
+- Re-validation at the REAL premium scale (OPTION_PREMIUM_EST_PCT=0.0144,
+  committed knobs arm 2.4/stop 12, V4): TEST +134.4k/PF 2.78/81.9% win,
+  TRAIN +115.9k/PF 1.64/76.5% (DEFAULT_LOTS 2).  The committed profile
+  HOLDS at the real scale; the tight 12pt stop beats the %-equivalent
+  (stop 26pt: PF 1.11) — same tight-stop-scalp shape as NIFTY.
+- BN order path verified read-only: "BANKNIFTY 29SEP 57400 CE" →
+  security_id 69820 (engine-format symbols resolve against the scrip master).
+
+**Deployed tonight (commits `7b8aab3`, `5f72ed1`, `f4358bd`, all pushed):**
+- start.sh runs BOTH workers, PROXY_ALLOCATION_PCT 0.5 each (~2L basis).
+- Live loop drain sleep 2s → 0.5s: bar-close-signal → order latency bounded
+  by ~1 feed poll + 0.5s (feed polls on its own interval in its own thread;
+  one batched request per poll = index + subscribed options together, so the
+  tight drain adds no API load).
+- BN feed poll 4.0 → 2.5s (0.4 req/s; two workers steady ~0.96 req/s on the
+  shared Dhan client — feeds self-heal on 429 with 2.5s backoff).
+- mode_banknifty.json = live (flip tool tools/_bn_live.py).
+- **LIVE SAFETY (f4358bd):** in LIVE mode a dead/stalled feed now ABORTS the
+  session — never falls back to synthetic replay (real orders on fake bars
+  was possible with the old fallback; synthetic stays for PAPER only).
+
+**Box state (03-Sep 20:37 IST):** both workers up and LIVE (mode.json +
+mode_banknifty.json both live), both feeds ALIVE, engine == local HEAD
+`f4358bd`, token valid through ~16:44 IST 04-Sep.  First dual-live session
+= 04-Sep: NIFTY V4+arm1.0 (4 lots) + BANKNIFTY V4 profile (2 lots), each
+sizing on ~2L.  Watch: startup feed contention (both probes fired at once —
+one "no ticks in 9s" seen once, cleared on restart), Dhan 429s in the
+journal, and the first BN real fills (entry anchoring + order fills).

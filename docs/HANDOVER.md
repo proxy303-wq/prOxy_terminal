@@ -587,8 +587,11 @@ now: tools/push_token_vps.py (TOTP → VPS) only. The 08:45 IST auto-push task
 is UNRELIABLE (missed 03-Sep) — always verify the box token expiry in the
 journal (`expires in Xh`) before market open; refresh manually if < 12h.
 
-**Box state (03-Sep ~18:35 IST):** live mode, worker up, engine/config hashes
-== local HEAD `170bfda`, REVERSE_EXIT_DELAY_BARS=1, live profile intact
+**Box state (03-Sep ~19:20 IST):** live mode, worker up, engine/config hashes
+== local HEAD `170bfda`+, REVERSE_EXIT_DELAY_BARS=1, LOCK_ARM_POINTS=1.0
+(arm A/B winner 03-Sep: train +244.6k->+322.9k / PF 1.66, test PF 2.72,
+protects profit from +1pt instead of +2pt), live profile intact
 (NO_STOP_LOSS=False, ADX 18, conf 65, RSI 50/50, MAX_UNARMED 4, 4 lots, ML
 off), Dhan token valid through ~16:44 IST 04-Sep. Intra-bar exit fix live
-since 16:15; V4 reverse delay live since 18:31. First V4 session = 04-Sep.
+since 16:15; V4 reverse delay live since 18:31; arm 1.0 live since 19:17.
+First V4+arm1.0 session = 04-Sep.

@@ -31,6 +31,8 @@ LIVE_OVERRIDES = {
     r"^DEFAULT_LOTS\s*=": "4",                  # LIVE-SMALL day 1 (scale up after)
     r"^REVERSE_EXIT_DELAY_BARS\s*=": "1",       # V4: reverse exits wait 1 bar
                                                 # (validated 03-Sep, see engine._reverse_exit)
+    r"^LOCK_ARM_POINTS\s*=": "1.0",             # V4-era A/B winner 03-Sep: arm 2.0 -> 1.0
+                                                # (train +244.6k->+322.9k PF 1.66, test PF 2.72)
 }
 # NOT touched here: RISK_DD_TAPER stays False for live week 1 (stale equity
 # peak would crush size - docs/HANDOVER.md §8 item 6), ML_LAB/ML/META stay

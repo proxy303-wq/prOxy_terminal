@@ -207,7 +207,28 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             time.sleep(3)
             if feed._thread is None or not feed._thread.is_alive():
                 raise RuntimeError("WS feed thread died at startup")
-            notifier.log(f"LIVE Dhan WebSocket feed connected - {mode.upper()} session {trade_date} (index {_index_id})", "INFO")
+            # TICK PROOF: a socket can connect while Dhan's server sends
+            # nothing (non-whitelisted egress IPs behave exactly like this -
+            # seen after hours on 03-Sep).  A silent WS would stall the
+            # session into the reconnect/abort path, so require the index
+            # LTP within ~12s at open and fall back to REST otherwise.
+            _sid_key = str(_index_id)
+            _tick_wait = 12.0
+            _t0 = time.time()
+            while not feed.live_ltps.get(_sid_key) and time.time() - _t0 < _tick_wait:
+                time.sleep(0.5)
+            if not feed.live_ltps.get(_sid_key):
+                try:
+                    feed.close()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"WS connected but no index ticks in {_tick_wait:.0f}s "
+                    f"(egress IP whitelisted?) - REST fallback")
+            notifier.log(
+                f"LIVE Dhan WebSocket feed connected + streaming - {mode.upper()} "
+                f"session {trade_date} (index {_index_id}, first tick "
+                f"{feed.live_ltps.get(_sid_key):,.2f})", "INFO")
         else:
             from proxy.dhan_rest_feed import DhanRestFeed
             feed = DhanRestFeed(poll_interval=_poll, security_id=_index_id)

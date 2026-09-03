@@ -117,16 +117,31 @@ class Backtest:
 
     def _reset_state(self, day):
         if self.state is None or self.state["date"] != str(day):
+            # Monthly-loss discipline is a config choice:
+            #   BT_MONTH_RESET_HALT=False (default) = the historical behaviour
+            #   and the LIVE engine's state machine: realized_pnl_month is a
+            #   running cumulative since the run/account start, so the "5%
+            #   monthly stop" only fires on a CUMULATIVE -5% (published
+            #   validation numbers used this).
+            #   BT_MONTH_RESET_HALT=True = the docstring's intended per-month
+            #   stop: month P&L + halt flag roll at the calendar boundary
+            #   (used by exit-cadence A/Bs so a losing variant is not
+            #   silently truncated mid-window).
+            _new_month = (bool(getattr(self.cfg, "BT_MONTH_RESET_HALT", False))
+                          and self.state is not None
+                          and str(day)[:7] != str(self.state["date"])[:7])
             self.state = {
                 "date": str(day),
                 "trades_today": 0,
                 "realized_pnl_today": 0.0,
-                "realized_pnl_month": self.state["realized_pnl_month"] if self.state else 0.0,
+                "realized_pnl_month": (0.0 if _new_month
+                                       else (self.state["realized_pnl_month"] if self.state else 0.0)),
                 "realized_pnl_total": self.state["realized_pnl_total"] if self.state else 0.0,
                 "wins": self.state["wins"] if self.state else 0,
                 "losses": self.state["losses"] if self.state else 0,
                 "trading_halted_day": False,
-                "trading_halted_month": self.state["trading_halted_month"] if self.state else False,
+                "trading_halted_month": (False if _new_month
+                                         else (self.state["trading_halted_month"] if self.state else False)),
                 "equity_curve": self.state["equity_curve"] if self.state else [],
             }
 
@@ -190,7 +205,16 @@ class Backtest:
 
         for day in days:
             if self.state and self.state.get("trading_halted_month"):
-                break
+                # monthly loss limit reached.  With BT_MONTH_RESET_HALT the
+                # halt covers the REST of the month then resumes (a permanent
+                # break would silently truncate every losing variant's window
+                # and skew any A/B).  Without it (default) the halt is
+                # cumulative since run start - end the run, as live would.
+                if (bool(getattr(self.cfg, "BT_MONTH_RESET_HALT", False))
+                        and str(day)[:7] == str(self.state["date"])[:7]):
+                    continue
+                if not bool(getattr(self.cfg, "BT_MONTH_RESET_HALT", False)):
+                    break
             self._reset_state(day)
             bars5 = csv_bars_for_day(self.df, day)
             if len(bars5) < 30:
@@ -221,7 +245,30 @@ class Backtest:
                 # ---- 1) exit simulation at 1m resolution ----
                 if active is not None:
                     active["bars_held"] = int(active.get("bars_held") or 0) + 1
+                    # EXIT-CADENCE A/B knobs (defaults OFF = current behaviour):
+                    #   BT_GATE_PROTECTIVE_5M (the "5m exit thingy"):
+                    #     OFF = protective GTT levels (lock floor / stop /
+                    #     target) resolve at 1-MINUTE ticks, filled AT the
+                    #     level when crossed (what the live ~2s poll does).
+                    #     ON  = levels evaluated only at the 5m CLOSE, filled
+                    #     at the CLOSE premium - a mid-window cross is noticed
+                    #     late and exits at market (the day-1 live behaviour
+                    #     that bled locked profits back / slipped stops).
+                    #   BT_REVERSE_AT_SIGNAL_CLOSE:
+                    #     OFF = a reverse signal fires ~1 min late, at the next
+                    #     bar's first 1m tick (last_signal).
+                    #     ON  = fires at the SIGNAL bar's close - the earliest
+                    #     the flip exists (live process_bar behaviour).
+                    #   BT_REVERSE_DELAY_5M:
+                    #     ON  = a reverse exit waits until the NEXT 5m close
+                    #     after the flip (the reverse counterpart of the "5m
+                    #     exit thingy") - fills ~4-5 min after the flip.
+                    _prot_5m = bool(getattr(self.cfg, "BT_GATE_PROTECTIVE_5M", False))
+                    _rev_at_close = bool(getattr(self.cfg, "BT_REVERSE_AT_SIGNAL_CLOSE", False))
+                    _rev_delay_5m = bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False))
                     sub_bars = bar.get("_1m") or [bar]
+                    if _prot_5m:
+                        sub_bars = []   # one protective eval at the close below
                     for sub in sub_bars:
                         if active is None:
                             break
@@ -239,7 +286,8 @@ class Backtest:
                             if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
                         if exit_price is None and self._bar_time(sub) >= self.cfg.FORCE_EXIT_TIME:
                             exit_price, exit_reason = prem_now * slip, "TIME_STOP (15:15)"
-                        if exit_price is None and last_signal is not None and last_signal.direction != "WAIT":
+                        if exit_price is None and last_signal is not None and last_signal.direction != "WAIT" \
+                                and not (bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False)) and sub is not sub_bars[-1]):
                             want_long = active["direction"] == "LONG"
                             if (last_signal.direction == "BUY") != want_long                                     and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
                                 exit_price, exit_reason = prem_now * slip, "REVERSE_SIGNAL"
@@ -251,6 +299,46 @@ class Backtest:
                                 cooldown_until = sub["time"] + pd.Timedelta(minutes=5 * int(self.cfg.LOSS_COOLDOWN_BARS))
                             if self.verbose:
                                 print(f"    EXIT {rec['instrument']} {rec['exit_reason']} P&L {rec['pnl']:+,.2f}")
+
+                # gate ON: protective levels are evaluated ONCE per 5m bar, at
+                # its close, using the full bar's range; a cross fills at the
+                # CLOSE premium (market when noticed), not at the level.  The
+                # 15:15 clock fires first, as in the 1m path.
+                if active is not None and _prot_5m:
+                    _h, _l, _now = self._premium_proxy(active, bar)
+                    _tb = float(active.get("theta_day_pct", 0.0) or 0.0) / 75.0
+                    if active["direction"] == "LONG":
+                        _h, _l, _now = _h * (1.0 - _tb), _l * (1.0 - _tb), _now * (1.0 - _tb)
+                    else:
+                        _h, _l, _now = _h * (1.0 + _tb), _l * (1.0 + _tb), _now * (1.0 + _tb)
+                    slip = 1.0 - getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT) \
+                        if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
+                    if self._bar_time(bar) >= self.cfg.FORCE_EXIT_TIME:
+                        _px, _why = _now * slip, "TIME_STOP (15:15)"
+                    else:
+                        _px, _why = check_exits(active, _h, _l, _now, self.cfg)
+                        if _px is not None:
+                            _px = _now   # filled at the close, not the level
+                    # delayed reverse (BT_REVERSE_DELAY_5M + gate ON): a flip
+                    # from the PREVIOUS bar is acted on at THIS bar's close -
+                    # one full 5m bar after the flip (the reverse counterpart
+                    # of the 5m exit thingy).  Protective levels above fire
+                    # first, so a position that locked/stopped this bar never
+                    # reaches the reverse check.
+                    if _px is None and _why is None \
+                            and bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False)) \
+                            and last_signal is not None and last_signal.direction != "WAIT":
+                        want_long = active["direction"] == "LONG"
+                        if (last_signal.direction == "BUY") != want_long \
+                                and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
+                            _px, _why = _now * slip, "REVERSE_SIGNAL"
+                    if _px is not None:
+                        rec = self._close_trade(active, _px, _why, bar, day_trades)
+                        active = None
+                        if "STOP_LOSS_HIT" in _why and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
+                            cooldown_until = bar["time"] + pd.Timedelta(minutes=5 * int(self.cfg.LOSS_COOLDOWN_BARS))
+                        if self.verbose:
+                            print(f"    EXIT {rec['instrument']} {rec['exit_reason']} P&L {rec['pnl']:+,.2f}")
 
                 # ---- 2) signal evaluation on the 5m bar ----
                 history.append({k: v for k, v in bar.items() if k != "_1m"})
@@ -295,6 +383,27 @@ class Backtest:
                     day_green = float(bar["close"]) >= day_open
                     if (signal.direction == "BUY") != day_green:
                         signal = None
+
+                # reverse-signal exits AT the signal bar's close
+                # (BT_REVERSE_AT_SIGNAL_CLOSE): the flip exists only when this
+                # bar closes, so this is the earliest honest exit - the live
+                # process_bar behaviour.  Fires only if the protective pass
+                # left the trade open; the fresh entry below may then re-enter
+                # on this same signal (live ordering).
+                if active is not None and _rev_at_close \
+                        and signal is not None and signal.direction != "WAIT":
+                    want_long = active["direction"] == "LONG"
+                    if (signal.direction == "BUY") != want_long \
+                            and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
+                        _h, _l, _now = self._premium_proxy(active, bar)
+                        _tb = float(active.get("theta_day_pct", 0.0) or 0.0) / 75.0
+                        _now = _now * (1.0 - _tb) if active["direction"] == "LONG" else _now * (1.0 + _tb)
+                        slip = 1.0 - getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT) \
+                            if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
+                        rec = self._close_trade(active, _now * slip, "REVERSE_SIGNAL", bar, day_trades)
+                        active = None
+                        if self.verbose:
+                            print(f"    EXIT {rec['instrument']} REVERSE_SIGNAL @close P&L {rec['pnl']:+,.2f}")
 
                 # ---- 3) fresh entry ----
                 if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and not self._in_lunch(bar)                         and signal is not None and signal.direction in ("BUY", "SELL"):

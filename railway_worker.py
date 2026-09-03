@@ -342,6 +342,13 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
         last_chain_refresh = time.time()
         reconnect_attempts = 0
         while now_ist().time() <= dt_time(15, 31) and (now_ist() - started).total_seconds() < 6 * 3600:
+            # intra-bar protective exit: check the open trade's live option
+            # LTP every ~2s poll so lock/stop/target fire IMMEDIATELY when
+            # crossed, not at the next 5-min bar close (day-1 live gap).
+            try:
+                engine.check_live_ltp_exit()
+            except Exception:
+                pass
             bar = feed._next_5m_bar(block=False)
             if bar is not None:
                 last_bar = bar

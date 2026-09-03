@@ -205,6 +205,108 @@ class TestRealPremiumExits(unittest.TestCase):
         self.assertAlmostEqual(plan["entry_premium"], round(plan["entry_premium"], 2))
 
 
+class _LiveBrokerStub:
+    """A broker that fills every order (stand-in for the real Dhan client)."""
+    live = True
+
+    def place_order(self, side, instrument, quantity, **kw):
+        self.calls = getattr(self, "calls", [])
+        self.calls.append((side, instrument, quantity))
+        return {"orderStatus": "TRADED", "orderId": "X1"}
+
+
+class _NotFillingStub(_LiveBrokerStub):
+    def place_order(self, side, instrument, quantity, **kw):
+        return {"orderStatus": "REJECTED"}
+
+
+class TestLiveLTPIntraBarExit(unittest.TestCase):
+    """check_live_ltp_exit: the ~2s worker poll that protects a live
+    position BETWEEN 5-min bar closes.  Day-1 complaint was 'lock didn't
+    lock in' / 'exits aren't immediate' - bar-close-only checks let a
+    floor/stop crossed mid-bar bleed until the next close.  This polls the
+    option's CURRENT LTP and exits via the real broker immediately."""
+
+    IST = ZoneInfo("Asia/Kolkata")
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        self.cfg = SimpleNamespace(**vars(cfg))
+        self.cfg.NO_STOP_LOSS = False
+        self.cfg.MAX_UNARMED_BARS = 4
+        self.tracker = Tracker(self.cfg, db_path=self.db_path)
+        self.engine = PaperEngine(self.cfg, broker=_LiveBrokerStub(),
+                                  tracker=self.tracker,
+                                  notifier=Notifier(quiet=True),
+                                  trade_date=date(2026, 9, 3))
+        # entry_ltp_fn is the live-LTP hook the worker wires in
+        self.engine.entry_ltp_fn = lambda sid: self.ltp
+        self.now = datetime(2026, 9, 3, 10, 30, tzinfo=self.IST)  # pre-15:15
+        self.plan = {
+            "instrument": "NIFTY 03SEP 24050 PE",
+            "direction": "LONG", "option_type": "PE",
+            "strike": 24050.0, "security_id": 42650,
+            "lots": 4, "quantity": 4 * cfg.LOT_SIZE,
+            "entry_premium": 100.0, "stop_premium": 95.0,
+            "target_premium": 106.5, "entry_spot": 24000.0,
+            "theta_day_pct": 0.0,
+            "pnl_peak": 100.0, "peak_pct": 0.0,
+            "lock_armed": False, "lock_floor_pct": 0.0,
+            "bars_held": 1, "premium_source": "real_option_bar",
+        }
+
+    def tearDown(self):
+        try:
+            os.remove(self.db_path)
+        except OSError:
+            pass
+
+    def test_no_trade_returns_none(self):
+        self.ltp = 100.0
+        self.assertIsNone(self.engine.check_live_ltp_exit(self.now))
+
+    def test_paper_broker_returns_none(self):
+        self.engine.broker.live = False
+        self.engine.active_trade = dict(self.plan)
+        self.ltp = 94.0  # would cross the stop if live
+        self.assertIsNone(self.engine.check_live_ltp_exit(self.now))
+
+    def test_holds_when_ltp_away_from_levels(self):
+        self.engine.active_trade = dict(self.plan)
+        self.ltp = 100.5
+        self.assertIsNone(self.engine.check_live_ltp_exit(self.now))
+
+    def test_ltp_crossing_stop_exits_immediately(self):
+        self.engine.active_trade = dict(self.plan)
+        self.ltp = 94.5  # below the 95.0 stop, mid-bar
+        rec = self.engine.check_live_ltp_exit(self.now)
+        self.assertIsNotNone(rec)
+        self.assertTrue(rec["exit_reason"].startswith("STOP_LOSS_HIT"))
+        self.assertIsNone(self.engine.active_trade)
+
+    def test_armed_trade_ltp_dip_to_floor_locks_profit(self):
+        t = dict(self.plan)
+        t["pnl_peak"] = 105.0   # rode to +5pt
+        t["lock_armed"] = True
+        self.engine.active_trade = t
+        # floor = max(+1pt, peak-1pt=104) -> 104; 103.5 < 104 crosses
+        self.ltp = 103.5
+        rec = self.engine.check_live_ltp_exit(self.now)
+        self.assertIsNotNone(rec)
+        self.assertTrue(rec["exit_reason"].startswith("LOCK_PROFIT"))
+        self.assertIsNone(self.engine.active_trade)
+
+    def test_rejected_exit_order_keeps_trade_open(self):
+        self.engine.broker = _NotFillingStub()
+        self.engine.active_trade = dict(self.plan)
+        self.ltp = 94.5
+        rec = self.engine.check_live_ltp_exit(self.now)
+        self.assertIsNone(rec)
+        self.assertIsNotNone(self.engine.active_trade)
+
+
 class TestOptionLTPFeed(unittest.TestCase):
     """DhanRestFeed builds real 5-min option bars from NSE_FNO LTP ticks."""
 

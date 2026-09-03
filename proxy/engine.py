@@ -791,6 +791,53 @@ class PaperEngine:
         self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR | exit priced on {_src}", "EXIT")
         return record
 
+    def check_live_ltp_exit(self, now=None):
+        """LIVE-only intra-bar protective exit, polled every ~2s by the
+        worker while a trade is open.
+
+        The process_bar path checks exits only at 5-min bar CLOSES - between
+        bars a live position is unprotected, so a lock floor / stop crossed
+        mid-bar bled until the next close (observed day 1: 'lock didn't
+        lock in', 'exits aren't immediate').  This evaluates the option's
+        CURRENT live LTP against the standing levels (lock floor / stop /
+        target) and exits immediately via the real broker when crossed -
+        the honest emulation of a standing GTT order."""
+        t = self.active_trade
+        if t is None:
+            return None
+        if not getattr(self.broker, "live", False) or self.entry_ltp_fn is None:
+            return None
+        # _check_exits reads self._active_trade (synced by process_bar);
+        # sync it here so the intra-bar path is robust between bars.
+        self._active_trade = t
+        sid = t.get("security_id")
+        if not sid:
+            return None
+        try:
+            ltp = self.entry_ltp_fn(sid)
+        except Exception:
+            return None
+        if not ltp or float(ltp) <= 0:
+            return None
+        ltp = float(ltp)
+        now = now or datetime.now(ZoneInfo("Asia/Kolkata"))
+        bar = {"time": now, "open": ltp, "high": ltp, "low": ltp,
+               "close": ltp, "volume": 0.0}
+        try:
+            # real_bar = the live tick, so protective levels are tested
+            # against the ACTUAL premium (never the model).  signal=None
+            # keeps reverse-signal exits on the 5m path; only lock/stop/
+            # target/time-stop can fire here.
+            exit_price, reason = self._check_exits(
+                bar, None, 0.0,
+                real_bar={"open": ltp, "high": ltp, "low": ltp, "close": ltp})
+        except Exception:
+            return None
+        if exit_price is None:
+            return None
+        self._active_trade = t
+        return self._close(exit_price, reason, bar)
+
     # ----------------------------------------------------------
     # main bar processing
     # ----------------------------------------------------------

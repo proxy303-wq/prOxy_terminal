@@ -522,3 +522,73 @@ week-trained models Friday before any gate has power.
 4. Watch the first signals: real fills anchored (real-fill anchor), expiry
    pinned to the chain (wrong-expiry fix), veto70 LAB notes on entries.
 5. End of day 1: review vs the paper comparison; respect the 1%/5% halts.
+
+## 9. LIVE day-1 (Thu 03-Sep) + V4 reverse-exit policy + VPS-only ops
+
+**Live day-1 (03-Sep): net +12,726 INR, 9 trades (all PE), 6W/3L, 4 lots.**
+Exit reasons: 6× LOCK_PROFIT (+16,676) / 3× STOP (−3,950). Rows 70–78 in the
+box DB. Day summary in Telegram said "7 trades / +7,058" — the 10:13 mid-day
+hammer-fix restart reset the session counter, so it only counted post-restart
+trades (rows 72–78 = 7). The DB (authoritative) has all 9. One green day ≠
+proof; the pure-engine win rate (~60-66%) matched the validated profile.
+
+**Day-1 user complaints + what was done (03-Sep, committed `8ed34ef`, deployed):**
+1. "Lock didn't lock in / trades in profit then negative" + "exits not immediate" —
+   root cause: exits were only evaluated at 5-min bar CLOSES; a lock floor / stop
+   crossed mid-bar bled until the next close. Fix: `engine.check_live_ltp_exit()`
+   — the worker polls the traded option's REAL LTP every ~2s while a trade is
+   open and fires lock/stop/target immediately via the real broker
+   (`railway_worker.py:349`). Regression tests: `TestLiveLTPIntraBarExit`.
+2. "Why did it trade the same strike?" — the 10:13 restart reset the in-memory
+   strike-once tracker → 24150/24100 PE re-traded. Avoid mid-session restarts.
+
+**V4 reverse-exit policy (validated 03-Sep evening, committed `170bfda`, DEPLOYED):**
+The A/B the user asked for — "with/without the 5m exit gate" for BOTH exit
+types — produced a surprise (tools/_exit_gate_ab.py, 1m-res exit model,
+month-reset discipline `BT_MONTH_RESET_HALT`, honest 0.20% RT):
+- reverse-signal exits were ALREADY firing at the flip instant; the "5m wait"
+  the user feared doesn't exist at 1m resolution (V3 rev@signal-close ≡ V2).
+- Instant reverse exits are the biggest drag: 167–169 of them → +47k.
+  Delaying them one full 5m bar (V4) → 73 of them → **+301k / PF 2.45 / 74%
+  win / maxDD 1.7%** on the test window, and held OUT-OF-SAMPLE on the train
+  window (+244k / PF 1.41 / 67% vs the instant-reverse −147k / PF 0.62).
+  Bar-close flips are mostly NOISE that recovers to the lock.
+- Protective (lock/stop) cadence A/B: with instant reverse, 5m-close protective
+  (+136k) beat 1m-immediate (+47k); but the best cell is V4 = intra-bar
+  protective + reverse-delayed-1-bar. Keep the intra-bar lock fix.
+- **Live:** `REVERSE_EXIT_DELAY_BARS = 1` on the box (0 = old instant; set by
+  tools/_live_flip.py; repo default 0). `engine._reverse_exit()` arms a flip
+  (`t['reverse_pending_at']`) and fires N bars later REGARDLESS of later
+  signals (armed, not cancelled); protective levels always checked first, so a
+  position that locks during the pending bar exits on the lock.
+- **Substrate caveat:** the published +328k/PF 1.88 came from the 5m-only
+  replay, which has within-bar lookahead (floor priced from the full bar's
+  high when it fires on that bar's low) — real fills can't do that. Honest-fill
+  1m models: PF 1.20–2.45 depending on policy. Live polls at ~2s = finer than
+  the 1m model; the honest live expectation is the V2/V4 regime, not +328k.
+- V6 (reverse exits OFF entirely) scored even higher on the model (+556k test /
+  +920k train, PF 7.88/5.02) but concentrates all risk in stop fills — held as
+  a follow-up candidate, NOT live.
+
+**Backtest bug fixed behind a flag:** `_reset_state` never rolled
+`realized_pnl_month` at calendar boundaries, so the "5% monthly stop" was
+really cumulative — losing variants were silently truncated mid-window
+(skewing every A/B). `BT_MONTH_RESET_HALT=False` (default) preserves the
+historical + live-state-machine behaviour (published baseline reproduces
+exactly: 324 trades / +328,148 / PF 1.88); True = per-month discipline.
+
+**VPS-only ops (Railway/Fly disabled, 03-Sep):** the terminal deploys ONLY to
+the MilesWeb VPS (tools/vps_deploy.py → /opt/proxy). A test-suite run's token
+auto-refresh pushed to legacy Railway and redeployed it — `railway.json`,
+`.railwayignore`, `Procfile`, `fly.toml`, `railway_crypto_worker.py`,
+`railway_worker_banknifty.py` deleted from the repo (`e701e18`) and
+`PROXY_PUSH_TOKEN_TO_RAILWAY=false` in `C:\Athena_X\.env`. Token refresh flow
+now: tools/push_token_vps.py (TOTP → VPS) only. The 08:45 IST auto-push task
+is UNRELIABLE (missed 03-Sep) — always verify the box token expiry in the
+journal (`expires in Xh`) before market open; refresh manually if < 12h.
+
+**Box state (03-Sep ~18:35 IST):** live mode, worker up, engine/config hashes
+== local HEAD `170bfda`, REVERSE_EXIT_DELAY_BARS=1, live profile intact
+(NO_STOP_LOSS=False, ADX 18, conf 65, RSI 50/50, MAX_UNARMED 4, 4 lots, ML
+off), Dhan token valid through ~16:44 IST 04-Sep. Intra-bar exit fix live
+since 16:15; V4 reverse delay live since 18:31. First V4 session = 04-Sep.

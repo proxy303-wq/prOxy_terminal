@@ -307,6 +307,93 @@ class TestLiveLTPIntraBarExit(unittest.TestCase):
         self.assertIsNotNone(self.engine.active_trade)
 
 
+class TestReverseDelayPolicy(unittest.TestCase):
+    """REVERSE_EXIT_DELAY_BARS (V4 policy): a flipped signal ARMS the
+    reverse exit but fires N 5m bars later, so bar-close flips that prove
+    to be noise get N bars to recover to the lock first.  The backtest A/B
+    (1m-res exit model) showed instant reverse exits cut recoveries:
+    delay=1 took the test window +47k/PF 1.20 -> +301k/PF 2.45 and held
+    out-of-sample.  Default 0 = the historical instant exit."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        self.tracker = Tracker(cfg, db_path=self.db_path)
+        self.engine = PaperEngine(cfg, broker=PaperBroker(cfg.CAPITAL),
+                                  tracker=self.tracker,
+                                  notifier=Notifier(quiet=True),
+                                  trade_date=date(2026, 8, 28))
+        self.bar = {
+            "time": datetime(2026, 8, 28, 10, 0, tzinfo=_IST),
+            "open": 24900.0, "high": 24900.0, "low": 24900.0,
+            "close": 24900.0, "volume": 100.0,
+        }
+        # flat REAL premium bar: nowhere near the stop (99.5) or target (101)
+        self.flat_real = {"open": 100.0, "high": 100.2, "low": 99.9, "close": 100.0}
+        self.plan = _plan_like()
+        self.flip = SimpleNamespace(direction="SELL", confidence=90.0,
+                                    score=0.3, setup_type="TEST",
+                                    setup_strength=60.0, candle_pattern="",
+                                    reason="test", trend="UPTREND")
+        self._old_delay = getattr(cfg, "REVERSE_EXIT_DELAY_BARS", 0)
+
+    def tearDown(self):
+        cfg.REVERSE_EXIT_DELAY_BARS = self._old_delay
+        try:
+            os.remove(self.db_path)
+        except OSError:
+            pass
+
+    def _check(self, plan=None, signal=None, real_bar=None):
+        p = plan or self.plan
+        self.engine.active_trade = p
+        self.engine._active_trade = p
+        return self.engine._check_exits(self.bar, signal, 24900.0, real_bar=real_bar)
+
+    def test_default_zero_exits_instantly(self):
+        cfg.REVERSE_EXIT_DELAY_BARS = 0
+        px, why = self._check(signal=self.flip, real_bar=self.flat_real)
+        self.assertIsNotNone(px)
+        self.assertTrue(why.startswith("REVERSE_SIGNAL"))
+        self.assertIsNone(self.plan.get("reverse_pending_at"))
+
+    def test_delay_one_arms_then_fires_next_bar(self):
+        cfg.REVERSE_EXIT_DELAY_BARS = 1
+        px, why = self._check(signal=self.flip, real_bar=self.flat_real)
+        self.assertIsNone(px)   # armed, not exited
+        self.assertEqual(self.plan.get("reverse_pending_at"), 1)  # bars_held
+        # one bar later the armed flip fires
+        self.plan["bars_held"] = 2
+        px, why = self._check(signal=self.flip, real_bar=self.flat_real)
+        self.assertIsNotNone(px)
+        self.assertTrue(why.startswith("REVERSE_SIGNAL"))
+
+    def test_armed_flip_fires_even_if_signal_passes(self):
+        """The flip is armed, not cancelled: a later WAIT/no-flip signal
+        must NOT stop the scheduled reverse exit (matches the backtest's
+        one-bar-late unconditional exit)."""
+        cfg.REVERSE_EXIT_DELAY_BARS = 1
+        self._check(signal=self.flip, real_bar=self.flat_real)
+        self.plan["bars_held"] = 2
+        calm = SimpleNamespace(direction="WAIT", confidence=0.0, score=0.0)
+        px, why = self._check(signal=calm, real_bar=self.flat_real)
+        self.assertIsNotNone(px)
+        self.assertTrue(why.startswith("REVERSE_SIGNAL"))
+
+    def test_lock_during_pending_bar_wins(self):
+        """Protective levels are checked before the armed reverse: if the
+        position locks during the pending bar it exits LOCK_PROFIT, not on
+        the stale flip (the noise-recovery case the delay is for)."""
+        cfg.REVERSE_EXIT_DELAY_BARS = 1
+        self._check(signal=self.flip, real_bar=self.flat_real)   # armed
+        self.plan["bars_held"] = 2
+        spike = {"open": 101.0, "high": 103.0, "low": 101.5, "close": 102.2}
+        px, why = self._check(signal=self.flip, real_bar=spike)
+        self.assertIsNotNone(px)
+        self.assertTrue(why.startswith("LOCK_PROFIT"), why)
+
+
 class TestOptionLTPFeed(unittest.TestCase):
     """DhanRestFeed builds real 5-min option bars from NSE_FNO LTP ticks."""
 

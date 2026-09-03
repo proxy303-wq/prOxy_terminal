@@ -578,11 +578,10 @@ class PaperEngine:
                 _last = t.get("last_real_close")
                 if self._bar_time(bar) >= FORCE_EXIT_TIME and _last:
                     return float(_last), "TIME_STOP (15:15)"
-                if (signal is not None and signal.direction != "WAIT" and _last):
-                    want_long = (t["direction"] == "LONG")
-                    signal_bull = (signal.direction == "BUY")
-                    if signal_bull != want_long and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
-                        return float(_last), "REVERSE_SIGNAL"
+                if _last:
+                    px, why = self._reverse_exit(t, signal, float(_last), 1.0)
+                    if px is not None:
+                        return px, why
                 return None, None
             t["premium_source"] = "delta_model"
             pct_h = (bar["high"] - entry_spot) / entry_spot if entry_spot else 0.0
@@ -729,13 +728,50 @@ class PaperEngine:
         if self._bar_time(bar) >= FORCE_EXIT_TIME:
             return prem_now * slip, "TIME_STOP (15:15)"
 
-        # reverse signal exit
-        if signal is not None and signal.direction != "WAIT":
-            want_long = (t["direction"] == "LONG")
-            signal_bull = (signal.direction == "BUY")
-            if signal_bull != want_long and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
-                return prem_now * slip, "REVERSE_SIGNAL"
+        # reverse signal exit (optionally delayed - V4 policy; a WAIT or
+        # no-flip bar cannot stop an already-armed reverse)
+        px, why = self._reverse_exit(t, signal, prem_now, slip)
+        if px is not None:
+            return px, why
 
+        return None, None
+
+    def _reverse_exit(self, t, signal, prem, slip):
+        """REVERSE-SIGNAL exit with an optional delay (V4 policy).
+
+        REVERSE_EXIT_DELAY_BARS = 0 (default): exit the moment a flipped
+        signal closes - the historical behaviour.
+
+        REVERSE_EXIT_DELAY_BARS = N>0: a flip only ARMS the exit (records
+        t['reverse_pending_at'] = bars_held) and the exit fires N 5m bars
+        later - the position gets N full bars to lock/stop first.  The
+        exit then fires REGARDLESS of what the later signals say (a flip
+        is armed, not cancelled - so a WAIT/no-flip bar cannot stop it).
+
+        Why: backtest A/B on the 1m-res exit model - instant reverse exits
+        (167-169 on the test window) cut positions on bar-close flips that
+        mostly prove to be NOISE and recover to the lock; delaying one bar
+        (V4 rev+1bar) turned net +47k / PF 1.20 into +301k / PF 2.45
+        (74% win) on 2026-01..08 and held out-of-sample on the train
+        window (+244k / PF 1.41 vs the instant-reverse -147k).  Protective
+        levels (lock/stop/target/unarmed/time-stop) are checked BEFORE
+        this, so a position that locks during the pending bars exits on
+        the lock, never on the stale flip.
+        """
+        delay = int(getattr(self.cfg, "REVERSE_EXIT_DELAY_BARS", 0) or 0)
+        held = int(t.get("bars_held") or 0)
+        flip = (signal is not None and signal.direction not in (None, "WAIT")
+                and (signal.direction == "BUY") != (t["direction"] == "LONG")
+                and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT)
+        if delay <= 0:
+            return (prem * slip, "REVERSE_SIGNAL") if flip else (None, None)
+        if flip and not t.get("reverse_pending_at"):
+            # arm on the FIRST flip; a later re-flip must not push the
+            # firing bar out (the armed flip fires on schedule)
+            t["reverse_pending_at"] = held
+        pend = t.get("reverse_pending_at")
+        if pend is not None and held - int(pend) >= delay:
+            return prem * slip, "REVERSE_SIGNAL"
         return None, None
 
     def _close(self, exit_price, exit_reason, bar):

@@ -29,6 +29,8 @@ LIVE_OVERRIDES = {
     r"^RSI_ENTRY_GATE_BEAR\s*=": "50.0",
     r"^MAX_UNARMED_BARS\s*=": "4",              # 20-min unarmed cut
     r"^DEFAULT_LOTS\s*=": "4",                  # LIVE-SMALL day 1 (scale up after)
+    r"^REVERSE_EXIT_DELAY_BARS\s*=": "1",       # V4: reverse exits wait 1 bar
+                                                # (validated 03-Sep, see engine._reverse_exit)
 }
 # NOT touched here: RISK_DD_TAPER stays False for live week 1 (stale equity
 # peak would crush size - docs/HANDOVER.md §8 item 6), ML_LAB/ML/META stay

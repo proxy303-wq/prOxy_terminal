@@ -194,6 +194,17 @@ SL_MODE = "points"
 TARGET_POINTS = 6.5              # profit target in absolute premium points
 SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R 1.3)
 
+# REVERSE-SIGNAL EXIT DELAY (V4 policy, validated 2026-09-03):
+# 0 = exit the moment a flipped signal closes (historical behaviour).
+# N>0 = a flip only ARMS the exit; it fires N 5m bars later (protective
+# lock/stop always checked first, so a position that locks during the
+# pending bars exits on the lock).  Backtest A/B (1m-res exit model):
+# instant reverse exits cut positions on bar-close flips that mostly prove
+# to be noise; delay=1 turned the test window +47k/PF 1.20 into +301k/PF
+# 2.45 (74% win) and held OOS on the train window (+244k/PF 1.41 vs -147k
+# for instant).  LIVE box runs 1 (set by tools/_live_flip.py).
+REVERSE_EXIT_DELAY_BARS = 0
+
 # ---- VOL-SCALED STOP (C. 2026-08-31) ----
 # A fixed 5pt stop on an option premium that swings ±20% intraday is a
 # stop-out ticket inside the noise (Natenberg).  A/B 2026-07/06 (8 lots):

@@ -267,14 +267,19 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                 return None
             notifier.log(f"LIVE feed unavailable ({exc}) - synthetic replay", "WARN")
             feed = FastForwardFeed(trade_date=trade_date, seed=cfg.SYNTHETIC_SEED)
+            _use_ws = False   # synthetic session: no WS reconnect path
 
     # ---- option-LTP feed (real-premium exits) ----
     # REST mode: the main feed serves the traded option's LTP bars.  WS
     # mode: a dedicated option-only REST feed (polls nothing while flat,
-    # one request per poll only while a trade is open).
+    # one request per poll only while a trade is open).  Synthetic paper
+    # sessions (FastForwardFeed) have no real option LTPs - no opt feed.
     from proxy.dhan_rest_feed import DhanRestFeed as _DRF
+    from proxy.data import FastForwardFeed as _FFF
     if isinstance(feed, _DRF):
         opt_feed = feed
+    elif isinstance(feed, _FFF):
+        opt_feed = None
     else:
         try:
             opt_feed = _DRF(poll_interval=_poll, option_only=True)

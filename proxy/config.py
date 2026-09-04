@@ -327,6 +327,16 @@ MASTER_DAILY_LOSS_PCT = 0.0100    # shared account day-loss floor (1%)
 MASTER_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                            "reports", "master_risk.json")
 
+# ---- PRO-TRADER ADVISORY DESK (user request 05-Sep) ----
+# A rule-based "senior desk" (proxy/desk.py) reviews every entry the way an
+# experienced scalper would and attaches a verdict to the ENTRY Telegram
+# push + trade record: counter-regime cells, real spread vs the stop, day-
+# drive direction, VWAP extension, RANGE leftovers, dead tape, combined
+# account risk.  v1 is ADVISORY ONLY (never blocks) - default OFF; the
+# LIVE workers enable via env (DESK_LAYER_ENABLED=1).  Promote rules to a
+# hard gate only after an A/B on the honest harness proves them.
+DESK_LAYER_ENABLED = False
+
 
 # ============================================================
 # 4. SIGNAL ENGINE (the exact spec formula)

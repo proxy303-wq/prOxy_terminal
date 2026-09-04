@@ -1221,12 +1221,63 @@ class PaperEngine:
                             _sl_total = float(_at.get("sl_total") or 0)
                             _tg_per_lot = float(_at.get("target_per_lot") or 0)
                             _sl_basis = _at.get("sl_basis") or ""
+                            _desk_note = ""
+                            if getattr(self.cfg, "DESK_LAYER_ENABLED", False):
+                                try:
+                                    from .desk import DeskLayer
+                                    _dctx = {"engine": getattr(self.cfg, "OPTION_SYMBOL", "NIFTY"),
+                                             "direction": signal.direction, "trend": getattr(signal, "trend", ""),
+                                             "setup_type": getattr(signal, "setup_type", ""),
+                                             "confidence": getattr(signal, "confidence", 0),
+                                             "spot": spot, "close": spot,
+                                             "spread_pct_mid": None, "vwap_dist_atr": None}
+                                    try:
+                                        _row = self._chain_lookup.get((float(plan.get("strike") or 0),
+                                                                       str(plan.get("option_type") or "").upper()))
+                                        if _row and _row.get("bid") and _row.get("ask") and float(_row["ask"]) >= float(_row["bid"]) > 0:
+                                            _mid = (float(_row["bid"]) + float(_row["ask"])) / 2.0
+                                            _dctx["spread_pct_mid"] = (float(_row["ask"]) - float(_row["bid"])) / _mid * 100.0
+                                    except Exception:
+                                        pass
+                                    try:
+                                        if "rsi" in df.columns and len(df):
+                                            _dctx["rsi"] = float(df["rsi"].iloc[-1])
+                                        if "atr_pct" in df.columns and len(df):
+                                            _dctx["atr_pct"] = float(df["atr_pct"].iloc[-1])
+                                        if "vol_ratio" in df.columns and len(df):
+                                            _dctx["vol_ratio"] = float(df["vol_ratio"].iloc[-1])
+                                    except Exception:
+                                        pass
+                                    try:
+                                        for _b in self.history:
+                                            if hasattr(_b["time"], "date") and _b["time"].date() == self.trade_date:
+                                                _dctx["day_open"] = float(_b["open"]); break
+                                    except Exception:
+                                        pass
+                                    try:
+                                        from .master_risk import snapshot as _mrs
+                                        _ms = _mrs(self.cfg)
+                                        if _ms:
+                                            _cap_pct = (float(getattr(self.cfg, "MASTER_OPEN_RISK_PCT", 0.0075)) or 0.0075) * 100.0
+                                            if _cap_pct:
+                                                _dctx["comb_open_risk_pct"] = (_ms.get("open_risk_pct") or 0.0) / _cap_pct * 100.0
+                                            _acct = _ms.get("account_capital") or 1.0
+                                            _dctx["comb_day_pnl_pct"] = (_ms.get("day_pnl") or 0.0) / max(_acct, 1.0) * 100.0
+                                    except Exception:
+                                        pass
+                                    _dv = DeskLayer(self.cfg).review(_dctx)
+                                    _desk_note = _dv["note"]
+                                    plan["desk_flags"] = ",".join(_dv["flags"])
+                                    plan["desk_note"] = _desk_note
+                                except Exception:
+                                    _desk_note = ""
                             self.notify(
                                 f"ENTRY {_at['instrument']} {_at['direction']} "
                                 f"{_at['lots']} lots | premium {_at['entry_premium']:.2f} "
                                 f"| target {_at['target_premium']:.2f} ({_tg_per_lot:.0f} INR/lot) "
                                 f"| stop {_at['stop_premium']:.2f} | SL {_sl_per_lot:.0f} INR/lot x {_at['lots']} lots = {_sl_total:,.0f} INR "
-                                f"| {_sl_basis} | score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}",
+                                f"| {_sl_basis} | score {signal.score:+.3f} conf {signal.confidence:.0f}% | {pop_str}{ml_note} | {signal.setup_type}"
+                                + (f"\n📋 {_desk_note}" if _desk_note else ""),
                                 "TRADE"
                             )
                             # order executed + Telegram pushed - now anchor the

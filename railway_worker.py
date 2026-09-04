@@ -179,6 +179,8 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             cfg.MASTER_ACCOUNT_CAPITAL = _full_balance
             if os.environ.get("MASTER_GOVERNOR_ENABLED", "0") == "1":
                 cfg.MASTER_GOVERNOR_ENABLED = True
+            if os.environ.get("DESK_LAYER_ENABLED", "0") == "1":
+                cfg.DESK_LAYER_ENABLED = True
             notifier.log(
                 f"LIVE MODE ACTIVE - REAL ORDERS on the Dhan account "
                 f"(allocated {capital:,.2f} INR = balance x {_alloc:.2f}, mode from Telegram menu)", "WARN")

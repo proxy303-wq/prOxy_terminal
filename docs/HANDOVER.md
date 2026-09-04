@@ -713,3 +713,65 @@ REST is the default transport (user decision).**
 4. Lessons: verify LOT_SIZE against the live scrip master per index
    (FINNIFTY 40 / SENSEX 20 also unverified); REST remains the only
    transport used while two workers share one client id.
+
+## 13. V4.1 ADVERSARIAL VALIDATION PROGRAM (user instruction 04-Sep:
+"do all these in a new chat" - START THE NEW CHAT WITH THIS FILE)
+
+=== CURRENT LIVE STATE (04-Sep ~15:00 IST) ===
+- BOTH engines LIVE (mode.json + mode_banknifty.json = live), REST feed
+  (FEED_USE_WEBSOCKET=False - WS one-socket-per-client failed at open),
+  real Dhan account ~4.1L, PROXY_ALLOCATION_PCT 0.5 each (~2L basis).
+- NIFTY: arm 1.0/floor 1.0/trail 1.0, SL 5pt, TARGET 6.5pt, DEFAULT_LOTS
+  4, ADX 18, conf 65, V4 reverse delay 1 bar.
+- BN (dual.py banknifty_config): arm 2.4/floor 2.4/trail 2.4, SL 26pt,
+  TARGET 20pt, DEFAULT_LOTS 2, ADX 0 (walk-forward verdict), real BN
+  contract = MONTHLY (29-Sep, DTE 26, ATM ~830 - proxy x2.22; validate
+  with OPTION_PREMIUM_EST_PCT=0.0144).
+- Validated (V4, 1m exits, month-reset, 0.20% RT): NIFTY test +263k/PF
+  2.32 (train +240k/PF 1.45), BN test +104k/PF 2.39; both hold at real
+  brokerage (Rs25/side + 0.10%: NIFTY +247k, BN +81k).
+- FIXES SHIPPED TODAY (all on the box): 8ed34ef intra-bar 2s exits |
+  170bfda V4 reverse-delay | 0a77afb exit-fill anchoring | 9c89a69
+  target exits = LIMIT, protective = MARKET | 19bcaa0 strike-once MAX=1
+  + DB-hydrated tracker | 22aaa47 ITM shift in the gate | 64c1cc1
+  position-reconcile guard | be024c7 ASYMMETRIC PE GATE (PE only when
+  DOWNTREND or RSI<40; CE free) | effc0ca BT_FIXED_FEE_PER_SIDE knob.
+- A/B-REJECTED (do NOT re-litigate): BT_STRUCTURE_GATE (neutral),
+  BT_REQUIRE_SETUP (kills 90% of trades), day-direction gate (kills
+  counter-day CEs).  BT_PE_GATE accepted (-1..-3% net, PF up).
+
+=== THE MODEL (quote this in the new chat) ===
+5-min price-action scalper: DOWNTREND->puts, UPTREND->calls, RANGING->
+scalp both via momentum/SR/PA.  ITM bias (delta>=0.55).  Tight lock
+trail + stop + LIMIT targets + V4 delayed reverse.  2s intra-bar exits
+on the real option LTP.  Strike-once + ITM shift.  0.5% risk, 1%/5%
+halts per engine, each on its own ~2L basis.
+
+=== V4.1 PROGRAM (advisor agenda - backtest FIRST, then deploy) ===
+1. LOCK A/B: lock OFF / arm 0.5 / 1 / 1.5 / dynamic x tgt 6.5 / stop 5
+   (NIFTY) - compare EXPECTANCY + PF (not win rate); lock-OFF collapse
+   would mean the lock harvests backtest granularity.
+2. BID/ASK-AWARE EXIT SIM: profit AND stop exits execute on the BID for
+   longs (not LTP>=level); model spread + latency + polling + slippage.
+   Target fill probability: touched vs executable vs submitted vs filled.
+3. REGIME x SIDE table: UP/DOWN/RANGE x CE/PE - win%, PF, expectancy per
+   cell - locate where the edge lives.
+4. RANGE regime stricter: near S/R + rejection + momentum reversal, else
+   WAIT (range is not "trade the leftovers").
+5. VWAP as CONTEXT only: trend + pullback-to-VWAP + PA = strong setup;
+   extended-above-VWAP = lower confidence.  Not a hard gate.
+6. BN ADX: KEEP OFF (walk-forward PF 3.04 off vs 2.89 at 18).  Do not add.
+7. STRIKE-ONCE ON vs OFF A/B: PF/expectancy/maxDD/trades/day/consecutive
+   losses - avoid-bad-reentries vs hide-loss-clusters?
+8. MASTER ACCOUNT RISK GOVERNOR above both engines: combined open risk
+   <= 0.5-0.75% of account (2k+2k daily loss can be 4k account-level).
+9. TRADE DATASET CSV per trade: timestamp, index, regime, structure,
+   RSI, ADX, ATR, VWAP dist, S/R dist, vol ratio, PA pattern, score,
+   confidence, CE/PE, strike, delta, DTE, IV, spread, OI, premium, entry,
+   MFE, MAE, exit, exit_reason, PnL.  Then explain winners/losers with
+   data BEFORE any ML.
+10. REGIME WALK-FORWARD: rolling train/test (H1->H2, H2->next H1...),
+    report the PF DISTRIBUTION.  Explain NIFTY train/test asymmetry
+    (1.45 vs 2.32) before touching the strategy.
+11. NO ML in live yet.  If ML later: meta-model ("should Athena take THIS
+    trade?") - never ML direction prediction.

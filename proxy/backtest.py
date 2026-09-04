@@ -184,6 +184,10 @@ class Backtest:
         pnl = (exit_price - trade["entry_premium"]) * trade["quantity"] * sign
         pnl -= trade["quantity"] * (exit_price + trade["entry_premium"]) \
             * getattr(self.cfg, "TRANSACTION_COST_PCT", TRANSACTION_COST_PCT)
+        # REAL brokerage: fixed per-side fee (Dhan ~20-25/order) - the flat
+        # % model flatters small trades (a +1pt lock win at 2-4 lots barely
+        # clears real charges).  A/B knob BT_FIXED_FEE_PER_SIDE.
+        pnl -= 2 * float(getattr(self.cfg, "BT_FIXED_FEE_PER_SIDE", 0) or 0)
         rec = {**trade, "exit_premium": round(exit_price, 2),
                "exit_reason": exit_reason, "pnl": round(pnl, 2),
                "exit_time": bar["time"].isoformat()}
@@ -372,6 +376,15 @@ class Backtest:
                         signal = None
                 if signal is not None:
                     last_signal = signal
+                # CLEAN-SETUP-ONLY gate (A/B knob BT_REQUIRE_SETUP): the
+                # 04-Sep losses were ALL "pattern X but no clean setup"
+                # entries - high confidence on a bare candle pattern, no
+                # Volman setup (no structure/S-R context).  With the knob ON
+                # only signals carrying a real setup_type can enter.
+                if signal is not None and signal.direction in ("BUY", "SELL") \
+                        and bool(getattr(self.cfg, "BT_REQUIRE_SETUP", False)) \
+                        and not (getattr(signal, "setup_type", "") or ""):
+                    signal = None
                 # ML Lab gate on entries (mirrors the live engine).  Default
                 # "veto" mode blocks trades AGAINST a confident ML call;
                 # "confirm" requires ML agreement (ML_LAB_MIN_PROB).

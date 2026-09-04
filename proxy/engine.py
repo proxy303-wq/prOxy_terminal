@@ -79,6 +79,19 @@ class PaperEngine:
         self.bars_processed = 0
         # strike-once rule: date -> {strike: times_traded} (no averaging)
         self._strike_trades = {}
+        # strike-once tracker SURVIVES restarts: hydrate today's already-used
+        # strikes from the tracker DB.  A mid-day restart used to wipe the
+        # in-memory dict, letting the same strike re-trade (day-1: 24150 PE
+        # traded three times after the 10:13 restart).
+        try:
+            for _t in self.tracker.get_trades():
+                if str(self.trade_date) in str(_t.get("entry_time", "")):
+                    _st = _t.get("strike")
+                    if _st:
+                        _d = self._strike_trades.setdefault(str(self.trade_date), {})
+                        _d[float(_st)] = _d.get(float(_st), 0) + 1
+        except Exception:
+            pass
         self.cooldown_until = None    # bar time; no new entries before this
         # REAL option chain from Dhan (optional): set via set_chain() so
         # entries use live premiums/IV instead of the model estimate

@@ -53,7 +53,9 @@ LOSS_COOLDOWN_BARS = 6          # wait N bars (30 min) after a stop-out before r
 # "averaging" the same option (July 7 produced 8 trades on the same PE) and
 # cuts brokerage - the daily target is chased with fewer, bigger trades.
 ONE_TRADE_PER_STRIKE_DAY = True
-MAX_TRADES_PER_STRIKE = 2       # allow ONE re-entry on the same strike (trending days)
+MAX_TRADES_PER_STRIKE = 1       # STRICT strike-once (user decision 04-Sep: no
+                                # same-strike re-trades - was 2 = one re-entry on
+                                # trending days; day-1/04-Sep repeats complained)
 
 # RSI alignment gate used by the signal engine: BUY needs RSI > BULL,
 # SELL needs RSI < BEAR.  50/50 = neutral momentum (spec default);

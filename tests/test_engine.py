@@ -307,6 +307,81 @@ class TestLiveLTPIntraBarExit(unittest.TestCase):
         self.assertIsNotNone(self.engine.active_trade)
 
 
+class _FillAnchorBroker(_LiveBrokerStub):
+    """A live broker whose position book reports the REAL closed fill."""
+    def __init__(self, sell_avg=677.15, realized=1278.0, security_id=42650):
+        self.sell_avg = sell_avg
+        self.realized = realized
+        self.security_id = security_id
+
+    def get_positions(self):
+        return [{
+            "securityId": str(self.security_id), "tradingSymbol": "BN PE",
+            "netQty": 0, "buyQty": 60, "sellQty": 60,
+            "buyAvg": 655.85, "sellAvg": self.sell_avg,
+            "realizedProfit": self.realized, "positionType": "CLOSED",
+        }]
+
+
+class TestLiveExitFillAnchor(unittest.TestCase):
+    """LIVE exits must re-book at the REAL broker fill, not the trigger
+    level (04-Sep: a BN target exit booked @ 671.49 / +898 actually filled
+    ~677 / +1,278 per Dhan's realizedProfit; day-1 stops slipped the other
+    way).  The engine records what the account did, so daily P&L / halts /
+    validation track real money."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self.tmp.close()
+        self.db_path = self.tmp.name
+        self.cfg = SimpleNamespace(**vars(cfg))
+        self.cfg.NO_STOP_LOSS = False
+        self.tracker = Tracker(self.cfg, db_path=self.db_path)
+        self.engine = PaperEngine(self.cfg, broker=_FillAnchorBroker(),
+                                  tracker=self.tracker,
+                                  notifier=Notifier(quiet=True),
+                                  trade_date=date(2026, 9, 4))
+        self.bar = {
+            "time": datetime(2026, 9, 4, 9, 30, 0, tzinfo=_IST),
+            "open": 24900.0, "high": 24900.0, "low": 24900.0,
+            "close": 24900.0, "volume": 100.0,
+        }
+        self.trade = {
+            "instrument": "BANKNIFTY 29SEP 57700 PE", "direction": "LONG",
+            "option_type": "PE", "strike": 57700.0, "security_id": 42650,
+            "lots": 2, "quantity": 60,
+            "entry_premium": 655.85, "stop_premium": 630.0,
+            "target_premium": 671.49, "entry_spot": 57400.0,
+            "theta_day_pct": 0.0, "pnl_peak": 655.85, "peak_pct": 0.0,
+            "lock_armed": False, "lock_floor_pct": 0.0,
+            "bars_held": 1, "premium_source": "real_option_bar",
+        }
+
+    def tearDown(self):
+        try:
+            os.remove(self.db_path)
+        except OSError:
+            pass
+
+    def test_exit_rebooks_at_real_fill(self):
+        """Booked TARGET_HIT @ 671.49 / +898 -> real fill 677.15 / +1,278."""
+        self.engine.active_trade = dict(self.trade)
+        self.engine._active_trade = dict(self.trade)
+        rec = self.engine._close(671.49, "TARGET_HIT", self.bar)
+        self.assertIsNotNone(rec)
+        self.assertAlmostEqual(rec["exit_premium"], 677.15, places=2)
+        self.assertAlmostEqual(rec["pnl"], 1278.0, places=2)
+
+    def test_falls_back_when_no_fill_confirmed(self):
+        """Broker with an EMPTY position book -> records the booked level."""
+        self.engine.broker = _LiveBrokerStub()   # no get_positions at all
+        self.engine.active_trade = dict(self.trade)
+        self.engine._active_trade = dict(self.trade)
+        rec = self.engine._close(671.49, "TARGET_HIT", self.bar)
+        self.assertIsNotNone(rec)
+        self.assertAlmostEqual(rec["exit_premium"], 671.49, places=2)
+
+
 class TestReverseDelayPolicy(unittest.TestCase):
     """REVERSE_EXIT_DELAY_BARS (V4 policy): a flipped signal ARMS the
     reverse exit but fires N 5m bars later, so bar-close flips that prove

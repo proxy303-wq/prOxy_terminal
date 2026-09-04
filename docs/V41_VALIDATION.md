@@ -343,3 +343,23 @@ between 1.45 and 2.32.  Splitting the tape by time rather than by
 regime is what manufactures the apparent asymmetry; rolling OOS shows
 monotone improvement as the edge's favourite regimes (down-legs and
 clean range-exits) became more frequent, and no fold is negative.
+
+
+---
+
+## APPENDIX — REAL Dhan OPTION HISTORY (05-Sep probe, docs file: Downloads/dhan-api-docs.md)
+
+The user's point stands: Dhan's API DOES expose real expired-option history.
+Documented endpoints (verified against the docs + live probes today):
+
+| endpoint | coverage | status on this account 05-Sep |
+|---|---|---|
+| POST /v2/charts/rollingoption (SDK expired_options_data) | EXPIRED options, minute 1-60, OHLC + IV + OI + volume + spot + strike, up to **5 years**, up to 30-45 days/call, strikes relative to spot (ATM, ATM±N; index near expiry ±10) | **validates requests but returns EMPTY arrays** for every (WEEK/MONTH x 1/2/3 x ATM/ATM±1/±10 x CALL/PUT x 2024-2026 window) - entitlement gate or expiryCode resolved against the live date. Re-test once the account's historical-data entitlement is confirmed. |
+| POST /v2/charts/intraday (intraday_minute_data) | minute OHLC+OI for a SPECIFIC security id, **last ~5 trading sessions**, all active instruments | **WORKS** for ACTIVE option series (probe: sid 40809 -> 77 five-min bars for 02-04 Sep). This is how reports/option_ltp_2026-08-2x.csv were captured. |
+| POST /v2/charts/historical (historical_daily_data) | daily candles | empty for the expired sid tested (same entitlement gate) |
+
+Two concrete corrections the probe produced:
+1. **Charts endpoints for OPTIDX need the FNO UNDERLYING security id, NOT the index id.**  NIFTY = **26000**, BANKNIFTY = **26009** (from api-scrip-master-detailed.csv UNDERLYING_SECURITY_ID).  Passing 13/25 returns DH-907 "incorrect parameters".
+2. The 2-year backtest therefore still needs the rollingoption data to exist on the account (path A).  Until then the delta-premium proxy remains the only 2-year option-price source; the REAL-premium evidence available now is: reports/option_ltp_2026-08-24..28 (archived while active) + the LIVE 01-04 Sep real-fill logs + the archive path (tools/opt_history.py --archive) now capturing the ACTIVE band each day going forward.
+
+Repo additions: tools/opt_history.py (both paths, cached, paced, correct underlying ids).  Next step when entitlement is confirmed: extend it into the full real-premium Backtest (tools/_v41_realopt_bt.py stub) so every V4.1 number can be rerun on real option bars.

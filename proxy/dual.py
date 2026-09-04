@@ -24,7 +24,11 @@ def banknifty_config():
     """BANKNIFTY variant of the shared strategy config."""
     c = types.SimpleNamespace(**vars(_base))
     c.OPTION_SYMBOL = "BANKNIFTY"
-    c.LOT_SIZE = 35                    # BANKNIFTY lot size
+    c.LOT_SIZE = 30                    # BANKNIFTY lot size - REAL value from the
+                                       # Dhan scrip master (was 35: first live
+                                       # order 04-Sep rejected DH-905 Invalid
+                                       # Quantity - qty 70 is not a multiple of
+                                       # the real lot 30)
     c.OPTION_STRIKE_STEP = 100.0       # BANKNIFTY strike ladder
     c.CSV_PATH = os.path.join(_base.DATA_DIR, "BANKNIFTY_5m.csv")
     c.CSV_PATH_1M = os.path.join(_base.DATA_DIR, "BANKNIFTY_1m.csv")  # fetched 03-Sep (188k rows)
@@ -74,7 +78,7 @@ def banknifty_config():
     c.ML_LAB_ENABLED = False
     c.ML_ENABLED = False
     c.META_ENABLED = False
-    c.DEFAULT_LOTS = 2                 # BN lot 35 x ~400 premium = big notional;
+    c.DEFAULT_LOTS = 2                 # BN lot 30 x ~800 premium = big notional;
                                        # start small alongside NIFTY
     # rate-limit headroom: the NIFTY worker polls its index at 1.8s (~0.56
     # req/s) on the SAME Dhan client id - BN polls slower (0.4 req/s) so

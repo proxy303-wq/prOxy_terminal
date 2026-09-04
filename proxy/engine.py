@@ -258,7 +258,7 @@ class PaperEngine:
             return prem, sig, basis
         return None, sigma, ""
 
-    def _plan_entry(self, signal, spot, equity):
+    def _plan_entry(self, signal, spot, equity, force_strike=None):
         direction = signal.direction
         # realized volatility from the recent bar history (maximals exits)
         try:
@@ -276,6 +276,7 @@ class PaperEngine:
             sigma = getattr(self.cfg, "OPTION_IV_EST", 0.13)
         _roll = int(getattr(self.cfg, "EXPIRY_ROLL_DAYS", 2))
         leg = select_leg(direction, spot, self.cfg, sigma=sigma,
+                         force_strike=force_strike,
                          expiries=self.expiries, roll_days=_roll)
         # ---- REAL Dhan chain premium/IV for the chosen strike ----
         chain_prem, chain_sigma, chain_basis = self._chain_premium(
@@ -1029,9 +1030,36 @@ class PaperEngine:
                     # no trade-count cap, no daily-target stop).
                     if getattr(self.cfg, "ONE_TRADE_PER_STRIKE_DAY", True) and getattr(self.broker, "live", False):
                         day_strikes = self._strike_trades.setdefault(str(self.trade_date), {})
-                        if day_strikes.get(plan["strike"], 0) >= int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1)):
-                            gate = RiskCheck(False, f"strike {plan['strike']} already traded today (no averaging)")
-                            events["strike_blocked"] = True
+                        max_per = int(getattr(self.cfg, "MAX_TRADES_PER_STRIKE", 1))
+                        if day_strikes.get(plan["strike"], 0) >= max_per:
+                            # USER RULE (04-Sep): a repeat on a used strike does
+                            # NOT block - it shifts TOWARD ITM (CE -> lower,
+                            # PE -> higher), up to MAX_STRIKE_SHIFTS, and trades
+                            # the first unused candidate.  Block only when every
+                            # shifted strike is used too.
+                            _max_shift = int(getattr(self.cfg, "MAX_STRIKE_SHIFTS", 2))
+                            _shift_step = int(getattr(self.cfg, "STRIKE_SHIFT_STEPS", 2))
+                            _step = float(getattr(self.cfg, "OPTION_STRIKE_STEP", 50.0))
+                            _orig = float(plan["strike"])
+                            _used_cand = None
+                            for _s in range(1, _max_shift + 1):
+                                _cand = (_orig - _shift_step * _step * _s) if plan["option_type"] == "CE" \
+                                    else (_orig + _shift_step * _step * _s)
+                                if day_strikes.get(_cand, 0) < max_per:
+                                    _used_cand = _cand
+                                    break
+                            if _used_cand is not None:
+                                plan = self._plan_entry(signal, spot, equity,
+                                                        force_strike=_used_cand)
+                                self.notify(
+                                    f"GATE  strike {_orig:g} used -> shifted {_shift_step}x toward ITM "
+                                    f"to {_used_cand:g} ({plan['option_type']})", "TRADE")
+                                gate = check_trade_allowed(self.state, self.cfg, signal=signal,
+                                                           pending_trade=plan,
+                                                           live=bool(getattr(self.broker, "live", False)))
+                            else:
+                                gate = RiskCheck(False, f"strike {plan['strike']} + ITM shifts all used today (no averaging)")
+                                events["strike_blocked"] = True
                         else:
                             gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan,
                                                        live=bool(getattr(self.broker, "live", False)))

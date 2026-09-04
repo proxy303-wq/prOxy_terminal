@@ -972,6 +972,27 @@ class PaperEngine:
         signal = generate_signal(df, self.cfg)
         events["signal"] = signal
 
+        # ASYMMETRIC PE GATE (04-Sep, user rule): never buy puts into a
+        # rising/neutral tape.  A SELL (long-put) needs REAL weakness -
+        # structure DOWNTREND or RSI below PE_WEAKNESS_RSI (40).  BUY/CE
+        # unrestricted.  (A/B BT_PE_GATE=1: net -1..-3%, PF 2.32->2.41.)
+        if signal is not None and signal.direction == "SELL" \
+                and bool(getattr(self.cfg, "PE_WEAKNESS_GATE", False)):
+            _tr = str(getattr(signal, "trend", "") or "RANGING")
+            _rsi_now = 50.0
+            try:
+                if "rsi" in df.columns and len(df):
+                    _rsi_now = float(df["rsi"].iloc[-1])
+            except Exception:
+                pass
+            _thr = float(getattr(self.cfg, "PE_WEAKNESS_RSI", 40.0))
+            if _tr != "DOWNTREND" and not (_rsi_now < _thr):
+                self.notify(
+                    f"GATE  PE suppressed: market {_tr}, RSI {_rsi_now:.0f} >= {_thr:.0f} "
+                    f"(puts need weakness)", "INFO")
+                signal = None
+                events["signal"] = signal
+
         spot = float(bar["close"])
 
         # 1) manage the open trade first

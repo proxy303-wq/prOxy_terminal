@@ -196,8 +196,7 @@ SL_MODE = "points"
 TARGET_POINTS = 6.5              # profit target in absolute premium points
 SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R 1.3)
 
-# REVERSE-SIGNAL EXIT DELAY (V4 policy, validated 2026-09-03):
-# 0 = exit the moment a flipped signal closes (historical behaviour).
+# REVERSE-SIGNAL EXIT DELAY (V4 policy, validated 2026-09-03):# 0 = exit the moment a flipped signal closes (historical behaviour).
 # N>0 = a flip only ARMS the exit; it fires N 5m bars later (protective
 # lock/stop always checked first, so a position that locks during the
 # pending bars exits on the lock).  Backtest A/B (1m-res exit model):
@@ -334,6 +333,13 @@ SCORE_SELL_THRESHOLD = -0.15
 MIN_CONFIDENCE_PCT   = 0.0     # PAPER DATA MODE: 0 = take every signal
                                # (live = 60-70; "Signal Strength > 70%" plan rule)
 MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
+
+# ASYMMETRIC PE GATE (04-Sep): when True a SELL (long-put) needs REAL
+# weakness - structure DOWNTREND or RSI < PE_WEAKNESS_RSI (40) - so puts
+# never fire into a rising market (the 04-Sep all-PE bleed).  BUY/CE stays
+# unrestricted.  A/B: net -1..-3%, PF up; LIVE box runs True.
+PE_WEAKNESS_GATE = False
+PE_WEAKNESS_RSI = 40.0
 
 # ---- DAY-DIRECTION GATE (Miner p.13 / Goodman daily-trend, A/B 02-Sep) ----
 # Only trade WITH the day's move: BUY/CE when the index is above its

@@ -385,6 +385,25 @@ class Backtest:
                         and bool(getattr(self.cfg, "BT_REQUIRE_SETUP", False)) \
                         and not (getattr(signal, "setup_type", "") or ""):
                     signal = None
+                # ASYMMETRIC PE GATE (A/B knob BT_PE_GATE) - the PE side is the
+                # historical loser (mix rerun: CEs +393k, PEs -65k) and it
+                # fired repeatedly into an UP market on 04-Sep.  PEs are only
+                # traded in real weakness (structure DOWNTREND or RSI below a
+                # threshold); BUY/CE stays unrestricted.
+                #   1 = PE needs DOWNTREND or RSI < 40
+                #   2 = PE needs DOWNTREND or RSI < 35 (stricter)
+                _pg = int(getattr(self.cfg, "BT_PE_GATE", 0))
+                if signal is not None and signal.direction == "SELL" and _pg > 0:
+                    _tr = str(getattr(signal, "trend", "") or "RANGING")
+                    _rsi_now = 50.0
+                    try:
+                        if "rsi" in frame.columns and len(frame):
+                            _rsi_now = float(frame["rsi"].iloc[-1])
+                    except Exception:
+                        pass
+                    _rsi_thr = 40.0 if _pg >= 1 else 35.0
+                    if _tr != "DOWNTREND" and not (_rsi_now < _rsi_thr):
+                        signal = None
                 # ML Lab gate on entries (mirrors the live engine).  Default
                 # "veto" mode blocks trades AGAINST a confident ML call;
                 # "confirm" requires ML agreement (ML_LAB_MIN_PROB).

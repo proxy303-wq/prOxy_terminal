@@ -891,7 +891,18 @@ class PaperEngine:
             "pnl_pct": round(pnl / max(t["entry_premium"] * t["quantity"], 1e-9) * 100.0, 3),
         }
         self.tracker.add_trade(record, self.state, self.cfg)
-        apply_daily_pnl(self.state, self.cfg, pnl)
+# ATHENA DIE autopsy (docs/DIE.md): keep every trade story for the learning loop
+        if t.get("die_band") or t.get("die_note"):
+            try:
+                from .die import AutopsyLog
+                rec2 = dict(record)
+                for k in ("die_band", "die_score", "die_flags", "die_note", "die_thermostat",
+                          "die_bull", "die_bear", "die_missing"):
+                    rec2["thesis_" + k[4:]] = t.get(k, "")
+                AutopsyLog().record(rec2)
+            except Exception:
+                pass
+                apply_daily_pnl(self.state, self.cfg, pnl)
         # MASTER ACCOUNT RISK GOVERNOR (item 8): report the realised P&L to
         # the shared account file and free this engine's open-risk slot.
         try:
@@ -1223,14 +1234,18 @@ class PaperEngine:
                             _sl_basis = _at.get("sl_basis") or ""
                             _desk_note = ""
                             if getattr(self.cfg, "DESK_LAYER_ENABLED", False):
+                                # ATHENA DIE advisory (docs/DIE.md): discretionary review of the entry.
                                 try:
-                                    from .desk import DeskLayer
+                                    from .die import (DecisionEngine, build_price_context, detect_personality)
                                     _dctx = {"engine": getattr(self.cfg, "OPTION_SYMBOL", "NIFTY"),
                                              "direction": signal.direction, "trend": getattr(signal, "trend", ""),
                                              "setup_type": getattr(signal, "setup_type", ""),
                                              "confidence": getattr(signal, "confidence", 0),
+                                             "score": getattr(signal, "score", 0),
                                              "spot": spot, "close": spot,
-                                             "spread_pct_mid": None, "vwap_dist_atr": None}
+                                             "vwap_dist_atr": None, "spread_pct_mid": None,
+                                             "risk_rs": plan.get("risk_rs"), "expectancy_inr": None,
+                                             "recent_losses_today": int(self.state.get("consec_losses", 0))}
                                     try:
                                         _row = self._chain_lookup.get((float(plan.get("strike") or 0),
                                                                        str(plan.get("option_type") or "").upper()))
@@ -1246,6 +1261,8 @@ class PaperEngine:
                                             _dctx["atr_pct"] = float(df["atr_pct"].iloc[-1])
                                         if "vol_ratio" in df.columns and len(df):
                                             _dctx["vol_ratio"] = float(df["vol_ratio"].iloc[-1])
+                                        if "adx" in df.columns and len(df):
+                                            _dctx["adx"] = float(df["adx"].iloc[-1])
                                     except Exception:
                                         pass
                                     try:
@@ -1258,17 +1275,36 @@ class PaperEngine:
                                         from .master_risk import snapshot as _mrs
                                         _ms = _mrs(self.cfg)
                                         if _ms:
-                                            _cap_pct = (float(getattr(self.cfg, "MASTER_OPEN_RISK_PCT", 0.0075)) or 0.0075) * 100.0
-                                            if _cap_pct:
-                                                _dctx["comb_open_risk_pct"] = (_ms.get("open_risk_pct") or 0.0) / _cap_pct * 100.0
+                                            _dctx["comb_open_risk_pct"] = (_ms.get("open_risk_pct") or 0.0) / 0.75 * 100.0 if _ms.get("open_risk_pct") is not None else None
                                             _acct = _ms.get("account_capital") or 1.0
                                             _dctx["comb_day_pnl_pct"] = (_ms.get("day_pnl") or 0.0) / max(_acct, 1.0) * 100.0
                                     except Exception:
                                         pass
-                                    _dv = DeskLayer(self.cfg).review(_dctx)
+                                    _dctx["personality"] = None
+                                    try:
+                                        _today = [b for b in self.history if hasattr(b["time"], "date") and b["time"].date() == self.trade_date]
+                                        if _today:
+                                            _pctx = build_price_context(_today, close=float(plan.get("entry_spot") or _today[-1]["close"]))
+                                            _dctx["vwap_dist_atr"] = _pctx.vwap_dist_atr
+                                            _dctx["day_open"] = _pctx.day_open or _dctx.get("day_open")
+                                            _dctx["near_support"] = getattr(signal, "sr_nearest_support", None)
+                                            _dctx["near_resistance"] = getattr(signal, "sr_nearest_resistance", None)
+                                            _dctx["personality"] = detect_personality(_pctx, adx=_dctx.get("adx"))
+                                    except Exception:
+                                        pass
+                                    if not _dctx.get("personality"):
+                                        _dctx["personality"] = "TREND" if str(_dctx.get("trend", "")) != "RANGING" else "RANGE"
+                                    _dctx["lunch"] = bool(self._in_lunch(bar))
+                                    _dv = DecisionEngine(self.cfg).decide(_dctx)
+                                    plan["die_band"] = _dv["band"]
+                                    plan["die_score"] = _dv["decision_score"]
+                                    plan["die_flags"] = ",".join((_dv["bear"] or [])[:3])
+                                    plan["die_bull"] = ";".join(_dv["bull"])
+                                    plan["die_bear"] = ";".join(_dv["bear"])
+                                    plan["die_missing"] = ";".join(_dv["missing"])
+                                    plan["die_note"] = _dv["note"]
+                                    plan["die_thermostat"] = _dv["thermostat"]
                                     _desk_note = _dv["note"]
-                                    plan["desk_flags"] = ",".join(_dv["flags"])
-                                    plan["desk_note"] = _desk_note
                                 except Exception:
                                     _desk_note = ""
                             self.notify(

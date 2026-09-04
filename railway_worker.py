@@ -295,6 +295,28 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
         trade_date=trade_date, capital=capital,
     )
 
+    # ---- POSITION RECONCILE (live safety) ----
+    # Never trade on a broker book the engine did NOT open.  A mid-session
+    # restart resets the engine to flat, but the ACCOUNT may still carry
+    # positions; the engine would then manage them blind (wrong-side exits,
+    # naked shorts).  04-Sep: the WS-failover restarts left an unmanaged
+    # short that the engine 'managed' against a divergent belief.  If the
+    # account is not clean at session start, ABORT - no orders.
+    if mode == "live" and getattr(broker, "live", False) and hasattr(broker, "get_positions"):
+        try:
+            _open = [p for p in broker.get_positions() if int(p.get("netQty") or 0) != 0]
+            if _open:
+                _syms = ", ".join(str(p.get("tradingSymbol")) for p in _open)
+                notifier.log(
+                    f"LIVE POSITION RECONCILE FAILED - unmanaged open position(s): "
+                    f"{_syms}. SESSION ABORTED, NO orders placed. Reconcile manually "
+                    f"before going live.", "WARN")
+                return None
+        except Exception as exc:
+            notifier.log(
+                f"LIVE position reconcile unavailable ({exc}) - proceeding "
+                f"(position-book query failed)", "WARN")
+
     # REAL option chain from Dhan: entries then use live premiums + IV
     # for the chosen strike instead of the model estimate.  One POST at
     # session start (rate limit is 1 req/s; a single chain call is fine).

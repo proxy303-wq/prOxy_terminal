@@ -205,13 +205,14 @@ SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R
 # for instant).  LIVE box runs 1 (set by tools/_live_flip.py).
 REVERSE_EXIT_DELAY_BARS = 0
 
-# INDEX FEED TRANSPORT (03-Sep): False = Dhan REST poller (proven, ~1.8s
-# poll).  True = Dhan WebSocket marketfeed (tick-pushed: a 5-min bar close
-# is detected in milliseconds, no REST poll latency, no rate-limit
-# contention between the two workers) - requires the server's egress IP in
-# Dhan's static-IP whitelist (the VPS 103.86.177.195 is whitelisted).  The
-# traded option's LTP (real-premium exits) always stays on a dedicated
-# option-only REST feed.  REST remains the automatic fallback.
+# INDEX FEED TRANSPORT (04-Sep): False = Dhan REST poller (THE DEFAULT -
+# proven live 01/04-Sep).  True = Dhan WebSocket marketfeed (tick-pushed).
+# WS was TESTED at the 04-Sep open: both engines connected + streamed
+# (the egress-IP whitelist worked) but BOTH sockets dropped ~30s after
+# connect - the two workers share one Dhan client-id and Dhan allows only
+# ONE marketfeed socket per client, so the second connection kills the
+# first.  KEEP False while two workers share a client-id; WS would need a
+# single shared socket for both indexes or a second Dhan client for BN.
 FEED_USE_WEBSOCKET = False
 
 # ---- VOL-SCALED STOP (C. 2026-08-31) ----

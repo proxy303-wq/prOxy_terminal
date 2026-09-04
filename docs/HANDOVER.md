@@ -694,17 +694,22 @@ False; commits `4c216a1` + `29d2a36`, 100 tests OK, hermetic checks pass):
 - Session-end close releases feeds (no overnight polling); the startup
   probe skips its redundant 9s REST poll-test in WS mode.
 
-**04-Sep PRE-MARKET runbook (~08:45-09:00 IST, market closed):**
-1. `python tools/_deploy_ws_premarket.py` — uploads the 3 WS files (never
-   the repo config — it would clobber the live profile), sets
-   `FEED_USE_WEBSOCKET = True` in /opt/proxy/proxy/config.py, restarts.
-2. At 09:15 the sessions self-verify.  Journal watch:
-   - `LIVE Dhan WebSocket feed connected + streaming ... first tick X` = WS
-     live for that engine.
-   - `WS connected but no index ticks ... REST fallback` = WS silent -> the
-     day still runs on the proven REST path (safe by design).
-3. If WS falls back: the whitelist isn't covering market data - keep the
-     flag True (fallback is automatic) or set False and re-run the flip
-     later; do NOT chase it mid-session.
-4. Confirm intra-bar exits still fire (option-LTP REST feed) and check the
-   journal for 429s at ~09:30.
+**04-Sep outcome — WS does NOT work with two workers on one client-id.
+REST is the default transport (user decision).**
+1. At the 09:15 open BOTH engines connected to WS + streamed (whitelist
+   worked: first ticks 57,481 / 23,913) — but both sockets dropped ~30s
+   later ("no close frame received or sent").  Likely cause: Dhan allows
+   ONE marketfeed socket per client-id; both workers share DHAN_CLIENT_ID,
+   so the second connection killed the first (BN died 12s after NIFTY
+   connected; NIFTY ~20s later).
+2. Emergency failover at 09:19: FEED_USE_WEBSOCKET=False + restart ->
+   both sessions re-opened on the proven REST path (safe, no positions
+   were open).  WS stays OFF; the code behind the flag remains for a
+   future single-socket-shared or second-client design.
+3. Also fixed at the open: BN first order (09:20) rejected DH-905 Invalid
+   Quantity - config LOT_SIZE=35 vs Dhan's REAL lot 30 (scrip master
+   SEM_LOT_SIZE).  Fixed to 30 (`a59c322`) + restart; BN's first real
+   position filled 09:25 (2 lots 57700 PE @ 655.85 anchored).
+4. Lessons: verify LOT_SIZE against the live scrip master per index
+   (FINNIFTY 40 / SENSEX 20 also unverified); REST remains the only
+   transport used while two workers share one client id.

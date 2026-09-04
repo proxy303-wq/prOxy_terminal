@@ -106,3 +106,44 @@ INTERIM tunable for Phase-3 calibration - never presented as evidence.
 No validated V4.1 backtest number was changed to build the DIE; the engine
 gates stay exactly as the validation left them (arm 1.0, strike-once ON,
 no range gate, governor OFF-by-default).
+
+---
+
+## Phase 2a — EXIT-BRAIN A/B (thesis-invalidation exits)
+
+Spec rule to test: *monitor the THESIS, not the P&L — when the market
+invalidates the reason you entered, exit even if the hard stop has not hit*
+(spec 14-16, 8-9).
+
+### What counts as "thesis invalidated" — measurable, [REPO]/[SPEC] only
+Evidence is read from the last CLOSED 5m bar (Signal now carries trend,
+rsi, direction, score, confidence - scoring patch).  Applies ONLY while the
+position is UNLOCKED (a locked winner stays under the lock/trail - the
+lock layer is the validated edge and is never bypassed).
+
+  DIE level 1 - REGIME INVALIDATION:
+    LONG  held & structure flipped to DOWNTREND while the formal signal is
+          still BUY/WAIT  (the market turned BEFORE the signal engine did)
+    LONG-PUT (SELL entry) mirrors with UPTREND.
+    -> exit "DIE_THESIS_INVALID".  This is NEW information: the existing V4
+    reverse only fires on a formal direction flip (with its 1-bar delay),
+    and the 4-bar unarmed stop would otherwise let a regime-turned loser
+    bleed up to 20 minutes.
+
+  DIE level 2 - MOMENTUM DECAY (adaptive unarmed cut):
+    + after >=2 bars held with no lock: RSI crossed past neutral on the
+      wrong side (LONG: rsi <= 45, PUT: rsi >= 55) while the formal signal
+      is WAIT -> exit "DIE_MOMENTUM_DECAY" instead of waiting out all 4
+      unarmed bars.
+
+NOT included (need data we do not have, or would change the lock layer):
+  OFI/order-flow, bid-depth, futures-lead, tick prints, and any exit that
+  overrides an ARMED lock/trail.
+
+### A/B definition
+  BT_DIE_EXITS 0 (OFF = validated baseline) / 1 / 2 on the honest harness
+  (1m exits, V4 reverse-delay, month-reset, 0.20% RT), NIFTY + BN, train +
+  test.  Decision metric: expectancy (avgR) and PF vs baseline; a win also
+  needs the extra exits to not merely be the reverse/unarmed exits renamed,
+  and maxDD must not grow.  Parity gate: BT_DIE_EXITS=0 must reproduce the
+  baseline byte-for-byte before variants run.

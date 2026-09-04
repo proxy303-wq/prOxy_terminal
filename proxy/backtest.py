@@ -440,6 +440,7 @@ class Backtest:
                     _prot_5m = bool(getattr(self.cfg, "BT_GATE_PROTECTIVE_5M", False))
                     _rev_at_close = bool(getattr(self.cfg, "BT_REVERSE_AT_SIGNAL_CLOSE", False))
                     _rev_delay_5m = bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False))
+                    _die = int(getattr(self.cfg, "BT_DIE_EXITS", 0) or 0)   # DIE exit-brain A/B (0 off)
                     sub_bars = bar.get("_1m") or [bar]
                     if _prot_5m:
                         sub_bars = []   # one protective eval at the close below
@@ -473,12 +474,32 @@ class Backtest:
                             exit_price, exit_reason = check_exits(active, _eh, _el, _en, self.cfg)
                         if exit_price is None and self._bar_time(sub) >= self.cfg.FORCE_EXIT_TIME:
                             exit_price, exit_reason = _en * slip, "TIME_STOP (15:15)"
+                        want_long = active["direction"] == "LONG"
                         if exit_price is None and last_signal is not None and last_signal.direction != "WAIT" \
                                 and not bool(getattr(self.cfg, "BT_REVERSE_DISABLED", False)) \
                                 and not (bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False)) and sub is not sub_bars[-1]):
-                            want_long = active["direction"] == "LONG"
                             if (last_signal.direction == "BUY") != want_long                                     and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
                                 exit_price, exit_reason = _en * slip, "REVERSE_SIGNAL"
+                        # ATHENA DIE EXIT BRAIN (Phase 2a A/B, docs/DIE.md): thesis
+                        # invalidation for UNLOCKED positions only - the lock/trail
+                        # layer (the validated edge) is never overridden.  Evidence is
+                        # the last closed 5m bar; evaluated once per 5m bar (at its
+                        # final 1m sub) so it cannot fire mid-bar on stale info.
+                        if exit_price is None and _die > 0 and sub is sub_bars[-1] \
+                                and last_signal is not None and not active.get("lock_armed"):
+                            _sig_dir = str(getattr(last_signal, "direction", "WAIT"))
+                            _tr = str(getattr(last_signal, "trend", "") or "RANGING")
+                            if _die >= 1:
+                                _opp_trend = (want_long and _tr == "DOWNTREND") or ((not want_long) and _tr == "UPTREND")
+                                _no_flip = ((want_long and _sig_dir in ("BUY", "WAIT")) or
+                                            ((not want_long) and _sig_dir in ("SELL", "WAIT")))
+                                if _opp_trend and _no_flip:
+                                    exit_price, exit_reason = _en * slip, "DIE_THESIS_INVALID"
+                            if exit_price is None and _die >= 2:
+                                _rsi = float(getattr(last_signal, "rsi", 50.0) or 50.0)
+                                if int(active.get("bars_held") or 0) >= 2 and _sig_dir == "WAIT":
+                                    if (want_long and _rsi <= 45.0) or ((not want_long) and _rsi >= 55.0):
+                                        exit_price, exit_reason = _en * slip, "DIE_MOMENTUM_DECAY"
                         # market exits triggered THIS tick wait BT_EXIT_LATENCY_1M
                         # ticks before filling (a 2s live poll cannot catch a
                         # 1m-res cross instantly); resting LIMIT targets fill

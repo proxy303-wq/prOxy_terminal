@@ -66,7 +66,7 @@ def banknifty_config():
     c.LOCK_FLOOR_POINTS = 2.4
     c.LOCK_TRAIL_STEP_POINTS = 2.4
     c.SL_POINTS = 26.0
-    c.TARGET_POINTS = 16.0
+    c.TARGET_POINTS = 20.0   # R:R 0.77 (was 16/26 = 0.62 after the stop widen)
     c.REVERSE_EXIT_DELAY_BARS = 1      # V4 policy (validated on BN too:
                                        # instant reverse -24k train/+157k test
                                        # vs delayed +648k/+610k)

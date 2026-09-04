@@ -844,7 +844,21 @@ class PaperEngine:
         if getattr(self.broker, "live", False):
             try:
                 side = "SELL" if t["direction"] == "LONG" else "BUY"
-                res = self.broker.place_order(side, t["instrument"], t["quantity"])
+                # ORDER TYPE (04-Sep fix): a TARGET exit is a LIMIT AT the
+                # target level - it fills when the premium actually reaches
+                # it (price certainty).  If the target read was wrong the
+                # limit simply does not fill and the protective exits manage
+                # the position, instead of a MARKET order chasing a phantom
+                # level (the morning's 644-653 fills against 671-687 books).
+                # Everything protective (stop/lock-floor/time/reverse) stays
+                # MARKET - it must close NOW, fill risk or not.
+                if str(exit_reason).startswith("TARGET_HIT"):
+                    res = self.broker.place_order(
+                        side, t["instrument"], t["quantity"],
+                        price=float(exit_price), order_type="LIMIT")
+                else:
+                    res = self.broker.place_order(
+                        side, t["instrument"], t["quantity"])
                 if not self._order_filled(res):
                     self.notify(
                         f"LIVE exit order REJECTED ({_ost}) - position still open, retrying next bar",

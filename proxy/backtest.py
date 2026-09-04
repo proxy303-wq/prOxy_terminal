@@ -354,6 +354,24 @@ class Backtest:
                     frame = calculate_indicators(frame)
                     signal = generate_signal(frame, self.cfg)
                 last_signal = signal
+                # STRUCTURE-DIRECTION GATE (A/B knob BT_STRUCTURE_GATE) - the
+                # 04-Sep all-PE bleed: the market was UP (structure UPTREND)
+                # yet 5-min bearish PA fired SELL/PE after SELL/PE (all 13
+                # trades were long puts, several stopped out).  The signal
+                # carries the structure trend (Signal.trend); align trades
+                # with it:
+                #   1 = suppress SELL/PE while the structure is UPTREND
+                #       (kill the up-market put bleed)
+                #   2 = full: BUY needs not-DOWNTREND, SELL needs not-UPTREND
+                _sg = int(getattr(self.cfg, "BT_STRUCTURE_GATE", 0))
+                if signal is not None and signal.direction in ("BUY", "SELL") and _sg > 0:
+                    _tr = str(getattr(signal, "trend", "") or "RANGING")
+                    if _sg >= 1 and signal.direction == "SELL" and _tr == "UPTREND":
+                        signal = None
+                    elif _sg >= 2 and signal.direction == "BUY" and _tr == "DOWNTREND":
+                        signal = None
+                if signal is not None:
+                    last_signal = signal
                 # ML Lab gate on entries (mirrors the live engine).  Default
                 # "veto" mode blocks trades AGAINST a confident ML call;
                 # "confirm" requires ML agreement (ML_LAB_MIN_PROB).

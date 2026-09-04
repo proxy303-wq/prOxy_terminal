@@ -188,13 +188,183 @@ class Backtest:
         # % model flatters small trades (a +1pt lock win at 2-4 lots barely
         # clears real charges).  A/B knob BT_FIXED_FEE_PER_SIDE.
         pnl -= 2 * float(getattr(self.cfg, "BT_FIXED_FEE_PER_SIDE", 0) or 0)
+        # bid/ask crossing tax (V4.1 item 2): a long buys at the ask and
+        # sells at the bid - the mid-based model books neither.  Knob ON only.
+        sp_cost = 0.0
+        if bool(getattr(self.cfg, "BT_SPREAD_COST", False)):
+            _s = float(getattr(self.cfg, "BT_SPREAD_PER_SIDE", 0.0) or 0.0)
+            _sp = float(getattr(self.cfg, "BT_SPREAD_POINTS", 0.0) or 0.0)
+            if _s > 0 or _sp > 0:
+                _e = float(trade.get("entry_premium") or 0.0)
+                _x = float(exit_price or 0.0)
+                _unit = (_e * _s + _sp) + (_x * _s + _sp) if _sp > 0 else (_e + _x) * _s
+                sp_cost = float(trade.get("quantity") or 0.0) * _unit
+                pnl -= sp_cost
         rec = {**trade, "exit_premium": round(exit_price, 2),
                "exit_reason": exit_reason, "pnl": round(pnl, 2),
                "exit_time": bar["time"].isoformat()}
+        if bool(getattr(self.cfg, "BT_TRADE_DATASET", False)):
+            self._append_dataset_fields(rec)
+        if sp_cost:
+            rec["spread_cost"] = round(sp_cost, 2)
         day_trades.append(rec)
         self.trades.append(rec)
         apply_daily_pnl(self.state, self.cfg, pnl)
         return rec
+
+    # ----------------------------------------------------------
+    # V4.1 adversarial-validation hooks.  ALL DEFAULT OFF - they must leave
+    # the published numbers byte-for-byte unchanged when their knobs are 0.
+
+    def _append_dataset_fields(self, rec):
+        """MFE/MAE and hold-length columns (entry-context fields were added
+        to the plan at entry; the excursion columns are tracked per tick and
+        finalised here)."""
+        is_long = rec["direction"] == "LONG"
+        entry = float(rec["entry_premium"])
+        peak = rec.get("pnl_peak")
+        if is_long and peak is not None:
+            rec["mfe_pts"] = round(float(peak) - entry, 2)
+        worst = rec.get("pnl_worst_prem")
+        if worst is not None:
+            rec["mae_pts"] = round(max(entry - float(worst), 0.0), 2)
+        rec["bars_held"] = int(rec.get("bars_held") or 0)
+
+    def _session_vwap_dist(self, five, bi, bar):
+        """Session cumulative VWAP up to AND INCLUDING the current 5m bar
+        (no look-ahead) and the close's signed distance from it in ATR."""
+        try:
+            if bi is None or bi < 0 or bi >= len(five):
+                return None, None
+            cum_pv = 0.0
+            cum_v = 0.0
+            for k in range(bi + 1):
+                b = five[k]
+                typ = (float(b["high"]) + float(b["low"]) + float(b["close"])) / 3.0
+                vol = float(b.get("volume") or 0.0)
+                cum_pv += typ * vol
+                cum_v += vol
+            if cum_v <= 0:
+                # VOLUME UNRECORDED for this session (the pre-2025-11 tape):
+                # equal-weight average of the typical price is the only
+                # honest VWAP proxy when no volume exists.
+                tot = 0.0
+                for k in range(bi + 1):
+                    b = five[k]
+                    tot += (float(b["high"]) + float(b["low"]) + float(b["close"])) / 3.0
+                return (tot / (bi + 1)) if (bi + 1) > 0 else None, None
+            return cum_pv / cum_v, None
+        except Exception:
+            return None, None
+
+    def _executable_close(self, trade, prem_high, prem_low, prem_now):
+        """Executable extremes for the CLOSE side (V4.1 item 2).  A LONG
+        closes by SELLING so the executable series is the BID (mid scaled by
+        (1 - spread)); a SHORT closes by buying -> the ASK.  Returns the mid
+        unchanged when BT_EXEC_TRIGGER is off (baseline behaviour)."""
+        if not bool(getattr(self.cfg, "BT_EXEC_TRIGGER", False)):
+            return prem_high, prem_low, prem_now
+        s = float(getattr(self.cfg, "BT_SPREAD_PER_SIDE", 0.0) or 0.0)
+        sp = float(getattr(self.cfg, "BT_SPREAD_POINTS", 0.0) or 0.0)
+        if trade["direction"] == "LONG":
+            return (prem_high * (1.0 - s) - sp,
+                    prem_low * (1.0 - s) - sp,
+                    prem_now * (1.0 - s) - sp)
+        return (prem_high * (1.0 + s) + sp,
+                prem_low * (1.0 + s) + sp,
+                prem_now * (1.0 + s) + sp)
+
+    def _track_excursion(self, trade, is_long, prem_high, prem_low):
+        """Record best/worst premium reached while the trade is open."""
+        if not bool(getattr(self.cfg, "BT_TRADE_DATASET", False)):
+            return
+        peak = trade.get("pnl_peak")
+        if is_long and peak is not None:
+            trade["mfe_prem"] = max(float(trade.get("mfe_prem") or 0.0),
+                                    float(peak) - float(trade["entry_premium"]))
+        if is_long:
+            worst = trade.get("pnl_worst_prem")
+            trade["pnl_worst_prem"] = prem_low if worst is None else min(float(worst), prem_low)
+
+    def _entry_context(self, five, bi, bar, signal, sigma, frame):
+        """Rich entry-time features for the V4.1 per-trade dataset.  Pulls
+        what generate_signal already computed (never re-derives the market)."""
+        ctx = {}
+        try:
+            if frame is not None and len(frame):
+                last = frame.iloc[-1]
+                for col in ("rsi", "adx", "atr", "atr_pct", "vol_ratio"):
+                    if col in frame.columns:
+                        v = last.get(col)
+                        ctx[col] = None if pd.isna(v) else round(float(v), 4)
+        except Exception:
+            pass
+        try:
+            vwap, _d = self._session_vwap_dist(five, bi, bar)
+            if vwap is not None:
+                ctx["vwap_session"] = round(float(vwap), 2)
+                atr_v = ctx.get("atr")
+                if atr_v:
+                    ctx["vwap_dist_atr"] = round((float(bar["close"]) - float(vwap)) / float(atr_v), 4)
+            else:
+                ctx["vwap_session"] = None
+        except Exception:
+            pass
+        for fld in ("sr_support_atr", "sr_resistance_atr", "sr_nearest_support",
+                    "sr_nearest_resistance", "rsi", "adx", "atr"):
+            v = getattr(signal, fld, None)
+            if v is not None:
+                ctx[fld] = round(float(v), 4)
+        if sigma is not None:
+            try:
+                ctx["iv_est_ann"] = round(float(sigma), 4)
+            except Exception:
+                pass
+        return ctx
+
+    def _range_strict_ok(self, signal, bar, frame):
+        """V4.1 item 4: in a RANGING structure only (a) fresh range-EXIT
+        breakouts or (b) edge fades with a rejection + momentum-reversal
+        close are taken; mid-range leftovers WAIT.  Levels 1/2."""
+        _rs = int(getattr(self.cfg, "BT_RANGE_STRICT", 0))
+        if _rs <= 0 or str(getattr(signal, "trend", "")) != "RANGING":
+            return True
+        st = getattr(signal, "setup_type", "") or ""
+        if st in ("DEAD_ZONE_BREAKOUT", "STRUCTURE_BREAKOUT"):
+            return True
+        atr = 0.0
+        if frame is not None and "atr" in frame.columns and len(frame):
+            try:
+                _a = float(frame["atr"].iloc[-1])
+                atr = _a if _a == _a and _a > 0 else 0.0
+            except Exception:
+                atr = 0.0
+        if atr <= 0:
+            return False
+        sr_max = float(getattr(self.cfg, "BT_RANGE_SR_ATR", 1.2))
+        sweep = float(getattr(self.cfg, "BT_RANGE_SWEEP_ATR", 0.5))
+        rsi_cap = float(getattr(self.cfg, "BT_RANGE_RSI_CAP", 65.0))
+        buy = signal.direction == "BUY"
+        sup = getattr(signal, "sr_nearest_support", None)
+        res = getattr(signal, "sr_nearest_resistance", None)
+        close = float(bar["close"]); o = float(bar["open"])
+        hi = float(bar["high"]); lo = float(bar["low"])
+        rsi = float(getattr(signal, "rsi", 50.0) or 50.0)
+        if buy:
+            near = sup is not None and (close - float(sup)) <= sr_max * atr
+            rejection = sup is not None and lo <= float(sup) + sweep * atr and close > o
+            reversal = rsi <= rsi_cap
+        else:
+            near = res is not None and (float(res) - close) <= sr_max * atr
+            rejection = res is not None and hi >= float(res) - sweep * atr and close < o
+            reversal = rsi >= (100.0 - rsi_cap)
+        if _rs >= 2 and frame is not None and "vol_ratio" in frame.columns and len(frame):
+            try:
+                _v = float(frame["vol_ratio"].iloc[-1])
+                reversal = reversal and (_v == _v) and _v >= float(getattr(self.cfg, "BT_RANGE_VOL", 0.8))
+            except Exception:
+                pass
+        return near and rejection and reversal
 
     # ----------------------------------------------------------
 
@@ -284,18 +454,39 @@ class Backtest:
                         else:
                             prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
 
-                        exit_price, exit_reason = check_exits(active, prem_high, prem_low, prem_now, self.cfg)
-
+                        self._track_excursion(active, active["direction"] == "LONG", prem_high, prem_low)
+                        _eh, _el, _en = self._executable_close(active, prem_high, prem_low, prem_now)
                         slip = 1.0 - getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT) \
                             if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
+                        _lat = int(getattr(self.cfg, "BT_EXIT_LATENCY_1M", 0) or 0)
+                        exit_price, exit_reason = None, None
+                        if _lat > 0 and active.get("_pend_ticks"):
+                            # a level crossed <BT_EXIT_LATENCY_1M> 1m ticks ago:
+                            # its MARKET exit order is now working - fill at the
+                            # executable now (worst-case poll latency at 1m res)
+                            active["_pend_ticks"] = int(active["_pend_ticks"]) - 1
+                            if int(active["_pend_ticks"]) <= 0:
+                                exit_price = _en * slip
+                                exit_reason = active.get("_pend_reason") or "PENDING_EXIT"
+                                active["_pend_ticks"] = 0
+                        if exit_price is None:
+                            exit_price, exit_reason = check_exits(active, _eh, _el, _en, self.cfg)
                         if exit_price is None and self._bar_time(sub) >= self.cfg.FORCE_EXIT_TIME:
-                            exit_price, exit_reason = prem_now * slip, "TIME_STOP (15:15)"
+                            exit_price, exit_reason = _en * slip, "TIME_STOP (15:15)"
                         if exit_price is None and last_signal is not None and last_signal.direction != "WAIT" \
                                 and not bool(getattr(self.cfg, "BT_REVERSE_DISABLED", False)) \
                                 and not (bool(getattr(self.cfg, "BT_REVERSE_DELAY_5M", False)) and sub is not sub_bars[-1]):
                             want_long = active["direction"] == "LONG"
                             if (last_signal.direction == "BUY") != want_long                                     and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
-                                exit_price, exit_reason = prem_now * slip, "REVERSE_SIGNAL"
+                                exit_price, exit_reason = _en * slip, "REVERSE_SIGNAL"
+                        # market exits triggered THIS tick wait BT_EXIT_LATENCY_1M
+                        # ticks before filling (a 2s live poll cannot catch a
+                        # 1m-res cross instantly); resting LIMIT targets fill
+                        # immediately when touched.
+                        if _lat > 0 and exit_price is not None and "TARGET_HIT" not in (exit_reason or ""):
+                            active["_pend_ticks"] = int(_lat) + 1
+                            active["_pend_reason"] = exit_reason
+                            exit_price, exit_reason = None, None
 
                         if exit_price is not None:
                             rec = self._close_trade(active, exit_price, exit_reason, sub, day_trades)
@@ -318,12 +509,14 @@ class Backtest:
                         _h, _l, _now = _h * (1.0 + _tb), _l * (1.0 + _tb), _now * (1.0 + _tb)
                     slip = 1.0 - getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT) \
                         if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
+                    self._track_excursion(active, active["direction"] == "LONG", _h, _l)
+                    _eh, _el, _en = self._executable_close(active, _h, _l, _now)
                     if self._bar_time(bar) >= self.cfg.FORCE_EXIT_TIME:
-                        _px, _why = _now * slip, "TIME_STOP (15:15)"
+                        _px, _why = _en * slip, "TIME_STOP (15:15)"
                     else:
-                        _px, _why = check_exits(active, _h, _l, _now, self.cfg)
+                        _px, _why = check_exits(active, _eh, _el, _en, self.cfg)
                         if _px is not None:
-                            _px = _now   # filled at the close, not the level
+                            _px = _en   # filled at the executable close, not the level
                     # delayed reverse (BT_REVERSE_DELAY_5M + gate ON): a flip
                     # from the PREVIOUS bar is acted on at THIS bar's close -
                     # one full 5m bar after the flip (the reverse counterpart
@@ -337,7 +530,7 @@ class Backtest:
                         want_long = active["direction"] == "LONG"
                         if (last_signal.direction == "BUY") != want_long \
                                 and last_signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT:
-                            _px, _why = _now * slip, "REVERSE_SIGNAL"
+                            _px, _why = _en * slip, "REVERSE_SIGNAL"
                     if _px is not None:
                         rec = self._close_trade(active, _px, _why, bar, day_trades)
                         active = None
@@ -384,6 +577,14 @@ class Backtest:
                 if signal is not None and signal.direction in ("BUY", "SELL") \
                         and bool(getattr(self.cfg, "BT_REQUIRE_SETUP", False)) \
                         and not (getattr(signal, "setup_type", "") or ""):
+                    signal = None
+                # RANGE-STRICT gate (A/B knob BT_RANGE_STRICT, item 4): in a
+                # RANGING structure only fresh range-EXIT breakouts or range-
+                # EDGE fades (near S/R + rejection + momentum-reversal close)
+                # are taken - everything mid-range WAITs ("range is not
+                # trade-the-leftovers").  OFF by default.
+                if signal is not None and signal.direction in ("BUY", "SELL") \
+                        and not self._range_strict_ok(signal, bar, frame):
                     signal = None
                 # ASYMMETRIC PE GATE (A/B knob BT_PE_GATE) - the PE side is the
                 # historical loser (mix rerun: CEs +393k, PEs -65k) and it
@@ -453,7 +654,8 @@ class Backtest:
                         _now = _now * (1.0 - _tb) if active["direction"] == "LONG" else _now * (1.0 + _tb)
                         slip = 1.0 - getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT) \
                             if active["direction"] == "LONG" else 1.0 + getattr(self.cfg, "SLIPPAGE_PCT", SLIPPAGE_PCT)
-                        rec = self._close_trade(active, _now * slip, "REVERSE_SIGNAL", bar, day_trades)
+                        _eh, _el, _en = self._executable_close(active, _h, _l, _now)
+                        rec = self._close_trade(active, _en * slip, "REVERSE_SIGNAL", bar, day_trades)
                         active = None
                         if self.verbose:
                             print(f"    EXIT {rec['instrument']} REVERSE_SIGNAL @close P&L {rec['pnl']:+,.2f}")
@@ -588,6 +790,34 @@ class Backtest:
                         plan.update(features_from_signal(signal, frame, self.cfg))
                     except Exception:
                         pass
+                    # V4.1 per-trade DATASET context (item 9) - OFF by default.
+                    if bool(getattr(self.cfg, "BT_TRADE_DATASET", False)):
+                        plan.update(self._entry_context(five, bi, bar, signal, _sigma, frame))
+                        plan["candle_pattern"] = getattr(signal, "candle_pattern", "") or ""
+                        plan["delta"] = getattr(leg, "delta", None)
+                        plan["dte"] = getattr(leg, "dte", None)
+                        plan["entry_premium_model"] = round(float(leg.premium), 2)
+                    # item-1 'dynamic' lock arm: the arm widens with realised
+                    # vol so the noise cannot arm the lock early on a hot day
+                    # (same family as the vol-scaled stop).  OFF by default.
+                    if (bool(getattr(self.cfg, "BT_DYNAMIC_LOCK", False))
+                            and not _sureshot
+                            and plan.get("entry_premium", 0) > 0):
+                        # 'dynamic' lock arm (item-1 variant): the arm scales
+                        # with the realised vol around a 1.0pt base so calm
+                        # days lock earlier and hot days let winners breathe.
+                        # arm == floor == trail (the live convention) so a
+                        # lock can never fill ABOVE a price the market never
+                        # traded (an arm < floor lets the model book a
+                        # phantom +1.0pt exit on a +0.6pt peak).
+                        _sb = float(getattr(leg_cfg, "VOL_SCALED_STOP_BASE_SIGMA", 0.11)) or 0.11
+                        _k = (float(_sigma) if _sigma else _sb) / _sb
+                        _arm = min(2.5, max(0.4, 1.0 * _k))
+                        _arm_pct = _arm / plan["entry_premium"]
+                        plan["lock_arm_pct"] = _arm_pct
+                        plan["lock_floor_pct"] = _arm_pct
+                        plan["lock_trail_step_pct"] = _arm_pct
+                        plan["dynamic_arm_pts"] = round(_arm, 3)
                     # entry-quality gates: low premium, ADX trend floor,
                     # momentum persistence (all accumulate into one block)
                     _blocked = None
@@ -631,11 +861,23 @@ class Backtest:
                 last_bar = five[-1]
                 last_sub = (last_bar.get("_1m") or [last_bar])[-1]
                 prem_high, prem_low, prem_now = self._premium_proxy(active, last_sub)
-                exit_price = prem_now
+                self._track_excursion(active, active["direction"] == "LONG", prem_high, prem_low)
+                exit_price = self._executable_close(active, prem_now, prem_now, prem_now)[2]
                 sign = 1.0 if active["direction"] == "LONG" else -1.0
                 pnl = (exit_price - active["entry_premium"]) * active["quantity"] * sign
+                # bid/ask crossing tax on a forced close (item-2 knob, OFF)
+                if bool(getattr(self.cfg, "BT_SPREAD_COST", False)):
+                    _s = float(getattr(self.cfg, "BT_SPREAD_PER_SIDE", 0.0) or 0.0)
+                    _sp = float(getattr(self.cfg, "BT_SPREAD_POINTS", 0.0) or 0.0)
+                    if _s > 0 or _sp > 0:
+                        _e = float(active.get("entry_premium") or 0.0)
+                        _x = float(exit_price or 0.0)
+                        _unit = (_e * _s + _sp) + (_x * _s + _sp) if _sp > 0 else (_e + _x) * _s
+                        pnl -= float(active.get("quantity") or 0.0) * _unit
                 rec = {**active, "exit_premium": round(exit_price, 2), "exit_reason": "DAY_END",
                        "pnl": round(pnl, 2), "exit_time": last_sub["time"].isoformat()}
+                if bool(getattr(self.cfg, "BT_TRADE_DATASET", False)):
+                    self._append_dataset_fields(rec)
                 day_trades.append(rec)
                 self.trades.append(rec)
                 apply_daily_pnl(self.state, self.cfg, pnl)

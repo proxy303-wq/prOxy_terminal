@@ -775,3 +775,66 @@ halts per engine, each on its own ~2L basis.
     (1.45 vs 2.32) before touching the strategy.
 11. NO ML in live yet.  If ML later: meta-model ("should Athena take THIS
     trade?") - never ML direction prediction.
+
+## 14. V4.1 ADVERSARIAL VALIDATION — RESULTS + DECISION SET (completed 05-Sep)
+
+Full results ledger: docs/V41_VALIDATION.md (raw JSON under reports/v41/).
+Same honest harness as §13's numbers (1m exits, V4 rev-delay, month-reset,
+0.20% RT, pure engine) - baseline reproduced byte-for-byte (NIFTY train
++239,808/PF1.45, test +263,078/PF2.32; BN +72,711/PF1.43, +103,878/PF2.39).
+
+=== DECISIONS (what ships / what does not) ===
+1. LOCK A/B (item 1): lock-OFF collapses to negative expectancy (PF
+   0.71/0.67) - the lock layer IS the edge.  arm 0.5 looks best on the
+   mid-filled model (+488k train/+355k test PF 3.55) BUT item 2 proved
+   +0.5pt is INSIDE the real half-spread (~0.39% of mid ~= 0.6pt): the
+   arm-0.5 lock fills are spread-invisible.  -> arm 1.0 / floor 1.0 /
+   trail 1.0 STAYS (no config change).
+2. BID/ASK-AWARE EXIT SIM (item 2): at the measured real spread, exit
+   fills on the executable side cut the NIFTY test edge by ~2/3 (PF 2.32
+   -> ~1.3-1.7 at 0.5-0.25%) and BN dies faster (0.25% exec: train
+   -41,735, test +43,373/PF1.40).  The validated mid-filled edge is
+   partly a fill artifact; real-fill anchoring (0a77afb, 9c89a69) is what
+   keeps LIVE honest.  -> NO arm/gate change; keep entries to strikes
+   with spread <= ~0.25-0.4% of premium (deep ITM bias already on).
+3. REGIME x SIDE (item 3): edge lives in DOWNTREND x PE (NIFTY) and
+   UPTREND x CE (BN); RANGING x CE/PE is POSITIVE in all 4 datasets (PF
+   1.58-4.33) - range is not leftovers.  -> model routing unchanged.
+4. RANGE-REGIME STRICTER (item 4): blanket range gate REJECTED - removes
+   ~20% of trades, hurts BN (test +103.9k -> +53.7k, PF 2.39 -> 1.79).
+5. VWAP CONTEXT (item 5): VWAP distance varies with performance but
+   inconsistently (BN's best cell is ABOVE VWAP).  -> context only, NO
+   gate.  NOTE: pre-2025-11 tape has ZERO volume -> volume score inputs
+   were inert for the whole train era; VWAP uses an equal-weight proxy
+   there (data-quality caveat recorded).
+6. BN ADX: stays OFF (walk-forward verdict unchanged; not re-litigated).
+7. STRIKE-ONCE (item 7): OFF adds +39k on NIFTY test but -12k / PF down
+   on BN train and worse loss clusters (streak 4->5, stop-re-entry 4->7);
+   not robust -> MAX_TRADES_PER_STRIKE=1 + ITM shift STAYS.
+8. MASTER ACCOUNT RISK GOVERNOR (item 8): engineered (proxy/master_risk.py
+   + engine/worker hooks + unit tests PASS).  2y combined sim: worst day
+   -0.93% of account, zero days <= -1%, cross-engine correlation +0.47
+   (test); open-risk cap (0.75%) binds once per window.  -> CODE SHIPS now
+   (default OFF); enable MASTER_GOVERNOR_ENABLED=1 in the LIVE worker env
+   at the Monday go-live (fail-open).
+9. TRADE DATASET (item 9): reports/v41/dataset_*_trades.csv (692/326/861/
+   450 trades).  Winners/losers: NO entry feature separates them
+   (confidence/ADX/score ~identical); winners armed the +1pt lock, losers
+   reversed/stopped before arming.  -> no ML signal exists yet; policy
+   "no ML in live" unchanged.
+10. REGIME WALK-FORWARD (item 10): EVERY held-out fold positive.  NIFTY
+    test-fold PFs [1.36, 1.86, 2.51, 3.22] median 2.19; BN [1.69, 1.66,
+    3.42, 1.78] median 1.73.  The 1.45-vs-2.32 asymmetry is regime-time
+    (the 2025-05..08 doldrums in "train" vs the 2026 up-legs in "test"),
+    NOT a design artifact - rolling OOS median sits between the two.
+11. NO ML (unchanged).
+
+=== DEPLOY STATE (05-Sep Friday evening, market closed) ===
+- New/changed code pushed to the box (see below) - takes effect at the
+  NEXT worker restart (Monday pre-market per §8).  NO restarts, NO mode
+  flips done from here; mode.json + mode_banknifty.json still live.
+- Config: NO value changes ship (arm stays 1.0 etc.) - the only config
+  additions are the new governor knobs (default OFF) inside config.py.
+- MONDAY RUNBOOK (add to §8): 1) restart workers (pick up new code);
+  2) start.sh env: MASTER_GOVERNOR_ENABLED=1; 3) verify reports/master_
+  risk.json appears once both engines open; 4) Telegram GO LIVE.

@@ -309,6 +309,24 @@ WEEKLY_MISS_ALLOWANCE = 2       # 2 missed days/month assumed in the realistic t
 SLIPPAGE_PCT = 0.0005
 TRANSACTION_COST_PCT = 0.0005
 
+# ---- MASTER ACCOUNT RISK GOVERNOR (V4.1 item 8, HANDOVER 13.8) ----
+# One Dhan account runs TWO engines (NIFTY + BANKNIFTY), each sized on its
+# own ~50% share and each with its OWN 1%-of-basis daily halt - so two
+# engine-local -1% days can cost ~1% of the WHOLE account (2k + 2k on
+# ~4.1L) with neither engine aware of the other.  The governor adds an
+# account-level layer (proxy/master_risk.py): combined OPEN risk (sum of
+# stop-distance risk across open positions, INR) <= MASTER_OPEN_RISK_PCT of
+# the FULL balance, plus a shared day-loss floor that halts BOTH engines.
+# OFF by default - paper sessions and every backtest never enable it; the
+# LIVE workers turn it on via env (MASTER_GOVERNOR_ENABLED=1) and set
+# MASTER_ACCOUNT_CAPITAL to the real Dhan balance.
+MASTER_GOVERNOR_ENABLED = False
+MASTER_ACCOUNT_CAPITAL = 0.0      # full Dhan balance (0 = fall back to CAPITAL)
+MASTER_OPEN_RISK_PCT = 0.0075     # combined open-risk cap (user window 0.5-0.75%)
+MASTER_DAILY_LOSS_PCT = 0.0100    # shared account day-loss floor (1%)
+MASTER_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                           "reports", "master_risk.json")
+
 
 # ============================================================
 # 4. SIGNAL ENGINE (the exact spec formula)

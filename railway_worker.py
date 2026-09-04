@@ -170,7 +170,15 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
         try:
             from proxy.dhan_broker import DhanBroker
             broker = DhanBroker()
-            capital = float((broker.get_balance() or {}).get("cash") or cfg.CAPITAL) * _alloc
+            _full_balance = float((broker.get_balance() or {}).get("cash") or cfg.CAPITAL)
+            capital = _full_balance * _alloc
+            # MASTER ACCOUNT RISK GOVERNOR (item 8): the governor caps COMBINED
+            # open risk / day loss across both engines on the FULL balance,
+            # not on each engine's allocated share.  Enabled via env only -
+            # paper and backtests never activate it.
+            cfg.MASTER_ACCOUNT_CAPITAL = _full_balance
+            if os.environ.get("MASTER_GOVERNOR_ENABLED", "0") == "1":
+                cfg.MASTER_GOVERNOR_ENABLED = True
             notifier.log(
                 f"LIVE MODE ACTIVE - REAL ORDERS on the Dhan account "
                 f"(allocated {capital:,.2f} INR = balance x {_alloc:.2f}, mode from Telegram menu)", "WARN")

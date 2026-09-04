@@ -38,6 +38,15 @@ class Signal:
     candle_pattern: str = ""
     reason: str = ""
     trend: str = ""
+    # V4.1 context fields (populated by generate_signal so the backtest
+    # gates / trade dataset never re-derive the price-action state)
+    sr_support_atr: float = None       # distance to nearest support (ATR)
+    sr_resistance_atr: float = None    # distance to nearest resistance (ATR)
+    sr_nearest_support: float = None
+    sr_nearest_resistance: float = None
+    rsi: float = None
+    adx: float = None
+    atr: float = None
 
 
 # ------------------------------------------------------------
@@ -280,6 +289,14 @@ def generate_signal(df, cfg):
             direction_out = "WAIT"
             reason_bits.append(f"gate: need bearish PA + RSI<{rsi_bear_gate:.0f} + conf>=70% + trend")
 
+    atr_val = None
+    if "atr" in df.columns:
+        try:
+            _a = float(df["atr"].iloc[-1])
+            atr_val = _a if np.isfinite(_a) else None
+        except Exception:
+            atr_val = None
+
     return Signal(
         direction=direction_out,
         score=round(score, 4),
@@ -295,4 +312,11 @@ def generate_signal(df, cfg):
         candle_pattern=pattern_name,
         reason="; ".join(reason_bits),
         trend=trend,
+        sr_support_atr=sr.get("distance_support_atr"),
+        sr_resistance_atr=sr.get("distance_resistance_atr"),
+        sr_nearest_support=sr.get("nearest_support"),
+        sr_nearest_resistance=sr.get("nearest_resistance"),
+        rsi=(float(rsi_val) if np.isfinite(rsi_val) else None),
+        adx=(float(adx_val) if np.isfinite(adx_val) else None),
+        atr=atr_val,
     )

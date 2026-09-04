@@ -892,7 +892,15 @@ class PaperEngine:
         }
         self.tracker.add_trade(record, self.state, self.cfg)
         apply_daily_pnl(self.state, self.cfg, pnl)
+        # MASTER ACCOUNT RISK GOVERNOR (item 8): report the realised P&L to
+        # the shared account file and free this engine's open-risk slot.
+        try:
+            from .master_risk import record_realized
+            record_realized(self.cfg, pnl, release_sl_inr=t.get("sl_total"))
+        except Exception:
+            pass
         # cooldown after a stop-loss: no immediate re-entry into the same chop
+
         if "STOP_LOSS_HIT" in exit_reason and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
             bars = int(self.cfg.LOSS_COOLDOWN_BARS)
             self.cooldown_until = bar["time"] + timedelta(minutes=BAR_MINUTES * bars)
@@ -1142,6 +1150,25 @@ class PaperEngine:
                         gate = RiskCheck(False,
                                          "no real chain premium for this strike - model pricing disabled")
                     if gate.allowed and ml_ok:
+                        # MASTER ACCOUNT RISK GOVERNOR (item 8): reserve this
+                        # position's open risk on the SHARED account file so
+                        # the two engines together never exceed the cap.  No-op
+                        # unless MASTER_GOVERNOR_ENABLED (paper never does).
+                        _gov_reserved = False
+                        if getattr(self.broker, "live", False) \
+                                and getattr(self.cfg, "MASTER_GOVERNOR_ENABLED", False):
+                            try:
+                                from .master_risk import acquire
+                                _g = acquire(self.cfg, plan.get("sl_total") or 0.0,
+                                             meta={"instrument": plan.get("instrument"),
+                                                   "conf": signal.confidence})
+                                if not _g.allowed:
+                                    gate = RiskCheck(False, _g.reason)
+                                else:
+                                    _gov_reserved = True
+                            except Exception:
+                                _gov_reserved = False
+
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.
                         if getattr(self.broker, "live", False):
@@ -1210,6 +1237,12 @@ class PaperEngine:
                                 pass
                         else:
                             self.notify(f"LIVE entry SKIPPED - order rejected (no position taken, engine continues)", "WARN")
+                        if _gov_reserved and not events.get("entered"):
+                            try:
+                                from .master_risk import release
+                                release(self.cfg, plan.get("sl_total") or 0.0)
+                            except Exception:
+                                pass
                     else:
                         self.notify(f"GATE  signal={signal.direction} blocked: {gate.reason}")
 

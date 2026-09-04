@@ -45,16 +45,23 @@ def banknifty_config():
     # BN exit knobs are the %-EQUIVALENT of the NIFTY profile on BN's
     # ~2.4x premium scale (BN ATM ~390 at 60k vs NIFTY ~155 at 24k):
     #   NIFTY: arm 1.0 / floor 1.0 / trail 1.0 / stop 5 / target 6.5
-    #   BN:    arm 2.4 / floor 2.4 / trail 2.4 / stop 12 / target 16
+    #   BN:    arm 2.4 / floor 2.4 / trail 2.4 / stop 20 / target 16
     # A/B 03-Sep (V4 policy, 1m exits, 0.20% RT): TRAIN +648k/PF 2.05/78%,
     # TEST +610k/PF 3.44/82% (the raw NIFTY points on BN - arm1/stop5 -
     # score too high on the model because a 5pt stop on ~390 premium is
     # inside real BN noise; the proxy cannot see sub-minute fills).
+    # STOP WIDTH (04-Sep pre-market, real-scale A/B): BN actually trades the
+    # MONTHLY (nearest 29-Sep, DTE 26, ATM ~829 = 2.2x the 373 proxy), so
+    # 12pt was only 1.45% vs NIFTY's 3.2% cushion.  Stop-width A/B at the
+    # real premium scale: 12/16/20/26pt all net within +-3% (12pt stopped
+    # out 25 trades that wider stops let recover to locks); 20pt = 2.4%
+    # cushion chosen for real-tick noise/slippage safety on BN's first live
+    # day (user decision 04-Sep).
     c.SL_MODE = "points"
     c.LOCK_ARM_POINTS = 2.4
     c.LOCK_FLOOR_POINTS = 2.4
     c.LOCK_TRAIL_STEP_POINTS = 2.4
-    c.SL_POINTS = 12.0
+    c.SL_POINTS = 20.0
     c.TARGET_POINTS = 16.0
     c.REVERSE_EXIT_DELAY_BARS = 1      # V4 policy (validated on BN too:
                                        # instant reverse -24k train/+157k test

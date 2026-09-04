@@ -147,3 +147,35 @@ NOT included (need data we do not have, or would change the lock layer):
   needs the extra exits to not merely be the reverse/unarmed exits renamed,
   and maxDD must not grow.  Parity gate: BT_DIE_EXITS=0 must reproduce the
   baseline byte-for-byte before variants run.
+
+
+---
+
+## Phase 2a RESULT (2026-09-05) — NULL, with a mechanism
+
+BT_DIE_EXITS 1/2 on the honest harness (12 replays):
+
+| run | DIE exits fired | net/PF change vs OFF |
+|---|---|---|
+| NIFTY train/test | 0 | identical |
+| BN train | 1-2 | ~identical (+/- 0.1%) |
+| BN test | 1 | identical |
+
+**Conclusion: thesis-invalidation on 5m-bar evidence is ALREADY priced into
+the system** - it adds no independent exit information.  Mechanism:
+* the structure "trend" (UPTREND/DOWNTREND) and the formal direction signal
+  are derived from the SAME swings on the same 5m close, so when the regime
+  turns against a position the direction signal flips almost simultaneously -
+  the existing V4 reverse (1-bar delayed) already exits it;
+* positions that die without a formal flip are already cut by the 4-bar
+  unarmed stop, and ~75-80% arm the +1pt lock first.
+So a "discretionary early exit" reading 5m closes has no edge left to find.
+The ONLY remaining place a human thesis-check could add information is
+INTRA-bar (real option LTP at the ~2s poll between 5m closes - where the
+formal signal is blind by construction).  That variant needs live data and
+cannot be A/B'd on 2y 5m/1m history - it is a LIVE-ONLY experiment
+(BT_DIE_LIVE_INTRABAR), not a backtest promotion.  No deploy from Phase 2a.
+
+(Note: OFF-row nets drifted a few hundred INR vs the original baseline -
+identical trade counts/exits; sub-0.1% float-level noise across the pool
+runs, immaterial to the conclusion.)

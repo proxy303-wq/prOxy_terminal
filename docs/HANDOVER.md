@@ -838,3 +838,33 @@ Same honest harness as §13's numbers (1m exits, V4 rev-delay, month-reset,
 - MONDAY RUNBOOK (add to §8): 1) restart workers (pick up new code);
   2) start.sh env: MASTER_GOVERNOR_ENABLED=1; 3) verify reports/master_
   risk.json appears once both engines open; 4) Telegram GO LIVE.
+
+
+## 15. NEXT-WINDOW HANDOVER (05-Sep late) - continue here
+
+Full ledger: docs/V41_VALIDATION.md, docs/DIE.md, docs/GOAL_ANALYSIS.md.
+Box synced + compile-verified at every push; mode files untouched (live/live);
+new code activates at the Monday worker restart.  Dashboard: http://103.86.177.195:8080
+
+VALIDATED THIS WINDOW (do not re-litigate): V4.1 full program (LOCK arm
+1.0 stays, spread eats 2/3 of the modeled edge, range gate rejected,
+strike-once stays, BN fill-thin, walk-forward all folds positive); paper==
+live parity knobs; SUPER-ORDER bracket mode (market/limit/stop styles +
+cancel-before-close, XOR engine-partial); master governor; DIE advisory +
+scorecard (pruned VWAPEXT and nearest-S/R rules); friend-review batch
+(setup sweep higher quality but rare; vote-alignment NOT robust; CE-
+hardening win-rate immovable - all recorded, none deployed).
+
+NEXT EXPERIMENT (the last principled "fewer losers" shot): ENTRY-TIMING
+confirmation A/B - enter at close+1 bar only if the signal-bar close holds
+(price/premium continues ~0.5-1pt) vs the close-entry baseline.  Same
+honest harness (tools/_v41_lib.py), NIFTY train+test first, BN sanity,
+gate on EV/PF both windows.  This is what the live bracket stop-entry
+implements (BRACKET_ENTRY_STYLE=stop, BRACKET_TRIGGER_OFFSET_PTS).
+
+OPEN: Dhan rollingoption (5y option history) returns empty on the account
+- check entitlement; tools/opt_history.py ready; per-strike spread capture
++ BN spread capture needed Monday to settle the 0.25-vs-0.5% fill question
+(goal analysis depends on it).  Paper-parity env for the Monday paper
+session: PAPER_LIVE_LIKE=1 PAPER_MODEL_SPREAD=1 (PAPER_SPREAD_PER_SIDE ~0.004).
+Then bracket 1-lot test; size ladder 10 -> 12 -> 15 only on live fills.

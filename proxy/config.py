@@ -349,6 +349,7 @@ DESK_LAYER_ENABLED = False
 BRACKET_LIVE_ENABLED = False
 BRACKET_ENTRY_STYLE = "market"    # "market" | "limit" (limit price = LTP +/- offset)
 BRACKET_LIMIT_OFFSET_PTS = 0.0    # limit entry below LTP (fill cheaper if it dips)
+BRACKET_TRIGGER_OFFSET_PTS = 1.0  # stop entry: trigger ABOVE LTP (confirmation jump)
 BRACKET_PRODUCT = "INTRADAY"
 
 

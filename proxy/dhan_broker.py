@@ -324,8 +324,12 @@ class DhanBroker(Broker):
         trigger_price: optional stop-triggered entry (send only if the account/
         API accepts it on the super-order entry leg - verify 1 lot first)."""
         otype = (order_type or "MARKET").upper()
-        if otype not in ("MARKET", "LIMIT"):
+        # allowed: MARKET / LIMIT / STOP_LOSS (SL-L) / STOP_LOSS_MARKET (SL-M).
+        # STOP* = trigger-based entry (above-market for a BUY continuation entry -
+        # user-verified allowed on NSE_FNO super orders).  trigger_price required.
+        if otype not in ("MARKET", "LIMIT", "STOP_LOSS", "STOP_LOSS_MARKET"):
             otype = "MARKET"
+        is_stop = otype in ("STOP_LOSS", "STOP_LOSS_MARKET")
         payload = {
             "dhanClientId": client_id,
             "correlationId": (tag or "PrOxyBracket")[:30],
@@ -336,13 +340,13 @@ class DhanBroker(Broker):
             "tradingSymbol": trading_symbol,
             "securityId": int(security_id),
             "quantity": int(quantity),
-            "price": round(float(entry_price), 2) if otype == "LIMIT" else 0.0,
+            "price": round(float(entry_price), 2) if otype in ("LIMIT", "STOP_LOSS") else 0.0,
             "targetPrice": round(float(target_price), 2),
             "stopLossPrice": round(float(stop_price), 2),
             "trailingJump": round(float(trailing_jump), 2),
         }
-        if trigger_price is not None:
-            payload["triggerPrice"] = round(float(trigger_price), 2)
+        if is_stop or trigger_price is not None:
+            payload["triggerPrice"] = round(float(trigger_price) if trigger_price is not None else entry_price, 2)
         return payload
 
     def place_bracket(self, side, instrument, quantity, entry_price, target_price,

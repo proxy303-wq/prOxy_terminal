@@ -398,6 +398,17 @@ MONDAY RUNBOOK (paper first, 1 lot):
    falls back to the normal order path automatically (log WARN) - no dead
    trades.
 Notes: static-IP whitelisting is required for order APIs (already set for
-the box); productType INTRADAY mirrors existing orders.  Partial scale-out
-("Book Profits 50% x2") is NOT yet in the payload - engine partial-profit
-(off by default) covers that; wire broker partials after v1 proves out.
+the box); productType INTRADAY mirrors existing orders.
+
+UPDATE (05-Sep evening): entry styles now include "stop" - a trigger-based
+above-market continuation entry (orderType STOP_LOSS_MARKET + triggerPrice =
+LTP + BRACKET_TRIGGER_OFFSET_PTS).  Verified allowed on NSE_FNO super orders
+(user).  Partial profit: the Dhan create payload supports ONE target leg per
+super order (SDK + docs); the UI's "Book Profits 50% x 2 / 33% x 3 / 25% x 4"
+multi-leg splits are not exposed as create fields, so PARTIAL_PROFIT stays the
+ENGINE-managed path (validated, default OFF) and BRACKET mode is EXCLUDED
+when PARTIAL_PROFIT_ENABLED (a partial sale would break the bracket's full-qty
+legs).  Rule: enable bracket XOR engine-partial.  Monday test ladder:
+1) 1-lot bracket (limit + market + stop styles) on paper/live-small,
+2) confirm stop-style triggerPrice accepted,
+3) confirm cancel-before-close log line, 4) then enable full size.

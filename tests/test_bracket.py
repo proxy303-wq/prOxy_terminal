@@ -29,7 +29,12 @@ def main():
     chk("market entry price 0", p2["price"] == 0.0 and p2["orderType"] == "MARKET")
     p3 = DhanBroker.build_bracket_payload("c", "BUY", "X", 1, 2, "T", 0, 110, 90, trigger_price=101.5)
     chk("trigger present", abs(p3["triggerPrice"] - 101.5) < 1e-9)
-    chk("bad order type coerced", DhanBroker.build_bracket_payload("c", "BUY", "X", 1, 2, "T", 0, 1, 2, order_type="STOP_LOSS")["orderType"] == "MARKET")
+    chk("unknown type coerced to MARKET", DhanBroker.build_bracket_payload("c", "BUY", "X", 1, 2, "T", 0, 1, 2, order_type="FANCY")["orderType"] == "MARKET")
+    chk("SL-L kept", DhanBroker.build_bracket_payload("c", "BUY", "X", 1, 2, "T", 0, 1, 2, order_type="STOP_LOSS", trigger_price=99.0)["orderType"] == "STOP_LOSS")
+    p4 = DhanBroker.build_bracket_payload("c", "BUY", "X", 1, 2, "T", 0.0, 110, 90, order_type="STOP_LOSS_MARKET", trigger_price=102.0)
+    chk("stop entry orderType", p4["orderType"] == "STOP_LOSS_MARKET")
+    chk("stop entry trigger", abs(p4["triggerPrice"] - 102.0) < 1e-9)
+    chk("stop market price 0", p4["price"] == 0.0)
     print("\nBRACKET TESTS:", "PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)
 

@@ -1197,19 +1197,29 @@ class PaperEngine:
                         if getattr(self.broker, "live", False):
                             _bracket_ok = False
                             if getattr(self.cfg, "BRACKET_LIVE_ENABLED", False) \
+                                    and not getattr(self.cfg, "PARTIAL_PROFIT_ENABLED", False) \
                                     and hasattr(self.broker, "place_bracket") \
                                     and plan["direction"] == "LONG":
+
                                 try:
                                     _eref = float(plan.get("entry_premium") or 0)
                                     _ostyle = str(getattr(self.cfg, "BRACKET_ENTRY_STYLE", "market")).lower()
                                     _lim = _eref - float(getattr(self.cfg, "BRACKET_LIMIT_OFFSET_PTS", 0.0) or 0.0)
+                                    _trg = _eref + float(getattr(self.cfg, "BRACKET_TRIGGER_OFFSET_PTS", 1.0) or 1.0)
+                                    if _ostyle == "stop":
+                                        _otype, _price, _trigger = "STOP_LOSS_MARKET", 0.0, _trg
+                                    elif _ostyle == "limit":
+                                        _otype, _price, _trigger = "LIMIT", _lim, None
+                                    else:
+                                        _otype, _price, _trigger = "MARKET", 0.0, None
                                     res = self.broker.place_bracket(
                                         "BUY", plan["instrument"], plan["quantity"],
-                                        entry_price=_lim if _ostyle == "limit" else 0.0,
+                                        entry_price=_price,
                                         target_price=float(plan.get("target_premium") or (_eref + 6.5)),
                                         stop_price=float(plan.get("stop_premium") or (_eref - 5.0)),
-                                        order_type="LIMIT" if _ostyle == "limit" else "MARKET",
+                                        order_type=_otype, trigger_price=_trigger,
                                         tag="PrOxyV41")
+
                                     _bid = (res.get("orderId") or ((res.get("data") or {}).get("orderId") if isinstance(res.get("data"), dict) else None)) if isinstance(res, dict) else None
                                     if _bid:
                                         _bracket_ok = True

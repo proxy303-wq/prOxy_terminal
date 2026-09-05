@@ -82,6 +82,30 @@ def position_size(risk_budget_amount, entry, stop, cfg, lot_size=None):
     return lots, quantity, actual_risk
 
 
+def is_agrade_signal(signal, cfg):
+    """'Definitely-successful-looking' (user 05-Sep): confidence >= 90 AND
+    |score| >= 0.30 AND structure-aligned (no counter-regime - the bleed
+    cells measured in item 3)."""
+    if signal is None:
+        return False
+    try:
+        conf = float(getattr(signal, "confidence", 0) or 0)
+        score = abs(float(getattr(signal, "score", 0) or 0))
+        trend = str(getattr(signal, "trend", "") or "")
+        direction = str(getattr(signal, "direction", ""))
+    except Exception:
+        return False
+    if conf < float(getattr(cfg, "POST_HALT_MIN_CONFIDENCE", 90.0)):
+        return False
+    if score < 0.30:
+        return False
+    if direction == "BUY" and trend == "DOWNTREND":
+        return False
+    if direction == "SELL" and trend == "UPTREND":
+        return False
+    return True
+
+
 def check_trade_allowed(state, cfg, signal=None, pending_trade=None, live=False):
     """
     Every entry gate in one place:
@@ -118,6 +142,19 @@ def check_trade_allowed(state, cfg, signal=None, pending_trade=None, live=False)
         if state.get("trades_today", 0) >= cfg.MAX_TRADES_PER_DAY:
             return RiskCheck(False, f"max trades per day reached ({cfg.MAX_TRADES_PER_DAY}) [LIVE]")
         if getattr(cfg, "DAILY_TARGET_STOP", True) and daily_target_hit(state, cfg):
+            # A-GRADE COMEBACK (user 05-Sep): a definitely-successful-looking
+            # trade may still fire after the target - symmetric to the SL-side
+            # POST_HALT_COMEBACK.  Capped per day and only while clearly green.
+            if (getattr(cfg, "DAILY_TARGET_COMEBACK", False)
+                    and is_agrade_signal(signal, cfg)
+                    and int(state.get("target_comeback_trades", 0))
+                        < int(getattr(cfg, "DAILY_TARGET_COMEBACK_MAX", 1))
+                    and state.get("realized_pnl_today", 0.0)
+                        >= base_capital(state, cfg)
+                           * float(getattr(cfg, "DAILY_TARGET_COMEBACK_MIN_DAY_PCT", 1.0)) / 100.0):
+                return RiskCheck(True,
+                                 f"A-GRADE comeback after target (conf {signal.confidence:.0f}%, "
+                                 f"day {state.get('realized_pnl_today', 0.0):+,.0f})")
             return RiskCheck(False, "daily profit target reached - trading done for the day [LIVE]")
 
     if state.get("active_trade") is not None:

@@ -65,6 +65,7 @@ class PaperEngine:
                 "wins": self.state.get("wins", 0),
                 "losses": self.state.get("losses", 0),
                 "post_halt_trades": 0,
+                "target_comeback_trades": 0,
                 "trading_halted_day": False,
                 "trading_halted_month": self.state.get("trading_halted_month", False),
                 "equity_curve": self.state.get("equity_curve", []),
@@ -1275,6 +1276,8 @@ class PaperEngine:
                             # post-halt comeback bookkeeping (capped recovery trades)
                             if self.state.get("trading_halted_day"):
                                 self.state["post_halt_trades"] = int(self.state.get("post_halt_trades", 0)) + 1
+                            if daily_target_hit(self.state, self.cfg):
+                                self.state["target_comeback_trades"] = int(self.state.get("target_comeback_trades", 0)) + 1
                             self.active_trade = plan
                             self.active_trade["entry_time"] = bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"])
                             self.active_trade["entry_premium"] = round(self.active_trade["entry_premium"], 2)

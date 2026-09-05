@@ -283,6 +283,15 @@ POST_HALT_COMEBACK = True
 POST_HALT_MAX_TRADES = 2
 POST_HALT_MIN_CONFIDENCE = 90.0
 POST_HALT_HARD_FLOOR = -7500.0   # INR: hard day floor for comeback trades
+# A-GRADE TRADE (05-Sep, user): even after the daily TARGET is hit (or the
+# SL halted the day), a DEFINITELY-successful-looking trade may still be taken.
+# "A-grade" = confidence >= POST_HALT_MIN_CONFIDENCE (90) + |score|>=0.30 +
+# structure-aligned (no counter-regime).  Target side is NEW + symmetric to the
+# existing POST_HALT_COMEBACK (SL side).  Guard rails: max N such trades/day and
+# only while the day is still clearly green (>= DAILY_TARGET_COMEBACK_MIN_DAY_PCT).
+DAILY_TARGET_COMEBACK = False
+DAILY_TARGET_COMEBACK_MAX = 1
+DAILY_TARGET_COMEBACK_MIN_DAY_PCT = 1.0   # day must still be >= +1% to chase more
 MAXIMALS_ALPHA_STOP = 0.20       # tighter SL (20% quantile): 30D A/B cut worst loss -5.2k -> -3.7k
 MAXIMALS_ALPHA_TARGET = 0.50     # 50% chance the target is touched (median max)
 MAXIMALS_VOL_WINDOW = 40         # bars of recent history for realized volatility

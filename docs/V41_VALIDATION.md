@@ -431,3 +431,42 @@ Monday live-paper runbook: set PAPER_LIVE_LIKE=1 PAPER_MODEL_SPREAD=1
 the paper P&L you watch is the P&L live would produce with the bracket/
 limit execution; live bracket placement itself remains live-only (paper
 broker has no /super/orders).
+
+
+---
+
+## FRIEND-REVIEW EXPERIMENT BATCH (05-Sep) — measured verdicts
+
+1) COMPONENT VOTES + RSI SLOPE now recorded per trade (vote_trend/momentum/
+   sr/volume, alignment, rsi_slope) in every dataset - the 4 CSVs were
+   re-run with them.
+
+2) SETUP-SPECIFIC EXPECTANCY (evidence, both windows): LIQUIDITY_SWEEP
+   avgR 0.434 (test) / 0.292 (train) vs "no-setup" 0.264 / 0.115 - sweeps
+   are consistently higher quality.  BUT only ~8% of trades carry a clean
+   setup: a SETUP-ONLY gate keeps 26-46 trades/window with stellar stats
+   (avgR 0.5, PF 2.9) yet net ₹27-31k vs ₹240-263k base - kills income.
+   => setups are a QUALITY/WEIGHTING signal, not a filter.
+
+3) VOTE-ALIGNMENT QUALITY A/B (BT_QUALITY_GATE): NOT robust.
+   * NIFTY train: aligned avgR 0.162 vs conflicted 0.064 (clear)
+   * NIFTY test: flat (0.277 vs 0.260) | BN: INVERTED (conflicted better)
+   Gate result: train net 239.6k->215.2k (PF 1.45->1.57), test 263.3k->
+   245.1k (PF 2.33->2.31).  Recorded, NOT deployed.
+
+4) STATIC ±0.15 threshold: expectancy is ~monotone with score depth on the
+   SELL side both windows (0.22->0.40 avgR); BUY high-score flips sign
+   across windows (0.627 test vs -0.013 train) - a structure/regime story,
+   not a threshold story.  No change.
+
+5) VOLUME 0.8: vol_ratio >1.2 is strong on NIFTY test (0.407) but NEGATIVE
+   on train (-0.027) - not robust; plus pre-2025-11 tape has zero volume.
+   No change; revisit with real volume months + TOD normalization later.
+
+6) RSI slope / persistence recorded (rsi_slope per trade) for future A/Bs;
+   ADX asymmetry, structure-alignment, RSI-extreme handling all KEEP as
+   already validated.
+
+Architecture: friend's 🟢 list matches exactly what stays; the two 🟡 that
+measured (setup weighting, vote quality) are recorded for the DIE/scoring
+layer, not gated into the engine.

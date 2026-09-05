@@ -197,7 +197,17 @@ class Backtest:
             if _s > 0 or _sp > 0:
                 _e = float(trade.get("entry_premium") or 0.0)
                 _x = float(exit_price or 0.0)
-                _unit = (_e * _s + _sp) + (_x * _s + _sp) if _sp > 0 else (_e + _x) * _s
+                if bool(getattr(self.cfg, "BT_SPREAD_COST_ENTRY", False)):
+                    # EXECUTION-AWARE (super-order/limit policy): the ENTRY pays the
+                    # ask once; LOCK/STOP/TARGET exits fill AT the level you set
+                    # (no extra spread); only true market exits (time/reverse/day-
+                    # end) additionally pay the bid side.
+                    _unit = (_e * _s + _sp) if _sp > 0 else _e * _s
+                    if str(exit_reason or "") in ("REVERSE_SIGNAL", "DAY_END") \
+                            or str(exit_reason or "").startswith("TIME_STOP"):
+                        _unit += (_x * _s + _sp) if _sp > 0 else _x * _s
+                else:
+                    _unit = (_e * _s + _sp) + (_x * _s + _sp) if _sp > 0 else (_e + _x) * _s
                 sp_cost = float(trade.get("quantity") or 0.0) * _unit
                 pnl -= sp_cost
         rec = {**trade, "exit_premium": round(exit_price, 2),
@@ -315,12 +325,37 @@ class Backtest:
             v = getattr(signal, fld, None)
             if v is not None:
                 ctx[fld] = round(float(v), 4)
+        # RSI persistence/slope (last closed bar vs previous) - friend-idea feature
+        try:
+            if frame is not None and len(frame) > 1 and "rsi" in frame.columns:
+                _r1 = float(frame["rsi"].iloc[-1]); _r0 = float(frame["rsi"].iloc[-2])
+                if _r1 == _r1 and _r0 == _r0:
+                    ctx["rsi_slope"] = round(_r1 - _r0, 3)
+                    ctx["rsi_prev"] = round(_r0, 2)
+        except Exception:
+            pass
         if sigma is not None:
             try:
                 ctx["iv_est_ann"] = round(float(sigma), 4)
             except Exception:
                 pass
         return ctx
+
+    def _vote_alignment(self, signal, direction):
+        """How many of the four component votes agree with the signal direction.
+        Returns fraction 0..1 over the non-neutral votes (0 when no signed votes)."""
+        try:
+            c = getattr(signal, "components", {}) or {}
+            want = 1.0 if direction == "BUY" else -1.0
+            signed = [v for v in (c.get("trend", 0.0), c.get("momentum", 0.0),
+                                  c.get("sr", 0.0), c.get("volume", 0.0))
+                      if abs(float(v)) >= 0.02]
+            if not signed:
+                return 0.0
+            aligned = sum(1 for v in signed if (float(v) > 0) == (want > 0))
+            return round(aligned / len(signed), 3)
+        except Exception:
+            return 0.0
 
     def _range_strict_ok(self, signal, bar, frame):
         """V4.1 item 4: in a RANGING structure only (a) fresh range-EXIT
@@ -607,6 +642,24 @@ class Backtest:
                 if signal is not None and signal.direction in ("BUY", "SELL") \
                         and not self._range_strict_ok(signal, bar, frame):
                     signal = None
+                # VOTE-ALIGNMENT QUALITY gate (A/B knob BT_QUALITY_GATE): a
+                # +0.41 with all four votes agreeing is NOT the same trade as a
+                # +0.41 where trend and momentum fight each other.  Gate 1 keeps
+                # only signals where >=75% of the non-neutral votes agree with
+                # the direction.  OFF by default.
+                if signal is not None and signal.direction in ("BUY", "SELL") \
+                        and int(getattr(self.cfg, "BT_QUALITY_GATE", 0) or 0) >= 1:
+                    if self._vote_alignment(signal, signal.direction) < 0.75:
+                        signal = None
+                # SETUP-ONLY gate (A/B knob BT_SETUP_GATE): gate 1 = only clean
+                # setups (liquidity sweep / structure & dead-zone breakout /
+                # pullback), dropping bare-pattern entries.  OFF by default.
+                if signal is not None and signal.direction in ("BUY", "SELL") \
+                        and int(getattr(self.cfg, "BT_SETUP_GATE", 0) or 0) >= 1 \
+                        and not ((getattr(signal, "setup_type", "") or "") in
+                                 ("LIQUIDITY_SWEEP", "STRUCTURE_BREAKOUT",
+                                  "DEAD_ZONE_BREAKOUT", "PULLBACK_ENTRY")):
+                    signal = None
                 # ASYMMETRIC PE GATE (A/B knob BT_PE_GATE) - the PE side is the
                 # historical loser (mix rerun: CEs +393k, PEs -65k) and it
                 # fired repeatedly into an UP market on 04-Sep.  PEs are only
@@ -818,6 +871,12 @@ class Backtest:
                         plan["delta"] = getattr(leg, "delta", None)
                         plan["dte"] = getattr(leg, "dte", None)
                         plan["entry_premium_model"] = round(float(leg.premium), 2)
+                        _comps = getattr(signal, "components", {}) or {}
+                        plan["vote_trend"] = round(float(_comps.get("trend", 0.0)), 4)
+                        plan["vote_momentum"] = round(float(_comps.get("momentum", 0.0)), 4)
+                        plan["vote_sr"] = round(float(_comps.get("sr", 0.0)), 4)
+                        plan["vote_volume"] = round(float(_comps.get("volume", 0.0)), 4)
+                        plan["alignment"] = self._vote_alignment(signal, plan["direction"])
                     # item-1 'dynamic' lock arm: the arm widens with realised
                     # vol so the noise cannot arm the lock early on a hot day
                     # (same family as the vol-scaled stop).  OFF by default.
@@ -893,7 +952,10 @@ class Backtest:
                     if _s > 0 or _sp > 0:
                         _e = float(active.get("entry_premium") or 0.0)
                         _x = float(exit_price or 0.0)
-                        _unit = (_e * _s + _sp) + (_x * _s + _sp) if _sp > 0 else (_e + _x) * _s
+                        if bool(getattr(self.cfg, "BT_SPREAD_COST_ENTRY", False)):
+                            _unit = (_e * _s + _sp) if _sp > 0 else _e * _s
+                        else:
+                            _unit = (_e * _s + _sp) + (_x * _s + _sp) if _sp > 0 else (_e + _x) * _s
                         pnl -= float(active.get("quantity") or 0.0) * _unit
                 rec = {**active, "exit_premium": round(exit_price, 2), "exit_reason": "DAY_END",
                        "pnl": round(pnl, 2), "exit_time": last_sub["time"].isoformat()}

@@ -654,6 +654,29 @@ class Backtest:
                 # SETUP-ONLY gate (A/B knob BT_SETUP_GATE): gate 1 = only clean
                 # setups (liquidity sweep / structure & dead-zone breakout /
                 # pullback), dropping bare-pattern entries.  OFF by default.
+                # CE-HARDENING gate (A/B knob BT_CE_HARDEN, arm-rate analysis 05-Sep):
+                # losers concentrate on positive-score BUY/CE entries that never arm
+                # the +1pt lock.  SELL/PE is the robust side and stays unrestricted.
+                #  1 = BUY needs vote_trend>0 AND vote alignment>=0.75
+                #  2 = + score >= +0.30 (skip weak buys that fade)
+                #  3 = + RSI slope >= 0 (building momentum, not fading)
+                # EV gate applies on both windows before any promotion.
+                if signal is not None and signal.direction == "BUY" \
+                        and int(getattr(self.cfg, "BT_CE_HARDEN", 0) or 0) >= 1:
+                    _al = self._vote_alignment(signal, "BUY")
+                    _vt = float((getattr(signal, "components", {}) or {}).get("trend", 0.0))
+                    _ok = (_vt > 0.0) and (_al >= 0.75)
+                    if _ok and int(getattr(self.cfg, "BT_CE_HARDEN", 0) or 0) >= 2:
+                        _ok = float(getattr(signal, "score", 0.0) or 0.0) >= 0.30
+                    if _ok and int(getattr(self.cfg, "BT_CE_HARDEN", 0) or 0) >= 3:
+                        try:
+                            if frame is not None and len(frame) > 1 and "rsi" in frame.columns:
+                                _r1 = float(frame["rsi"].iloc[-1]); _r0 = float(frame["rsi"].iloc[-2])
+                                _ok = (_r1 == _r1) and (_r0 == _r0) and (_r1 - _r0) >= 0.0
+                        except Exception:
+                            pass
+                    if not _ok:
+                        signal = None
                 if signal is not None and signal.direction in ("BUY", "SELL") \
                         and int(getattr(self.cfg, "BT_SETUP_GATE", 0) or 0) >= 1 \
                         and not ((getattr(signal, "setup_type", "") or "") in

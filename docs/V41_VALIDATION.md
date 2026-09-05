@@ -470,3 +470,24 @@ broker has no /super/orders).
 Architecture: friend's 🟢 list matches exactly what stays; the two 🟡 that
 measured (setup weighting, vote quality) are recorded for the DIE/scoring
 layer, not gated into the engine.
+
+
+---
+
+## CE-HARDENING A/B + continuation (05-Sep evening, LAST ITEM THIS WINDOW)
+
+CE-hardening gate BT_CE_HARDEN 1..3 (BUY needs aligned votes / score>=.3 /
+RSI building) - targets the arm-rate finding (losers concentrate on
+positive-score BUY/CE entries that never arm +1pt):
+* NIFTY: H1 best - train +239.6k->+253.1k (PF 1.52), test 263.3k->257.1k
+  (PF 2.36); H2/H3 raise avgR (0.317) but cut net badly on test.
+* BN: EVERY level hurts (its CE is the good side) -> NIFTY-specific at best.
+* Win rate did NOT move (68.4/73.6 flat) - not-armed CEs are not separable
+  at entry; filters remove winners with the losers. NOT deployable.
+* CONCLUSION for next window: the only untested "fewer losers" path is
+  ENTRY-TIMING (confirmation/persistence), not entry filtering:
+  A/B "confirm-entry": enter at close+1 bar ONLY if the signal-bar close
+  holds/continues (or the premium trades above signal close by ~0.5-1pt
+  within the next bar) vs close-entry baseline.  This is exactly what the
+  bracket stop-entry (BRACKET_ENTRY_STYLE=stop, trigger = LTP + offset)
+  implements live.  Same honest harness, NIFTY train+test first.

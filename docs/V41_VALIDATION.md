@@ -505,3 +505,12 @@ session-wide finding: ~25% loser rate is structural; entry filters only
 trade volume for per-trade EV.  Knob kept OFF (a high-quality low-cadence
 mode exists if ever wanted); baseline stays net-optimal.  Remaining levers
 are size + fills + risk, as documented in GOAL_ANALYSIS.md.
+
+
+---
+
+## A-GRADE TRADE (05-Sep user add): after the daily TARGET is hit, up to
+DAILY_TARGET_COMEBACK_MAX (1-2) A-Grade trades (conf>=90, |score|>=0.30,
+structure-aligned - no counter-regime) may still fire, symmetric to the
+SL-side POST_HALT_COMEBACK.  Knob DAILY_TARGET_COMEBACK (env =1 on workers),
+day must stay clearly green.  Default OFF; risk unit checks pass.

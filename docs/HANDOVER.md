@@ -868,3 +868,56 @@ OPEN: Dhan rollingoption (5y option history) returns empty on the account
 (goal analysis depends on it).  Paper-parity env for the Monday paper
 session: PAPER_LIVE_LIKE=1 PAPER_MODEL_SPREAD=1 (PAPER_SPREAD_PER_SIDE ~0.004).
 Then bracket 1-lot test; size ladder 10 -> 12 -> 15 only on live fills.
+
+## 16. CRYPTO PROGRAM (user 05-Sep): build a similar strategy on Delta perps — NEW CHAT
+
+Goal: apply THIS window's validated methodology + architecture to crypto
+(perpetuals via Delta exchange), NOT to assume the NIFTY results port.
+
+WHAT ALREADY EXISTS in the repo (audit first, do not rebuild):
+* proxy/crypto_engine.py - full crypto engine against Delta
+  (api.delta.exchange/v2): candles, tickers, balance, orders, backtests.
+* data/crypto_*_5m.csv (BTC/ETH/SOL/XAUT/XRP USDT + daily), tests in
+  tests/test_commodity? (no - crypto tools listed below).
+* tools/: crypto_compare.py (July A/B), crypto_trend_bt.py,
+  crypto_expectation.py, crypto_adapt_ab.py, crypto_compare logs in logs/.
+* history: crypto was built, A/B'd on July 2026 = BADLY NEGATIVE, HELD by
+  user (HANDOVER 4c).  Crypto honesty notes in docs/V41_VALIDATION? no -
+  docs/BACKTEST_HONESTY.md & CRYPTOASSETS_NOTES.md + crypto logs.
+* Signal core (price_action/indicators/scoring) is index-agnostic and
+  already drives crypto_engine; exits were shared-ish (crypto trades CSV
+  shows LOCK_PROFIT/UNARMED_TIME_STOP).
+
+DECISIONS THE NEW CHAT MUST GET FROM THE USER FIRST:
+1) Symbols (BTC/ETH/SOL? top-2 per the old honesty critique), timeframe
+   (5m exists; 1m? fetch via Delta candles), test window (>1 month -
+   July-only proved nothing).
+2) Live or paper first (Delta has no sandbox? use a tiny live amount or
+   paper-account if available; repo has real Delta order code paths).
+3) Risk budget per trade, daily loss, and whether the file-based master
+   governor should span NIFTY+BN+crypto (separate exchange = separate
+   account P&L - decide).
+
+PROGRAM (port of V4.1 + DIE, with crypto-native costs):
+1. Data audit: use USDT perp series (BTCUSDT/ETHUSDT); check funding
+   history, spread, volume; fetch 1m if Delta allows (honesty: 5m exits
+   were a known gap).
+2. Honest harness for crypto_engine: cost = taker 0.05%/side + slippage +
+   FUNDING on holds; walk-forward across 2025-2026 (not one month); report
+   PF/avgR/maxDD per fold + bootstrap.
+3. A/B the geometry: lock/stop/target in PRICE points vs %; reverse-delay;
+   unarmed cut; strike-once N/A -> replace with position-once/cooldown.
+4. Port DIE advisory (regime/personality/thermostat/no-trade) as
+   crypto-native knobs (no chain/IV - perp has funding-rate as the IV-ish
+   context + real orderbook spread live).
+5. Dataset/autopsy per trade (same columns minus options fields); A-Grade
+   comeback; paper==live parity on the crypto broker (Delta live fills vs
+   paper model).
+6. Only if it survives its OWN honest walk-forward: live small, then scale.
+   If July-style losses persist through a proper multi-regime window:
+   HOLD crypto again - do NOT port NIFTY confidence.
+
+START THE NEW CHAT WITH THIS FILE (docs/HANDOVER.md) - sections 14-16 +
+docs/V41_VALIDATION.md + docs/DIE.md + docs/GOAL_ANALYSIS.md are the
+context.  Reuse tools/_v41_lib.py patterns; the crypto harness replaces the
+option-premium proxy with real perp prices.

@@ -491,3 +491,17 @@ positive-score BUY/CE entries that never arm +1pt):
   within the next bar) vs close-entry baseline.  This is exactly what the
   bracket stop-entry (BRACKET_ENTRY_STYLE=stop, trigger = LTP + offset)
   implements live.  Same honest harness, NIFTY train+test first.
+
+
+---
+
+## CONFIRM-ENTRY A/B (05-Sep FINAL this window)
+
+BT_CONFIRM_ENTRY (2-bar persistence + price progress) measured: NIFTY test
+PF 2.33->3.28 / avgR 0.278->0.453 / DD halved, losers cut ~75% - but
+trades -72% and NET -60% (NIFTY test 263k->106k; train 240k->81k; BN
+test 104k->34k); win rate 73.6->75.8 (still NOT 85%).  CONFIRMS the
+session-wide finding: ~25% loser rate is structural; entry filters only
+trade volume for per-trade EV.  Knob kept OFF (a high-quality low-cadence
+mode exists if ever wanted); baseline stays net-optimal.  Remaining levers
+are size + fills + risk, as documented in GOAL_ANALYSIS.md.

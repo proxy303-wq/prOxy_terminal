@@ -450,6 +450,8 @@ class Backtest:
             # session bar's open (the underlying index, NOT the option premium).
             day_open = float(five[0]["open"]) if five else None
 
+            _prev_dir = None
+            _prev_close = None
             for bi, bar in enumerate(five):
                 # ---- 1) exit simulation at 1m resolution ----
                 if active is not None:
@@ -606,6 +608,7 @@ class Backtest:
                 if len(frame) >= 30:
                     frame = calculate_indicators(frame)
                     signal = generate_signal(frame, self.cfg)
+                _raw_dir = signal.direction if signal is not None else "WAIT"
                 last_signal = signal
                 # STRUCTURE-DIRECTION GATE (A/B knob BT_STRUCTURE_GATE) - the
                 # 04-Sep all-PE bleed: the market was UP (structure UPTREND)
@@ -758,7 +761,18 @@ class Backtest:
                             print(f"    EXIT {rec['instrument']} REVERSE_SIGNAL @close P&L {rec['pnl']:+,.2f}")
 
                 # ---- 3) fresh entry ----
-                if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and not self._in_lunch(bar)                         and signal is not None and signal.direction in ("BUY", "SELL"):
+                _confirm_ok = True
+                if int(getattr(self.cfg, "BT_CONFIRM_ENTRY", 0) or 0) >= 1 \
+                        and signal is not None and signal.direction in ("BUY", "SELL"):
+                    # persistence: the SAME direction must have fired last bar, and the
+                    # price must have PROGRESSED in the signal direction (not faded).
+                    if _prev_dir != signal.direction or _prev_close is None:
+                        _confirm_ok = False
+                    elif signal.direction == "BUY" and not (float(bar["close"]) > _prev_close):
+                        _confirm_ok = False
+                    elif signal.direction == "SELL" and not (float(bar["close"]) < _prev_close):
+                        _confirm_ok = False
+                if active is None and (cooldown_until is None or bar["time"] >= cooldown_until)                         and self._bar_time(bar) >= self.cfg.TRADE_START                         and self._bar_time(bar) <= self.cfg.NO_NEW_ENTRY_AFTER                         and not self._in_lunch(bar)                         and signal is not None and signal.direction in ("BUY", "SELL")                         and _confirm_ok:
                     spot = float(bar["close"])
                     try:
                         from .maximals import annualized_from_per_bar, vol_per_bar_from_closes
@@ -958,6 +972,11 @@ class Backtest:
                         if self.verbose:
                             print(f"    ENTRY {plan['instrument']} {plan['direction']} {plan['lots']}L "
                                   f"@{plan['entry_premium']:.2f} conf={plan['confidence']:.0f}% {plan['setup_type']}")
+
+                # end of bar: remember raw signal + close for the confirm-entry
+                # persistence check on the NEXT bar
+                _prev_dir = _raw_dir
+                _prev_close = float(bar["close"])
 
             # end of day: force close + rollup
             if active is not None:

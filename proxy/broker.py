@@ -23,6 +23,21 @@ class Broker:
     def get_positions(self):
         raise NotImplementedError
 
+    # ---- SUPER-ORDER (bracket) execution (live only) ----
+    # Default no-ops so every broker (paper/stub) is safe; DhanBroker
+    # implements the real /super/orders calls.
+    def place_bracket(self, side, instrument, quantity, entry_price, target_price,
+                      stop_price, trailing_jump=0.0, order_type="MARKET", tag="PrOxyBracket",
+                      trigger_price=None):
+        return {"status": "REJECTED", "reason": "brackets are live-only (paper broker)"}
+
+    def cancel_bracket(self, order_id):
+        """Cancel the resting legs of a super order (any filled position stays)."""
+        return {"status": "REJECTED", "reason": "no live bracket support"}
+
+    def bracket_status(self, order_id):
+        return None
+
 
 class PaperBroker(Broker):
     def __init__(self, initial_capital):

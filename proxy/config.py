@@ -337,6 +337,20 @@ MASTER_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 # hard gate only after an A/B on the honest harness proves them.
 DESK_LAYER_ENABLED = False
 
+# ---- SUPER-ORDER (BRACKET) EXECUTION MODE (user build 05-Sep) ----
+# Places the engine's live entry as a Dhan SUPER order: entry leg + resting
+# TARGET limit + SL legs at OUR levels (screenshot-verified on NIFTY options),
+# so levels rest at the broker (no polling gap, survives engine restarts).
+# v1 semantics: engine keeps its validated exit logic; before any engine-side
+# close it CANCELS the resting bracket legs so there is never a double fill -
+# the bracket adds broker-side resting levels + crash safety, and when the
+# broker fills first the engine detects it via fills/positions.
+# Default OFF; LIVE workers enable via env (BRACKET_LIVE_ENABLED=1).
+BRACKET_LIVE_ENABLED = False
+BRACKET_ENTRY_STYLE = "market"    # "market" | "limit" (limit price = LTP +/- offset)
+BRACKET_LIMIT_OFFSET_PTS = 0.0    # limit entry below LTP (fill cheaper if it dips)
+BRACKET_PRODUCT = "INTRADAY"
+
 
 # ============================================================
 # 4. SIGNAL ENGINE (the exact spec formula)

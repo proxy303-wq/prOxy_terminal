@@ -181,6 +181,9 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                 cfg.MASTER_GOVERNOR_ENABLED = True
             if os.environ.get("DESK_LAYER_ENABLED", "0") == "1":
                 cfg.DESK_LAYER_ENABLED = True
+            if os.environ.get("BRACKET_LIVE_ENABLED", "0") == "1":
+                cfg.BRACKET_LIVE_ENABLED = True
+                cfg.BRACKET_ENTRY_STYLE = os.environ.get("BRACKET_ENTRY_STYLE", "market")
             notifier.log(
                 f"LIVE MODE ACTIVE - REAL ORDERS on the Dhan account "
                 f"(allocated {capital:,.2f} INR = balance x {_alloc:.2f}, mode from Telegram menu)", "WARN")

@@ -842,6 +842,18 @@ class PaperEngine:
         # close - the engine keeps the trade open and retries next bar
         # (recording a close that never filled would orphan the real
         # position on the account).
+        # BRACKET MODE: cancel any resting broker bracket legs BEFORE the
+        # engine places its own exit - no double fill from a residual
+        # target/SL the broker would still fire.
+        try:
+            if getattr(self, "_bracket_id", None) \
+                    and getattr(self.cfg, "BRACKET_LIVE_ENABLED", False) \
+                    and getattr(self.broker, "live", False) \
+                    and hasattr(self.broker, "cancel_bracket"):
+                self.broker.cancel_bracket(self._bracket_id)
+                self._bracket_id = None
+        except Exception:
+            pass
         if getattr(self.broker, "live", False):
             try:
                 side = "SELL" if t["direction"] == "LONG" else "BUY"
@@ -1183,10 +1195,35 @@ class PaperEngine:
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.
                         if getattr(self.broker, "live", False):
-                            res = self.broker.place_order(
-                                "BUY" if plan["direction"] == "LONG" else "SELL",
-                                plan["instrument"], plan["quantity"])
+                            _bracket_ok = False
+                            if getattr(self.cfg, "BRACKET_LIVE_ENABLED", False) \
+                                    and hasattr(self.broker, "place_bracket") \
+                                    and plan["direction"] == "LONG":
+                                try:
+                                    _eref = float(plan.get("entry_premium") or 0)
+                                    _ostyle = str(getattr(self.cfg, "BRACKET_ENTRY_STYLE", "market")).lower()
+                                    _lim = _eref - float(getattr(self.cfg, "BRACKET_LIMIT_OFFSET_PTS", 0.0) or 0.0)
+                                    res = self.broker.place_bracket(
+                                        "BUY", plan["instrument"], plan["quantity"],
+                                        entry_price=_lim if _ostyle == "limit" else 0.0,
+                                        target_price=float(plan.get("target_premium") or (_eref + 6.5)),
+                                        stop_price=float(plan.get("stop_premium") or (_eref - 5.0)),
+                                        order_type="LIMIT" if _ostyle == "limit" else "MARKET",
+                                        tag="PrOxyV41")
+                                    _bid = (res.get("orderId") or ((res.get("data") or {}).get("orderId") if isinstance(res.get("data"), dict) else None)) if isinstance(res, dict) else None
+                                    if _bid:
+                                        _bracket_ok = True
+                                        plan["bracket_id"] = _bid
+                                        self._bracket_id = _bid
+                                except Exception as _be:
+                                    self.notify("BRACKET place failed (" + str(_be)[:120] + ") - falling back", "WARN")
+                                    _bracket_ok = False
+                            if not _bracket_ok:
+                                res = self.broker.place_order(
+                                    "BUY" if plan["direction"] == "LONG" else "SELL",
+                                    plan["instrument"], plan["quantity"])
                             filled = self._order_filled(res)
+
                             if not filled:
                                 self.notify(f"GATE  LIVE order rejected: {res}")
                                 events["live_order_rejected"] = True

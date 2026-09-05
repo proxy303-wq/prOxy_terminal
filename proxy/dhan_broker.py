@@ -311,6 +311,99 @@ class DhanBroker(Broker):
         with self._lock:
             return self._api.cancel_order(order_id)
 
+    # ----------------------------------------------------------
+    # SUPER ORDER / BRACKET (entry + resting target + SL at OUR levels)
+    # ----------------------------------------------------------
+    @staticmethod
+    def build_bracket_payload(client_id, side, instrument, quantity, security_id,
+                             trading_symbol, entry_price, target_price, stop_price,
+                             trailing_jump=0.0, order_type="MARKET", tag="PrOxyBracket",
+                             trigger_price=None, product="INTRADAY"):
+        """Pure payload builder (unit-testable offline).  Mirrors the
+        Dhan super-order screen: entry LIMIT/MARKET + Target + SL at OUR levels.
+        trigger_price: optional stop-triggered entry (send only if the account/
+        API accepts it on the super-order entry leg - verify 1 lot first)."""
+        otype = (order_type or "MARKET").upper()
+        if otype not in ("MARKET", "LIMIT"):
+            otype = "MARKET"
+        payload = {
+            "dhanClientId": client_id,
+            "correlationId": (tag or "PrOxyBracket")[:30],
+            "transactionType": side.upper(),
+            "exchangeSegment": "NSE_FNO",
+            "productType": product or "INTRADAY",
+            "orderType": otype,
+            "tradingSymbol": trading_symbol,
+            "securityId": int(security_id),
+            "quantity": int(quantity),
+            "price": round(float(entry_price), 2) if otype == "LIMIT" else 0.0,
+            "targetPrice": round(float(target_price), 2),
+            "stopLossPrice": round(float(stop_price), 2),
+            "trailingJump": round(float(trailing_jump), 2),
+        }
+        if trigger_price is not None:
+            payload["triggerPrice"] = round(float(trigger_price), 2)
+        return payload
+
+    def place_bracket(self, side, instrument, quantity, entry_price, target_price,
+                      stop_price, trailing_jump=0.0, order_type="MARKET",
+                      tag="PrOxyBracket", trigger_price=None, product="INTRADAY"):
+        """Place a Dhan SUPER order (bracket) on NSE_FNO options.  Returns the
+        broker response dict; levels rest at the broker.  The engine cancels
+        these legs before any engine-side close (no double fill)."""
+        self._ensure_valid_token()
+        instrument = self.normalize_symbol(instrument)
+        security_id, trading_symbol = self._resolve_row(instrument)
+        if not security_id or not trading_symbol:
+            return {"status": "REJECTED",
+                    "reason": "security id/trading symbol not found for " + str(instrument)}
+        parts = instrument.upper().split()
+        intended_type = parts[3] if len(parts) >= 4 else ""
+        intended_strike = parts[2] if len(parts) >= 3 else ""
+        res_type = str(trading_symbol).rsplit("-", 1)[-1].upper() if trading_symbol else ""
+        if res_type != intended_type or str(intended_strike) not in str(trading_symbol):
+            return {"status": "REJECTED",
+                    "reason": "security mismatch for bracket: " + str(instrument) + " vs " + str(trading_symbol)}
+        payload = self.build_bracket_payload(
+            self.client_id, side, instrument, quantity, security_id, trading_symbol,
+            entry_price, target_price, stop_price, trailing_jump=trailing_jump,
+            order_type=order_type, tag=tag, trigger_price=trigger_price, product=product)
+        print(("[bracket] %s %s qty %s entry %s tgt %s sl %s" % (
+            side, instrument, quantity, payload["price"], payload["targetPrice"], payload["stopLossPrice"])), flush=True)
+        with self._lock:
+            res = self._api.dhan_http.post("/super/orders", payload)
+        if isinstance(res, dict):
+            res.setdefault("securityId", int(security_id))
+            res.setdefault("tradingSymbol", trading_symbol)
+        return res
+
+    def cancel_bracket(self, order_id):
+        """Cancel the RESTING legs of a super order (a filled entry position stays).
+        We cancel the whole bracket so no residual target/SL can fire later."""
+        if not order_id:
+            return {"status": "OK", "reason": "no bracket id"}
+        try:
+            with self._lock:
+                res = self._api.dhan_http.delete("/super/orders/" + str(order_id) + "/ALL")
+            return res if isinstance(res, dict) else {"status": "OK", "raw": res}
+        except Exception as exc:
+            return {"status": "ERROR", "reason": str(exc)}
+
+    def bracket_status(self, order_id):
+        if not order_id:
+            return None
+        try:
+            with self._lock:
+                res = self._api.dhan_http.get("/super/orders")
+            data = (res or {}).get("data") or []
+            if isinstance(data, list):
+                for row in data:
+                    if str(row.get("orderId")) == str(order_id):
+                        return row
+            return None
+        except Exception:
+            return None
+
     def kill_switch(self):
         """Emergency: cancel all open orders / stop trading."""
         try:

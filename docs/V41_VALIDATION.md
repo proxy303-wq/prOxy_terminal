@@ -363,3 +363,41 @@ Two concrete corrections the probe produced:
 2. The 2-year backtest therefore still needs the rollingoption data to exist on the account (path A).  Until then the delta-premium proxy remains the only 2-year option-price source; the REAL-premium evidence available now is: reports/option_ltp_2026-08-24..28 (archived while active) + the LIVE 01-04 Sep real-fill logs + the archive path (tools/opt_history.py --archive) now capturing the ACTIVE band each day going forward.
 
 Repo additions: tools/opt_history.py (both paths, cached, paced, correct underlying ids).  Next step when entitlement is confirmed: extend it into the full real-premium Backtest (tools/_v41_realopt_bt.py stub) so every V4.1 number can be rerun on real option bars.
+
+
+---
+
+## SUPER-ORDER (BRACKET) EXECUTION MODE — build (05-Sep, markets closed)
+
+What shipped (commit to follow):
+* proxy/dhan_broker.py: build_bracket_payload (pure, unit-tested) +
+  place_bracket (POST /super/orders) + cancel_bracket (DELETE .../ALL) +
+  bracket_status.  Payload mirrors the Dhan screen (entry + targetPrice +
+  stopLossPrice + trailingJump) on NSE_FNO/INTRADAY.
+* proxy/broker.py + paper broker: safe no-op bracket defaults (live-only).
+* proxy/engine.py: when BRACKET_LIVE_ENABLED (live only) the ENTRY is placed
+  as a SUPER order with target/SL at OUR levels; BEFORE any engine-side
+  close the resting bracket legs are cancelled (no double fill).  Engine's
+  validated lock/reverse/time logic stays in charge; the bracket adds
+  broker-side resting levels + crash safety, and if the broker fills first
+  the engine's normal fill/position checks reconcile it.
+* config knobs: BRACKET_LIVE_ENABLED (default OFF), BRACKET_ENTRY_STYLE
+  ("market" | "limit"), BRACKET_LIMIT_OFFSET_PTS; worker env enables it.
+* tests/test_bracket.py PASS (payload verified against the screenshot
+  numbers: entry 261.45 / target 268.10 / SL 255.00 / 9 lots / trail 1.0).
+
+MONDAY RUNBOOK (paper first, 1 lot):
+1. env on the worker: BRACKET_LIVE_ENABLED=1 BRACKET_ENTRY_STYLE=limit
+   BRACKET_LIMIT_OFFSET_PTS=0.5   (start limit ~0.5pt under LTP)
+2. Paper/live-1-lot: confirm /super/orders accepts the payload (entry leg
+   LIMIT; if a trigger-above entry is wanted later, verify triggerPrice on
+   the super-order entry leg with 1 lot BEFORE real size).
+3. Confirm the bracket orderId lands on the trade + Telegram ENTRY shows it;
+   watch that engine-side closes first cancel the bracket (log line).
+4. If /super/orders rejects (entitlement/static-IP/product), the engine
+   falls back to the normal order path automatically (log WARN) - no dead
+   trades.
+Notes: static-IP whitelisting is required for order APIs (already set for
+the box); productType INTRADAY mirrors existing orders.  Partial scale-out
+("Book Profits 50% x2") is NOT yet in the payload - engine partial-profit
+(off by default) covers that; wire broker partials after v1 proves out.

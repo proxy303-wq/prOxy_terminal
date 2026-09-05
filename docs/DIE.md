@@ -179,3 +179,41 @@ cannot be A/B'd on 2y 5m/1m history - it is a LIVE-ONLY experiment
 (Note: OFF-row nets drifted a few hundred INR vs the original baseline -
 identical trade counts/exits; sub-0.1% float-level noise across the pool
 runs, immaterial to the conclusion.)
+
+
+---
+
+## ENTRY-JUDGMENT SCORECARD v1 (2026-09-05) - measurement setup live
+
+tools/_v41_die_judge.py replays the EXACT live DecisionEngine over the 2y
+item-9 datasets (4123 trades) with day-context (open, realised day P&L,
+consecutive losses) derived from the tape.  Scored rows:
+reports/v41/die_judgment_scored.csv / .json
+
+RESULTS (decision logic == live):
+* decision BANDS do NOT separate: NORMAL avgR 0.098 vs SMALL 0.106 vs WAIT
+  0.233 (n=33) - no monotone discrimination; the weights are prose, not yet
+  signal.
+* FLAGS (now 58/4123 = 1.4% base rate after two prunes): flagged avgR 0.137
+  vs clean 0.102 - flags do not mark underperformers (slightly better, n
+  tiny).  counter-regime cells: CE-into-DOWN n=24 avgR 0.252 (they win!),
+  PE-into-UP n=34 avgR 0.055 (weakest cell, as item 3 said).
+* THERMOSTAT is INVERTED on this tape: YELLOW/ORANGE (post-loss) trades
+  avgR 0.266/0.228 vs GREEN 0.088 - cutting size after a -0.2..-0.45% day
+  would have skipped the tape's best entries.  Its value is tail protection
+  (RED), not mid-day discrimination.
+* The loop already proved its worth: two shipped rules were REMOVED after
+  measurement - VWAPEXT (fired on ~99% of NIFTY test, zero lift) and
+  nearest-S/R-as-contradiction (a nearest level always exists).  S/R now
+  only counts when price is AT the level (<=1 ATR).
+
+INTERPRETATION: consistent with items 3/9 and Phase 2a - on the features
+this tape records, no entry-judgment filter separates winners from losers,
+so NO gate is promoted.  The judgment layer stays advisory and is now being
+*measured* instead of assumed.  Two principled next levers:
+  1) live-only context the 2y tape cannot see (real chain spread/IV at the
+     entry tick) - already recorded on every live trade via the die_* entry
+     fields + autopsy log; the scorecard reruns over the tracker DB later.
+  2) cell-quality weighting grounded in the item-3 train/test agreement
+     (DOWNTREND x PE / UPTREND x CE strong on BOTH windows) - must be
+     validated window-consistent before it becomes a weight.

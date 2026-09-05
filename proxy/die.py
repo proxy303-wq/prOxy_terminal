@@ -290,16 +290,20 @@ class DecisionEngine:
             bear.append("counter-regime: buying a DOWNTREND")
         if d == "SELL" and trend == "UPTREND":
             bear.append("counter-regime: selling an UPTREND (04-Sep bleed cell)")
-        v = ctx.get("vwap_dist_atr")
-        if v is not None:
-            if d == "BUY" and v > 1.5:
-                bear.append("extended above VWAP (%.1f ATR)" % v)
-            if d == "SELL" and v < -1.5:
-                bear.append("extended below VWAP (%.1f ATR)" % v)
-        if ctx.get("near_resistance") is not None and d == "BUY":
-            bear.append(f"major resistance close ({ctx['near_resistance']:.0f})")
-        if ctx.get("near_support") is not None and d == "SELL":
-            bear.append(f"major support close ({ctx['near_support']:.0f})")
+        # VWAPEXT flag REMOVED 05-Sep (scorecard v1 measured it): a blanket
+        # "extended from VWAP" bear fired on ~99% of NIFTY-test trades with
+        # ZERO lift vs clean (avgR 0.202 both) and contradicts V4.1 item 5
+        # (above-VWAP was BN's BEST cell; context-only, never a flag).
+        # S/R is a contradiction ONLY when price is AT the level (<=1.0 ATR
+        # away) - a nearest level at 2 ATR is not a wall.  [REPO] swing/S-R
+        # levels; the scorecard v1 (05-Sep) measured that flagging any nearest
+        # level fires on ~every trade and carries no signal.
+        sr_res = ctx.get("sr_res_atr")
+        sr_sup = ctx.get("sr_sup_atr")
+        if d == "BUY" and sr_res is not None and float(sr_res) <= 1.0:
+            bear.append("price AT resistance (%.1f ATR below)" % float(sr_res))
+        if d == "SELL" and sr_sup is not None and float(sr_sup) <= 1.0:
+            bear.append("price AT support (%.1f ATR above)" % float(sr_sup))
         s = ctx.get("spread_pct_mid")
         if s is not None and s > 0.5:   # [REPO] V4.1 item 2: >0.5% one-sided eats the 5pt edge
             bear.append(f"spread {s:.2f}% of mid eats the stop")

@@ -412,3 +412,22 @@ legs).  Rule: enable bracket XOR engine-partial.  Monday test ladder:
 1) 1-lot bracket (limit + market + stop styles) on paper/live-small,
 2) confirm stop-style triggerPrice accepted,
 3) confirm cancel-before-close log line, 4) then enable full size.
+
+
+---
+
+## PAPER == LIVE parity (05-Sep, user request)
+
+Paper now mirrors live where it matters, behind knobs (default OFF so
+backtests/data-mode stay byte-identical):
+* PAPER_LIVE_LIKE=1 -> paper applies the LIVE-only gates (daily trade cap,
+  daily-target stop) via the same check_trade_allowed live path.
+* PAPER_MODEL_SPREAD=1 + PAPER_SPREAD_PER_SIDE -> paper fills pay the
+  execution-aware spread model that the honest backtest uses (item-2):
+  entry at the ask once; MARKET exits (time/reverse/day-end) at the bid
+  side; LIMIT/level exits free.  Recorded as paper_spread_cost per trade.
+Monday live-paper runbook: set PAPER_LIVE_LIKE=1 PAPER_MODEL_SPREAD=1
+(PAPER_SPREAD_PER_SIDE ~0.004) on the worker BEFORE the paper session, so
+the paper P&L you watch is the P&L live would produce with the bracket/
+limit execution; live bracket placement itself remains live-only (paper
+broker has no /super/orders).

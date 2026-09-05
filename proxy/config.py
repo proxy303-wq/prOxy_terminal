@@ -350,6 +350,19 @@ BRACKET_LIVE_ENABLED = False
 BRACKET_ENTRY_STYLE = "market"    # "market" | "limit" (limit price = LTP +/- offset)
 BRACKET_LIMIT_OFFSET_PTS = 0.0    # limit entry below LTP (fill cheaper if it dips)
 BRACKET_TRIGGER_OFFSET_PTS = 1.0  # stop entry: trigger ABOVE LTP (confirmation jump)
+
+# ---- PAPER == LIVE parity (user request 05-Sep) ----
+# Paper mode should cost what live costs.  When PAPER_LIVE_LIKE is on the
+# paper engine ALSO applies the live-only gates (daily trade cap, daily-
+# target stop) and PAPER_MODEL_SPREAD makes fills pay the execution-aware
+# spread model: entry at the ask once, MARKET exits at the bid side,
+# LIMIT/level exits (target/lock fills at our levels) free - the same model
+# the honest backtest uses (item-2 exec-aware).  Default OFF so backtests
+# and data-mode paper stay exactly as before; the Monday live-paper runbook
+# enables both via env.
+PAPER_LIVE_LIKE = False
+PAPER_MODEL_SPREAD = False
+PAPER_SPREAD_PER_SIDE = 0.004     # one-sided fraction of premium (measured median ~0.4-0.9%)
 BRACKET_PRODUCT = "INTRADAY"
 
 

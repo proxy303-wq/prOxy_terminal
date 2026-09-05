@@ -835,6 +835,24 @@ class PaperEngine:
         # transaction cost cushion
         pnl -= t["quantity"] * exit_price * self.cfg.TRANSACTION_COST_PCT
         pnl -= t["quantity"] * t["entry_premium"] * self.cfg.TRANSACTION_COST_PCT
+        # PAPER==LIVE parity (05-Sep): execution-aware spread when PAPER_MODEL_SPREAD
+        # is on for non-live trades - entry at ask once; MARKET exits (time/reverse/
+        # day-end) also at the bid side; LIMIT/level exits free (item-2 exec-aware).
+        _paper_sp = 0.0
+        if (not getattr(self.broker, "live", False)) and bool(getattr(self.cfg, "PAPER_MODEL_SPREAD", False)):
+            try:
+                _s = float(getattr(self.cfg, "PAPER_SPREAD_PER_SIDE", 0.004) or 0.0)
+                if _s > 0:
+                    _q = float(t.get("quantity") or 0)
+                    _pe = float(t.get("entry_premium") or 0)
+                    _px = float(exit_price or 0)
+                    _unit = _pe * _s
+                    if str(exit_reason or "") in ("REVERSE_SIGNAL", "DAY_END") or str(exit_reason or "").startswith("TIME_STOP"):
+                        _unit += _px * _s
+                    _paper_sp = _q * _unit
+                    pnl -= _paper_sp
+            except Exception:
+                _paper_sp = 0.0
         # partial profit already booked earlier (Miner Ch 7 / McMillan)
         pnl += float(t.get("pnl_booked", 0.0) or 0.0)
 
@@ -901,6 +919,7 @@ class PaperEngine:
             "exit_time": bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"]),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl / max(t["entry_premium"] * t["quantity"], 1e-9) * 100.0, 3),
+            "paper_spread_cost": round(_paper_sp, 2) if _paper_sp else 0.0,
         }
         self.tracker.add_trade(record, self.state, self.cfg)
 # ATHENA DIE autopsy (docs/DIE.md): keep every trade story for the learning loop
@@ -1108,16 +1127,16 @@ class PaperEngine:
                                     f"to {_used_cand:g} ({plan['option_type']})", "TRADE")
                                 gate = check_trade_allowed(self.state, self.cfg, signal=signal,
                                                            pending_trade=plan,
-                                                           live=bool(getattr(self.broker, "live", False)))
+                                                           live=(bool(getattr(self.broker, "live", False)) or bool(getattr(self.cfg, "PAPER_LIVE_LIKE", False))))
                             else:
                                 gate = RiskCheck(False, f"strike {plan['strike']} + ITM shifts all used today (no averaging)")
                                 events["strike_blocked"] = True
                         else:
                             gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan,
-                                                       live=bool(getattr(self.broker, "live", False)))
+                                                       live=(bool(getattr(self.broker, "live", False)) or bool(getattr(self.cfg, "PAPER_LIVE_LIKE", False))))
                     else:
                         gate = check_trade_allowed(self.state, self.cfg, signal=signal, pending_trade=plan,
-                                                   live=bool(getattr(self.broker, "live", False)))
+                                                   live=(bool(getattr(self.broker, "live", False)) or bool(getattr(self.cfg, "PAPER_LIVE_LIKE", False))))
                     ml_ok = True
                     ml_note = ""
                     if gate.allowed and self.ml_predict is not None:

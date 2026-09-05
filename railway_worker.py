@@ -184,6 +184,14 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             if os.environ.get("BRACKET_LIVE_ENABLED", "0") == "1":
                 cfg.BRACKET_LIVE_ENABLED = True
                 cfg.BRACKET_ENTRY_STYLE = os.environ.get("BRACKET_ENTRY_STYLE", "market")
+            if os.environ.get("PAPER_LIVE_LIKE", "0") == "1":
+                cfg.PAPER_LIVE_LIKE = True
+            if os.environ.get("PAPER_MODEL_SPREAD", "0") == "1":
+                cfg.PAPER_MODEL_SPREAD = True
+                try:
+                    cfg.PAPER_SPREAD_PER_SIDE = float(os.environ.get("PAPER_SPREAD_PER_SIDE", "0.004"))
+                except Exception:
+                    pass
             notifier.log(
                 f"LIVE MODE ACTIVE - REAL ORDERS on the Dhan account "
                 f"(allocated {capital:,.2f} INR = balance x {_alloc:.2f}, mode from Telegram menu)", "WARN")

@@ -34,6 +34,7 @@ MENU_KEYBOARD = [
     ["💰 Balance", "📈 Prices"],
     ["🌡 Sentiment", "📊 Daily Report"],
     ["🚀 BTST Picks", "🎛 Mode"],
+    ["📉 Futures", "📗 FINNIFTY"],
     ["❓ Help"],
 ]
 
@@ -223,6 +224,8 @@ class TelegramMenu:
             "🎛 mode": self._mode, "❓ help": self._help,
             "🟢 go live": self._ask_live, "⚪ paper": self._switch_paper,
             "🚀 btst picks": self._btst,
+            "📉 futures": self._futures,
+            "📗 finnifty": self._finnifty,
             "🟢 go live futures": self._futures_ask_live,
             "⚪ paper futures": self._futures_paper,
             "🟢 go live finnifty": self._finnifty_ask_live,
@@ -244,12 +247,13 @@ class TelegramMenu:
         _send(chat_id,
               "🤖 <b>PrOxy Terminal Menu</b>\n\n"
               "💰 <b>Balance</b> - Dhan funds\n"
-              "📈 <b>Prices</b> - live NIFTY / BANKNIFTY\n"
+              "📈 <b>Prices</b> - live NIFTY / BANKNIFTY / FINNIFTY\n"
               "🌡 <b>Sentiment</b> - market gauge vs prev close\n"
               "📊 <b>Daily Report</b> - today's trades + P&L\n"
               "🎛 <b>Mode</b> - NIFTY PAPER / LIVE (LIVE needs a confirm step)\n"
-              "📉 <b>Futures</b> - futures engine status / mode\n\n"
-              "Commands: /balance /prices /sentiment /report /mode /futures",
+              "📉 <b>Futures</b> - futures engine status / mode\n"
+              "📗 <b>FINNIFTY</b> - FINNIFTY engine status / mode\n\n"
+              "Commands: /balance /prices /sentiment /report /mode /futures /finnifty",
               MENU_KEYBOARD)
 
     def _balance(self, chat_id):

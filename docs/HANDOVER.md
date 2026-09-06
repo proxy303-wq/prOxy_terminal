@@ -921,3 +921,29 @@ START THE NEW CHAT WITH THIS FILE (docs/HANDOVER.md) - sections 14-16 +
 docs/V41_VALIDATION.md + docs/DIE.md + docs/GOAL_ANALYSIS.md are the
 context.  Reuse tools/_v41_lib.py patterns; the crypto harness replaces the
 option-premium proxy with real perp prices.
+
+## 17. FINNIFTY OPTIONS CHECK (user 05-Sep) — NEW CHAT (do after NIFTY fill measurement)
+
+Question: BN failed on FILLS (spread ~0.5% kills it); do other NIFTY index
+options work?  Honest scan says only FINNIFTY is worth ONE look; SENSEX/
+MIDCPNIFTY etc are thinner -> wider spreads -> worse, not better.
+
+REALITY / constraints:
+* Repo already has finnifty_config + sensex_config (proxy/dual.py) ready.
+* Data today: only ~64 days of 5m for FINNIFTY/SENSEX, NO 1m, no 2y
+  history -> cannot do an honest walk-forward yet.
+* FINNIFTY index id 27 (Dhan), Friday weekly expiry, lot 40, step 50.
+
+PLAN (cheap, disciplined - drop early if pre-spread edge is not there):
+1. Fetch FINNIFTY 5m + 1m history (same bulk path NIFTY/BN used; verify
+   Dhan charts entitlement window like NIFTY's 2y fetch).
+2. Run the honest mid-model walk-forward with the FINNIFTY profile
+   (tools/_v41_lib.py pattern, both windows, 1m exits).
+3. GATE: if pre-spread test PF is not clearly >= ~1.4-1.5 mid (i.e. at
+   least NIFTY's raw edge), STOP - do not spend spread-capture effort.
+4. If it passes: measure REAL FINNIFTY chain spreads (per-strike capture,
+   like the NIFTY logger) BEFORE any expectation - the BN lesson says the
+   fill wall decides, and smaller products usually lose harder.
+
+PRIORITY: NIFTY fill measurement (Monday paper) comes FIRST - NIFTY is the
+live engine; FINNIFTY is a scout-only side quest.

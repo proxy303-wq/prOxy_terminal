@@ -26,7 +26,7 @@
 (
   while true; do
     echo "[supervisor] starting railway_worker.py --variant finnifty (paper until mode_finnifty.json says live)"
-    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FINNIFTY:-0.3}" timeout 12h python railway_worker.py --variant finnifty
+    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FINNIFTY:-0.3}" PAPER_LIVE_LIKE=1 PAPER_MODEL_SPREAD=1 PAPER_SPREAD_PER_SIDE=0.004 timeout 12h python railway_worker.py --variant finnifty
     echo "[supervisor] finnifty worker exited (code $?) - restarting in 30s"
     sleep 30
   done
@@ -35,7 +35,7 @@
 (
   while true; do
     echo "[supervisor] starting railway_worker.py --variant futures (PAPER until mode_futures.json + FUTURES_ALLOW_LIVE + fill gate)"
-    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FUTURES:-0.3}" timeout 12h python railway_worker.py --variant futures
+    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FUTURES:-0.3}" PAPER_LIVE_LIKE=1 timeout 12h python railway_worker.py --variant futures
     echo "[supervisor] futures worker exited (code $?) - restarting in 30s"
     sleep 30
   done

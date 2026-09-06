@@ -42,7 +42,7 @@ from .config import (FORCE_EXIT_TIME, NO_NEW_ENTRY_AFTER, TRADE_START)
 from .data import load_csv
 from .exits import check_exits
 from .indicators import calculate_indicators
-from .risk import apply_daily_pnl, current_equity, risk_budget
+from .risk import apply_daily_pnl, check_trade_allowed, current_equity, risk_budget
 from .scoring import generate_signal
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -437,6 +437,17 @@ class FuturesEngine:
         # 2) fresh entry
         if self.active is None and signal is not None                 and signal.direction in ("BUY", "SELL")                 and self._halts_ok()                 and (self.cooldown_until is None
                      or bar["time"] >= self.cooldown_until)                 and TRADE_START <= self._bar_time(bar) <= NO_NEW_ENTRY_AFTER                 and not self._in_lunch(bar):
+            # PAPER == LIVE (user rule): when PAPER_LIVE_LIKE is set, the
+            # paper session applies the same LIVE-only discipline as real
+            # money - daily trade cap + daily-target stop (risk module),
+            # exactly like engine.py passes live=(broker.live or PAPER_LIVE_LIKE).
+            if (getattr(self.broker, "live", False)
+                    or bool(getattr(self.cfg, "PAPER_LIVE_LIKE", False))):
+                _gate = check_trade_allowed(self.state, self.cfg, signal=signal,
+                                            pending_trade=None, live=True)
+                if not _gate.allowed:
+                    self.log(f"GATE  paper-live-like: {_gate.reason}", "INFO")
+                    return events
             plan = self._plan(signal, spot)
             if plan is None:
                 return events

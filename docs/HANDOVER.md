@@ -947,3 +947,34 @@ PLAN (cheap, disciplined - drop early if pre-spread edge is not there):
 
 PRIORITY: NIFTY fill measurement (Monday paper) comes FIRST - NIFTY is the
 live engine; FINNIFTY is a scout-only side quest.
+
+## 18. INDEX FUTURES SCALP (user 05-Sep) — NEW CHAT: NIFTY futures vs options
+
+Hypothesis (from this session's evidence): the option build's biggest cost
+was the SPREAD-IN-PREMIUM tax (realistic fills cut modeled PF 2.32 -> 1.3-1.7;
+BN died).  Index FUTURES trade the index itself: no premium spread fat, no
+theta/vega/gamma, deep book (~0.5-2 index pts wide) -> likely retains more of
+the modeled directional edge than options did.  UNPROVEN - needs the same
+honest validation with index-point geometry.
+
+PLAN (indicative first, cheap - uses existing NIFTY 5m/1m as futures proxy):
+1. Same signal engine; exits in INDEX POINTS.  Calibrate geometry:
+   5pt premium stop ~= delta*index? (premium pt vs index pt: 1 index pt ~
+   0.5-1 premium pt at delta ~0.5-0.6) -> A/B stop in {5, 8, 10, 12} index
+   pts and target in {6.5, 10, 13} (R:R ~1.3), lock/floor/trail in index pts
+   (e.g. arm 1-2 pts) - all as BT_ knobs like the option A/Bs.
+2. Costs: futures brokerage (~Rs20-40/order) + slippage ~1 index pt + no
+   STT-at-open; 1m exits; honest walk-forward both windows; compare to the
+   option baseline (NIFTY test ~PF 2.3 mid / ~1.3-1.7 realistic) on the SAME
+   trade set where possible.
+3. Sizing reality: NIFTY futures lot 75, margin ~2L/lot -> decide risk/trade
+   (0.5% of 4.1L = ~2k -> ~5-8 index pts x 75) and if the file-based governor
+   extends to futures on the same account.
+4. Gate: if indicative PF is not clearly > option-realistic (~1.5+) across
+   both windows, drop it (same discipline as every A/B this repo now runs).
+5. If it passes: decide live path (Dhan supports NSE_FNO futures orders -
+   same broker/bracket pattern could apply) and paper==live parity.
+
+Priority order for new chats: NIFTY fills/ladder (§15) -> then EITHER
+futures (§18) or crypto (§16)/FINNIFTY (§17) per user interest.  BTST/swing
+stays on hold until NIFTY proves itself.

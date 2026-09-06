@@ -79,9 +79,15 @@ def futures_config():
     c.FUT_BROKERAGE_PER_ORDER = 30.0       # INR per order (Dhan futures)
     c.TRANSACTION_COST_PCT = 0.0           # % of notional N/A for futures
     c.BT_FIXED_FEE_PER_SIDE = 0.0
-    # ---- sizing ----
-    c.DEFAULT_LOTS = 1                     # margin ~2L/lot: start 1, cap 2
-    c.MAX_LOTS = 2                         # hard cap (whole-account margin)
+    # ---- sizing (USER STANDARD 06-Sep: "whatever possible from margin",
+    # upsize/downsize on live performance) ----
+    # The worker computes DEFAULT_LOTS at each session from the allocated
+    # basis vs the per-lot margin: lots = floor(basis / MARGIN_PER_LOT),
+    # clamped to [1, MAX_LOTS].  NIFTY futures margin ~2L/lot -> 1 lot on a
+    # ~3.5L basis, 2 lots if the basis clears ~4.4L (MAX_LOTS hard cap).
+    c.FUTURES_MARGIN_PER_LOT = 200_000.0   # ~2L/lot (Dhan); env-overridable
+    c.DEFAULT_LOTS = 1                     # recomputed from margin at session open
+    c.MAX_LOTS = 2                         # hard cap (whole-account margin safety)
     c.RISK_PER_TRADE_PCT = 0.0050          # 0.5% of the allocated capital
     c.RISK_DD_TAPER = False                # off until live sizing is settled
     c.MAX_DAILY_LOSS_PCT = 0.0100

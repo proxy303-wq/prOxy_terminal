@@ -682,6 +682,26 @@ spread evidence earns it; NIFTY's live-proven edge gets the smallest slice
 by the user's choice.  Warm-grid evidence for the per-engine contribution
 to the 87.5k target is a CEILING, not a guarantee (fills decide).
 
+### LOT STANDARDS + CONFIG UNIFICATION (2026-09-06, user decision)
+
+DEFAULT_LOTS ceilings: NIFTY 4 (repo + box config unified), FINNIFTY 6
+(dual.py), FUTURES margin-driven: lots = floor(allocated-basis /
+FUTURES_MARGIN_PER_LOT ~2L), clamped [1, MAX_LOTS=2] at session open
+("whatever possible from margin", up/downsize by live performance via the
+envs).  Repo proxy/config.py was aligned to the box's validated LIVE
+profile (was still data-mode: NO_STOP True/conf 0/lots 8/arm 2.0) - the
+root cause of the 06-Sep near-miss where a full deploy would have opened
+live without stops.  Repo config == box config now; full tarball deploys
+are safe again.
+
+SIZING REALITY (0.5% risk budget trims below the lot ceilings): NIFTY at
+the 20% basis (~1.4L on 7L) runs ~2 lots; full 4 lots needs >= ~2.6L
+basis.  FINNIFTY 6-lot ceiling ~3 lots by budget on 2.1L; real premium/
+spread still unmeasured (paper day-1 captures).  Futures 1 lot on 3.5L
+basis.  NOTE: harness warm nets (TRAIN +1,487,195 / TEST +827,091) were
+recorded at the old DEFAULT_LOTS=8 basis - per-R/PF/win unchanged; at the
+4-lot standard the rupee nets scale ~x0.57.
+
 ### SUPER-ORDER / BRACKET ENTRIES - futures + option enable staged (06-Sep)
 
 proxy/dhan_broker.py: place_resolved_bracket() - SUPER-order placement for

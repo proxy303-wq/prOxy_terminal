@@ -62,8 +62,8 @@ MAX_TRADES_PER_STRIKE = 1       # STRICT strike-once (user decision 04-Sep: no
 # 62/38 = stricter "RSI > 70 or < 30 confirms trend strength" reading.
 # PAPER DATA MODE (2026-08-31): fully open (0/100) - every signal is taken
 # for ML training data.  Restore 50/50 (or 45/55) for live trading.
-RSI_ENTRY_GATE_BULL = 0.0
-RSI_ENTRY_GATE_BEAR = 100.0
+RSI_ENTRY_GATE_BULL = 50.0
+RSI_ENTRY_GATE_BEAR = 50.0
 
 # ---- DUAL-TIMEFRAME MOMENTUM GATE (from Robert Miner, "High Probability
 # Trading Strategies", Ch.2 - Table 2.1) ----
@@ -114,12 +114,12 @@ TAPER_FACTOR = 0.8             # risk x 0.8 per step (2.0% -> 1.6% -> 1.28%)
 # and let each trade run its FULL course (to lock-profit / target / the
 # 15:15 force-exit) so the ML sees the true outcome distribution, NOT one
 # truncated by a 5pt stop.  PAPER ONLY - never live with this.
-NO_STOP_LOSS = True
+NO_STOP_LOSS = False
 
 # Trend-strength gate: BUY/SELL only when ADX >= MIN_TREND_ADX (0 = off).
 # PAPER DATA MODE: 0 = every signal (the walk-forward-validated 18 is the
 # live robustness setting; data mode takes everything for the ML).
-MIN_TREND_ADX = 0.0
+MIN_TREND_ADX = 18.0
 
 # --- Time filters (IST) ---
 TRADE_START        = dt_time(9, 15)     # first tradable moment
@@ -164,7 +164,7 @@ LOCK_TRAIL_STEP_PCT = 0.0020    # floor = peak - 0.2% once armed (%-mode)
 TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
 # points-mode lock (SL_MODE="points"): arm at +2pt, floor at +1pt, trail
 # at peak - 1pt - so a winner can actually run to the 6-7pt target
-LOCK_ARM_POINTS = 2.0
+LOCK_ARM_POINTS = 1.0
 LOCK_FLOOR_POINTS = 1.0
 LOCK_TRAIL_STEP_POINTS = 1.0
 
@@ -204,7 +204,7 @@ SL_POINTS = 5.0                  # stop distance in absolute premium points (R:R
 # to be noise; delay=1 turned the test window +47k/PF 1.20 into +301k/PF
 # 2.45 (74% win) and held OOS on the train window (+244k/PF 1.41 vs -147k
 # for instant).  LIVE box runs 1 (set by tools/_live_flip.py).
-REVERSE_EXIT_DELAY_BARS = 0
+REVERSE_EXIT_DELAY_BARS = 1
 
 # INDEX FEED TRANSPORT (04-Sep): False = Dhan REST poller (THE DEFAULT -
 # proven live 01/04-Sep).  True = Dhan WebSocket marketfeed (tick-pushed).
@@ -262,7 +262,7 @@ EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
 # otherwise bleed to the 15:15 time-stop (the -17.7k day).
 # PAPER DATA MODE (2026-08-31): 0 = no time-cut, losers run to force-exit
 # (ML data collection wants the full outcome, not a 20-min truncation).
-MAX_UNARMED_BARS = 0
+MAX_UNARMED_BARS = 4
 
 # ---- VOLATILITY MODEL for the maximals stops ----
 # "window" = flat realized std over MAXIMALS_VOL_WINDOW bars
@@ -395,7 +395,7 @@ SCORE_VOLUME_W   = 0.20
 SCORE_BUY_THRESHOLD  =  0.15
 SCORE_SELL_THRESHOLD = -0.15
 
-MIN_CONFIDENCE_PCT   = 0.0     # PAPER DATA MODE: 0 = take every signal
+MIN_CONFIDENCE_PCT   = 65.0     # PAPER DATA MODE: 0 = take every signal
                                # (live = 60-70; "Signal Strength > 70%" plan rule)
 MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
 
@@ -403,7 +403,7 @@ MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
 # weakness - structure DOWNTREND or RSI < PE_WEAKNESS_RSI (40) - so puts
 # never fire into a rising market (the 04-Sep all-PE bleed).  BUY/CE stays
 # unrestricted.  A/B: net -1..-3%, PF up; LIVE box runs True.
-PE_WEAKNESS_GATE = False
+PE_WEAKNESS_GATE = True
 PE_WEAKNESS_RSI = 40.0
 
 # ---- DAY-DIRECTION GATE (Miner p.13 / Goodman daily-trend, A/B 02-Sep) ----
@@ -522,7 +522,7 @@ LOTS_TARGET       = (8, 8)      # the 8-lot operating band: uses the FULL 0.5%
 # +16.2k -> +23.1k, June +35.0k -> +52.8k on NIFTY at same PF ~2.5; BANKNIFTY
 # July 5m +48.9k -> +100.3k (PF 1.70 -> 2.25).  Risk/trade stays <= 0.5% of
 # equity (the plan's rule) - the engine was under-sizing at 5 lots.
-DEFAULT_LOTS      = 8
+DEFAULT_LOTS      = 4
 
 # Option liquidity gates (paper validation)
 MIN_OPTION_VOLUME = 100

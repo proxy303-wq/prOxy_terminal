@@ -146,8 +146,12 @@ def finnifty_config():
     c.ML_LAB_ENABLED = False
     c.ML_ENABLED = False
     c.META_ENABLED = False
-    c.DEFAULT_LOTS = 1                 # monthly notional is big (lot 60 x ~400+):
-                                       # start ONE lot paper until fills measured
+    c.DEFAULT_LOTS = 6                 # USER STANDARD (06-Sep): 6 lots standard for
+                                       # FINNIFTY (up/downsize on live performance).
+                                       # NOTE: the 0.5% risk budget still trims actual
+                                       # lots (~3 on a 2.1L basis at 5pt stops) and the
+                                       # real premium/spread scale is still UNMEASURED
+                                       # (paper day-1 captures it) - 6 is the ceiling.
     c.RISK_PER_TRADE_PCT = 0.0050
     c.MAX_DAILY_LOSS_PCT = 0.0100
     c.MAX_MONTHLY_LOSS_PCT = 0.0500

@@ -763,8 +763,22 @@ def run_futures_day(notifier, trade_date):
         except Exception:
             pass
     capital = cfg.CAPITAL * _alloc
+    # MARGIN-DRIVEN LOTS (user standard 06-Sep: "whatever possible from
+    # margin"): lots = floor(basis / margin-per-lot), clamped [1, MAX_LOTS].
+    _mpl = 200_000.0
+    try:
+        _mpl = float(os.environ.get("FUTURES_MARGIN_PER_LOT",
+                                    str(getattr(cfg, "FUTURES_MARGIN_PER_LOT", 200_000))))
+        _mpl = _mpl if _mpl > 0 else 200_000.0
+        _ml = max(1, int(capital // _mpl))
+        cfg.DEFAULT_LOTS = min(_ml, int(getattr(cfg, "MAX_LOTS", 2)))
+        cfg.FUTURES_MARGIN_PER_LOT = _mpl
+    except Exception:
+        cfg.DEFAULT_LOTS = max(1, min(int(getattr(cfg, "DEFAULT_LOTS", 1)),
+                                      int(getattr(cfg, "MAX_LOTS", 2))))
     notifier.log(f"FUTURES session {trade_date} - {mode.upper()} "
-                 f"(capital basis {capital:,.0f} INR, slip {cfg.FUT_SLIPPAGE_PTS}pt)", "INFO")
+                 f"(capital basis {capital:,.0f} INR, margin-lots {cfg.DEFAULT_LOTS} "
+                 f"x ~{_mpl:,.0f}/lot, slip {cfg.FUT_SLIPPAGE_PTS}pt)", "INFO")
 
     engine = FuturesEngine(cfg, notify=notifier.log, capital=capital)
     # warm-up: today's real bars + last 3 CSV days so signals start at 09:15

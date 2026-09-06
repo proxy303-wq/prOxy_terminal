@@ -41,17 +41,18 @@ same double gate as the futures engine.  The generic railway_worker live
 branch needs that allow-env check added for variant finnifty (layered
 after the futures session's worker commit).
 
-## Still to do (layered after the concurrent futures session commits)
+## UI layer — DONE (19:xx IST 06-Sep, committed after the futures session's f1fa7d9)
 
-1. streamlit_app.py: a "FINNIFTY" page (mode badge, position, PnL
-   analytics from proxy_state_finnifty.sqlite, daily P&L chart) mirroring
-   the Futures page pattern.
-2. telegram_menu.py: a FINNIFTY section (/finnifty → mode + position +
-   GO LIVE FINNIFTY → CONFIRM-FINNIFTY-LIVE), mirroring /futures.
-3. railway_worker.py: FINNIFTY_ALLOW_LIVE gate in the generic live branch
-   for variant == "finnifty" (mode file + env, like futures).
+1. streamlit_app.py: "FINNIFTY" page added (sidebar nav + elif block) -
+   mode badge, live FINNIFTY index LTP (idx 27), open position from the
+   finnifty option-engine DB, PnL analytics (net/win/PF/daily chart).
+2. telegram_menu.py: /finnifty command + FIN_KEYBOARD + GO LIVE
+   FINNIFTY / PAPER FINNIFTY buttons + CONFIRM-FINNIFTY-LIVE flip of
+   mode_finnifty.json + position/today/net read from the finnifty DB.
+3. railway_worker.py: FINNIFTY_ALLOW_LIVE env gate in the generic live
+   branch for variant == "finnifty" (mode file + env, like futures).
 4. Deploy to the box + first PAPER session (real chain -> real premium
-   scale + spread capture -> then decide live geometry).
+   scale + spread capture -> then decide live geometry) - still pending.
 
 ## Safety invariant
 mode_finnifty.json absent = PAPER, exactly like BANKNIFTY/futures.  Live

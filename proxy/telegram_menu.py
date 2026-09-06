@@ -47,13 +47,19 @@ FUT_KEYBOARD = [
     ["🔙 Main Menu"],
 ]
 
+FIN_KEYBOARD = [
+    ["🟢 GO LIVE FINNIFTY", "⚪ PAPER FINNIFTY"],
+    ["🔙 Main Menu"],
+]
+
 COMMANDS = [
     {"command": "balance", "description": "Check Dhan account balance"},
-    {"command": "prices", "description": "Live NIFTY / BANKNIFTY"},
+    {"command": "prices", "description": "Live NIFTY / BANKNIFTY / FINNIFTY"},
     {"command": "sentiment", "description": "Market sentiment gauge"},
     {"command": "report", "description": "Daily report (trades, P&L)"},
     {"command": "mode", "description": "NIFTY options mode (paper/live)"},
     {"command": "futures", "description": "Futures engine status / mode"},
+    {"command": "finnifty", "description": "FINNIFTY engine status / mode"},
     {"command": "help", "description": "Show this menu"},
 ]
 
@@ -94,6 +100,7 @@ class TelegramMenu:
         self.notify = notify
         self._pending_live = {}      # chat_id -> awaiting "CONFIRM-LIVE"
         self._pending_fut = {}     # chat_id -> awaiting "CONFIRM-FUTURES-LIVE"
+        self._pending_fin = {}     # chat_id -> awaiting "CONFIRM-FINNIFTY-LIVE"
         self._thread = None
         self._stop = threading.Event()
 
@@ -177,6 +184,16 @@ class TelegramMenu:
             else:
                 _send(chat_id, "❌ Cancelled - futures mode unchanged.", MENU_KEYBOARD)
             return
+        # FINNIFTY live confirmation (mirrors the futures two-step; flips only
+        # reports/mode_finnifty.json - the finnifty worker reads it at session
+        # open AND must also run with FINNIFTY_ALLOW_LIVE=1 before any real order)
+        if self._pending_fin.get(chat_id):
+            self._pending_fin.pop(chat_id)
+            if cmd in ("confirm-finnifty-live", "confirm-finnifty", "confirm"):
+                self._set_finnifty_mode(chat_id, "live")
+            else:
+                _send(chat_id, "❌ Cancelled - finnifty mode unchanged.", MENU_KEYBOARD)
+            return
 
         dispatch = {
             "start": self._help, "help": self._help, "menu": self._help,
@@ -190,6 +207,9 @@ class TelegramMenu:
             "futures": self._futures, "future": self._futures,
             "futures_live": self._futures_ask_live,
             "futures_paper": self._futures_paper,
+            "finnifty": self._finnifty, "fin": self._finnifty,
+            "finnifty_live": self._finnifty_ask_live,
+            "finnifty_paper": self._finnifty_paper,
             "btst": self._btst,
         }
         handler = dispatch.get(cmd)
@@ -205,6 +225,8 @@ class TelegramMenu:
             "🚀 btst picks": self._btst,
             "🟢 go live futures": self._futures_ask_live,
             "⚪ paper futures": self._futures_paper,
+            "🟢 go live finnifty": self._finnifty_ask_live,
+            "⚪ paper finnifty": self._finnifty_paper,
             "🔙 main menu": self._help,
         }
         handler = btn.get(text.lower())
@@ -488,3 +510,74 @@ class TelegramMenu:
                 "spread/paper-parity gate pass (fill discipline).")
         _send(chat_id,
               f"✅ Futures mode set to <b>{badge}</b>.\n{note}", MENU_KEYBOARD)
+    # ----------------------------------------------------------
+    # FINNIFTY third index-options engine (own DB/mode, HANDOVER 17)
+    # ----------------------------------------------------------
+
+    def _finnifty(self, chat_id):
+        from .mode import get_mode
+        mode = get_mode("finnifty")
+        badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
+        pos, today_pnl, net = self._finnifty_status()
+        lines = [
+            f"📗 <b>FINNIFTY: {badge}</b>\n",
+            "Mode file: reports/mode_finnifty.json "
+            "(absent = PAPER, never live by accident)",
+            f"Open position: {pos}",
+            f"Today P&L: {today_pnl}",
+            f"All-time net (paper): {net}",
+            "\nLive ALSO needs FINNIFTY_ALLOW_LIVE=1 on the finnifty worker "
+            "AND the real-chain measurement (HANDOVER 17 step 4) - flipping "
+            "this alone never places real orders.",
+        ]
+        _send(chat_id, "\n".join(lines), FIN_KEYBOARD)
+
+    def _finnifty_status(self):
+        pos, today, net = "FLAT", "—", "—"
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "reports")
+        db_file = os.path.join(base, "proxy_state_finnifty.sqlite")
+        try:
+            if os.path.exists(db_file):
+                import sqlite3 as _sq
+                conn = _sq.connect(f"file:{db_file}?mode=ro", uri=True)
+                try:
+                    a = conn.execute("SELECT payload FROM active_trade ORDER BY id DESC LIMIT 1").fetchone()
+                    if a and a[0]:
+                        t = json.loads(a[0])
+                        pos = f"{t.get('direction')} {t.get('lots')}L "
+                        pos += f"{t.get('option_type')} {t.get('strike')} @ {t.get('entry_premium'):,.2f}"
+                    row = conn.execute("SELECT COALESCE(SUM(pnl),0), COUNT(*) FROM trades").fetchone()
+                    if row and row[0]:
+                        net = f"{row[0]:+,.0f} INR ({row[1]} trades)"
+                    today_s = datetime.now(IST).date().isoformat()
+                    d = conn.execute("SELECT COALESCE(SUM(pnl),0) FROM trades WHERE substr(ts,1,10)=?",
+                                     (today_s,)).fetchone()
+                    if d and d[0]:
+                        today = f"{d[0]:+,.0f} INR"
+                finally:
+                    conn.close()
+        except Exception:
+            pass
+        return pos, today, net
+
+    def _finnifty_ask_live(self, chat_id):
+        self._pending_fin[chat_id] = True
+        _send(chat_id,
+              "⚠️ <b>Switch FINNIFTY to LIVE?</b>\nThis writes "
+              "reports/mode_finnifty.json = live.  Real orders still require "
+              "FINNIFTY_ALLOW_LIVE=1 on the finnifty worker AND the real-chain "
+              "measurement (HANDOVER 17 step 4).\n\nType "
+              "<b>CONFIRM-FINNIFTY-LIVE</b> to proceed, or anything else to cancel.", FIN_KEYBOARD)
+
+    def _finnifty_paper(self, chat_id):
+        self._set_finnifty_mode(chat_id, "paper")
+
+    def _set_finnifty_mode(self, chat_id, mode):
+        from .mode import get_mode, set_mode
+        set_mode(mode, variant="finnifty")
+        badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
+        note = ("No real orders until FINNIFTY_ALLOW_LIVE=1 AND the real-chain "
+                "measurement gate pass (HANDOVER 17 step 4).")
+        _send(chat_id,
+              f"✅ FINNIFTY mode set to <b>{badge}</b>.\n{note}", FIN_KEYBOARD)

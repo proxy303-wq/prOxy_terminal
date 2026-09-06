@@ -166,6 +166,18 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
     except Exception:
         _alloc = 1.0
     capital = None
+    # FINNIFTY third-engine safety gate (HANDOVER 17): the pre-spread edge
+    # PASSED but the REAL FINNIFTY premium scale + spreads are UNMEASURED and
+    # Dhan lists FINNIFTY MONTHLY lot-60 (not weekly lot-40).  mode_finnifty.json
+    # alone must NEVER place real orders - require the worker env allow too
+    # (set ONLY after the real-chain measurement + paper==live parity).
+    if mode == "live" and variant == "finnifty" \
+            and os.environ.get("FINNIFTY_ALLOW_LIVE", "0") != "1":
+        notifier.log(
+            "FINNIFTY mode=live but FINNIFTY_ALLOW_LIVE != 1 - running PAPER "
+            "(real-chain premium/spread gate: reports/finnifty_real_scale.json "
+            "must exist + worker env allow before real orders).", "WARN")
+        mode = "paper"
     if mode == "live":
         try:
             from proxy.dhan_broker import DhanBroker

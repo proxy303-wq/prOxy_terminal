@@ -164,6 +164,7 @@ with st.sidebar:
             "Portfolio",
             "Trading",
             "Futures",
+            "FINNIFTY",
             "Commodities",
             "Wealth",
             "Risk",
@@ -857,6 +858,112 @@ elif page == "Futures":
                "on Monday's real fills + paper parity, no real money before that.")
     st.caption("Go live: Telegram bot → `/futures` → shows mode + position → `GO LIVE FUTURES` "
                "requires typing CONFIRM-FUTURES-LIVE (mirrors the NIFTY rule). Dashboard stays read-only.")
+
+
+# ------------------------------------------------------------
+# FINNIFTY (third index-options engine - own DB/mode, HANDOVER 17)
+# ------------------------------------------------------------
+
+elif page == "FINNIFTY":
+    st.subheader("FINNIFTY — index options (third engine, own DB/mode)")
+    st.caption("Same NIFTY scalper on the FINNIFTY index (idx 27). §17 scout PASSED the "
+               "pre-spread gate (test PF 2.77; docs/FINNIFTY_SCOUT.md) but the REAL premium "
+               "scale + spreads are unmeasured and Dhan lists FINNIFTY MONTHLY lot-60. "
+               "Read-only page: paper/live flipped ONLY via the Telegram bot "
+               "(/finnifty → CONFIRM-FINNIFTY-LIVE); real orders additionally need "
+               "FINNIFTY_ALLOW_LIVE=1 after the real-chain measurement.")
+
+    _fin_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", "proxy_state_finnifty.sqlite")
+
+    from proxy.mode import get_mode as _fin_mode
+    _fimode = _fin_mode("finnifty").upper()
+
+    @st.fragment(run_every="5s")
+    def finnifty_top():
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("FINNIFTY mode", "🔴 LIVE" if _fimode == "LIVE" else "🟡 PAPER",
+                  help="Flipped only via Telegram /finnifty (CONFIRM-FINNIFTY-LIVE); live also needs FINNIFTY_ALLOW_LIVE=1")
+        _ltp = None
+        try:
+            from proxy.dhan_rest_feed import fetch_ltp
+            from proxy.dhan_auth import resolve_token_safe
+            _cid = os.environ.get("DHAN_CLIENT_ID")
+            _tok, _s = resolve_token_safe(_cid, notify=lambda *a: None)
+            _px = fetch_ltp(_cid, _tok, [("IDX_I", 27)])
+            _ltp = (_px or {}).get(("IDX_I", "27"))
+        except Exception:
+            _ltp = None
+        if _ltp is not None:
+            c2.metric("FINNIFTY index", f"₹{_ltp:,.2f}")
+        else:
+            c2.metric("FINNIFTY index", "—", help="Live LTP available 09:15-15:30 IST")
+        _act = None
+        try:
+            if os.path.exists(_fin_db):
+                import sqlite3 as _sq2
+                _co = _sq2.connect(f"file:{_fin_db}?mode=ro", uri=True)
+                _row = _co.execute("SELECT payload FROM active_trade ORDER BY id DESC LIMIT 1").fetchone()
+                _co.close()
+                if _row and _row[0]:
+                    _act = json.loads(_row[0])
+        except Exception:
+            _act = None
+        if _act:
+            c3.metric("Open position", f"{_act.get('direction','')} {_act.get('lots','')}L",
+                      f"{_act.get('option_type','')} {_act.get('strike','')}")
+            c4.metric("Entry premium", f"₹{float(_act.get('entry_premium') or 0):,.2f}")
+        else:
+            c3.metric("Open position", "FLAT")
+            c4.metric("Engine", "PAPER", help="FINNIFTY worker paper until the "
+                      "real-scale measurement + explicit live flip")
+    finnifty_top()
+
+    st.divider()
+
+    st.subheader("FINNIFTY engine P&L (paper)")
+    if os.path.exists(_fin_db):
+        try:
+            import sqlite3 as _sq3
+            _co = _sq3.connect(f"file:{_fin_db}?mode=ro", uri=True)
+            _rows = _co.execute(
+                "SELECT ts,instrument,direction,lots,entry_premium,exit_premium,"
+                "exit_reason,pnl FROM trades ORDER BY id DESC LIMIT 30").fetchall()
+            _agg = _co.execute(
+                "SELECT COUNT(*), COALESCE(SUM(pnl),0), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END), "
+                "COALESCE(SUM(CASE WHEN pnl>0 THEN pnl ELSE 0 END),0), "
+                "COALESCE(SUM(CASE WHEN pnl<=0 THEN -pnl ELSE 0 END),0) FROM trades").fetchone()
+            _day = _co.execute(
+                "SELECT substr(ts,1,10), COALESCE(SUM(pnl),0) FROM trades GROUP BY "
+                "substr(ts,1,10) ORDER BY 1 DESC LIMIT 40").fetchall()
+            _co.close()
+            n, net, wins, gw, gl = (_agg[0], _agg[1], _agg[2] or 0, _agg[3], _agg[4] or 0)
+            pf = (gw / gl) if gl > 0 else (None if n == 0 else float("inf"))
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Trades", f"{n}", f"{wins} wins / {n - wins} losses")
+            m2.metric("Net P&L (paper)", f"₹{net:+,.0f}")
+            m3.metric("Win rate", f"{wins / max(n, 1) * 100:.1f}%")
+            m4.metric("Profit factor", f"{pf:.2f}" if pf not in (None, float("inf")) else ("∞" if pf == float("inf") else "—"))
+            if _rows:
+                st.dataframe(pd.DataFrame(_rows, columns=["ts", "instrument", "dir", "lots", "entry", "exit", "reason", "pnl"]),
+                             width="stretch", hide_index=True)
+            if len(_day) > 1:
+                _dp = pd.DataFrame([{"day": k, "pnl": v} for k, v in _day])
+                st.caption("Daily P&L (paper)")
+                st.line_chart(_dp.iloc[::-1].set_index("day")["pnl"])
+            else:
+                st.info("FINNIFTY DB exists but has no closed trades yet - the finnifty "
+                        "worker has not run a paper session.")
+        except Exception as _fe:
+            st.warning(f"Could not read FINNIFTY state DB: {_fe}")
+    else:
+        st.info("No FINNIFTY engine DB yet (reports/proxy_state_finnifty.sqlite). "
+                "It appears once the finnifty worker runs a paper session (Monday).")
+
+    st.divider()
+    st.caption("Real-chain gate (HANDOVER §17 step 4): the pre-spread edge PASSED (test PF 2.77, "
+               "every regime fold positive) but Dhan lists FINNIFTY MONTHLY lot-60 - real premium "
+               "scale + spreads are unmeasured. Run the market-hours capture before flipping live. "
+               "Scout ledger: docs/FINNIFTY_SCOUT.md.")
 
 
 # ------------------------------------------------------------

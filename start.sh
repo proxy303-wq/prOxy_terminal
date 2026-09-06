@@ -1,20 +1,22 @@
 #!/bin/bash
 # PrOxy supervisor: run the paper/live workers alongside the dashboard.
 # All worker loops are supervised (restarts on crash OR hang via timeout).
-# NIFTY reads reports/mode.json (the Telegram master switch).  BANKNIFTY
-# reads reports/mode_banknifty.json, FINNIFTY reads mode_finnifty.json -
-# each stays PAPER while its file is absent - flip with tools/_bn_live.py /
-# tools/_fin_live.py (never live by accident).
 #
-# PROXY_ALLOCATION_PCT per worker = that engine's share of the FULL Dhan
-# balance (NIFTY/BN defaults keep the current LIVE 0.5/0.5 basis).
-# FINNIFTY starts PAPER at a small 0.2 basis; the live split is a USER
-# decision when FINNIFTY is flipped (rebalance all three via the envs).
+# CAPITAL + ALLOCATION (user decision 2026-09-06 - account topped to ~7L):
+#   NIFTY    0.20  (~1.4L basis)  - live (reports/mode.json)
+#   FINNIFTY 0.30  (~2.1L basis)  - paper until mode_finnifty.json (tools/_fin_live.py)
+#   FUTURES  0.50  (~3.5L basis)  - PAPER: gated on mode_futures.json + FUTURES_ALLOW_LIVE
+#                                    + the measured-spread fill gate (run_futures_day
+#                                    hard-aborts to paper until that passes)
+#   BANKNIFTY DISABLED (loop removed; mode_banknifty.json deleted 06-Sep)
+# Monthly target: 12.5% of 7L = ~87,500 INR across the three engines.
+# Each worker sizes off PROXY_ALLOCATION_PCT x the FULL Dhan balance at the
+# session open (paper uses cfg.CAPITAL x the same split).
 # Streamlit runs in the foreground so healthchecks track it.
 (
   while true; do
     echo "[supervisor] starting railway_worker.py (NIFTY)"
-    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_NIFTY:-0.5}" timeout 12h python railway_worker.py
+    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_NIFTY:-0.2}" timeout 12h python railway_worker.py
     echo "[supervisor] nifty worker exited (code $?) - restarting in 30s"
     sleep 30
   done
@@ -22,18 +24,18 @@
 
 (
   while true; do
-    echo "[supervisor] starting railway_worker.py --variant banknifty (paper until mode_banknifty.json says live)"
-    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_BANKNIFTY:-0.5}" timeout 12h python railway_worker.py --variant banknifty
-    echo "[supervisor] banknifty worker exited (code $?) - restarting in 30s"
+    echo "[supervisor] starting railway_worker.py --variant finnifty (paper until mode_finnifty.json says live)"
+    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FINNIFTY:-0.3}" timeout 12h python railway_worker.py --variant finnifty
+    echo "[supervisor] finnifty worker exited (code $?) - restarting in 30s"
     sleep 30
   done
 ) &
 
 (
   while true; do
-    echo "[supervisor] starting railway_worker.py --variant finnifty (paper until mode_finnifty.json says live)"
-    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FINNIFTY:-0.2}" timeout 12h python railway_worker.py --variant finnifty
-    echo "[supervisor] finnifty worker exited (code $?) - restarting in 30s"
+    echo "[supervisor] starting railway_worker.py --variant futures (PAPER until mode_futures.json + FUTURES_ALLOW_LIVE + fill gate)"
+    PROXY_ALLOCATION_PCT="${PROXY_ALLOCATION_PCT_FUTURES:-0.5}" timeout 12h python railway_worker.py --variant futures
+    echo "[supervisor] futures worker exited (code $?) - restarting in 30s"
     sleep 30
   done
 ) &

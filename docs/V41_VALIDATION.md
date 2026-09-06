@@ -668,6 +668,20 @@ before its cells are quoted again.  Rule for the next window: every new
 A/B and every re-quote runs warm by default; only use
 BT_WARM_HISTORY=False when deliberately reproducing a legacy cold table.
 
+### CAPITAL + ENGINE SET (2026-09-06 evening, user decision)
+
+Account topped to ~7L.  BANKNIFTY DISABLED COMPLETELY (start.sh loop
+removed, mode_banknifty.json deleted, 0 positions confirmed).  Live split
+on the FULL balance (start.sh envs): NIFTY 0.20 / FINNIFTY 0.30 /
+FUTURES 0.50.  Target = 12.5%/mo of 7L = ~87,500 INR/mo.  Gates intact:
+FINNIFTY paper until mode_finnifty.json (own session); FUTURES paper until
+mode_futures.json + FUTURES_ALLOW_LIVE + measured-spread fill gate.
+Honest note recorded at decision time: 50% to futures rides warm
+(unvalidated-fill) numbers - the fill gate keeps it paper until Monday's
+spread evidence earns it; NIFTY's live-proven edge gets the smallest slice
+by the user's choice.  Warm-grid evidence for the per-engine contribution
+to the 87.5k target is a CEILING, not a guarantee (fills decide).
+
 ### SUPER-ORDER / BRACKET ENTRIES - futures + option enable staged (06-Sep)
 
 proxy/dhan_broker.py: place_resolved_bracket() - SUPER-order placement for

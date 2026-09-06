@@ -573,6 +573,16 @@ LIVE_FEED_SYMBOL = "^NSEI"
 # 8. BACKTEST
 # ============================================================
 
+# WARM-HISTORY (06-Sep, repo default): indicator history is carried ACROSS
+# days and the run is pre-seeded with the last ~160 bars before the first
+# traded day - exactly what the LIVE worker does (it seeds warm bars
+# pre-open in railway_worker.py).  The legacy COLD behaviour (per-day
+# empty history -> no signals before ~11:45, i.e. no morning trades) was
+# the default for every historical backtest in this repo; set
+# BT_WARM_HISTORY=False only to reproduce those legacy cold numbers.
+# NOTE: every cold-era table in docs/ is SUPERSEDED - rerun warm before
+# trusting any count/PF (see docs/V41_VALIDATION.md, 06-Sep warm finding).
+BT_WARM_HISTORY = True
 BACKTEST_MAX_DAYS = None        # None = all days in the CSV
 BACKTEST_BAR = "5min"
 BACKTEST_START_TIME = dt_time(9, 15)

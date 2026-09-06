@@ -105,14 +105,24 @@ def _data(idx):
 
 
 def replay(idx, win_spec, overrides=None):
-    """Run one honest replay.  Returns the Backtest report dict (JSON-safe)."""
+    """Run one honest replay.  Returns the Backtest report dict (JSON-safe).
+
+    WARM by default (BT_WARM_HISTORY, proxy/config.py): the window's first
+    day is pre-seeded with the ~160 bars before it (the live worker seeds
+    pre-open the same way), so every day trades from the 09:15 open.
+    Set overrides=dict(BT_WARM_HISTORY=False) for the legacy cold numbers."""
     c = base_config(idx, overrides)
     df5p, df1p = _data(idx)
     df5 = load_csv(df5p)
     keep = df5["date"].dt.strftime("%Y-%m").isin(months(win_spec))
-    df5 = df5[keep]
+    win = df5[keep]
+    seed = None
+    if bool(getattr(c, "BT_WARM_HISTORY", True)) and not win.empty:
+        _first = win["date"].dt.date.min()
+        _pre = df5[df5["date"].dt.date < _first]
+        seed = _pre.tail(160) if not _pre.empty else None
     df1 = load_csv(df1p)
-    r = Backtest(c, df=df5, df1m=df1, verbose=False).run()
+    r = Backtest(c, df=win, df1m=df1, warm_seed=seed, verbose=False).run()
     return r
 
 

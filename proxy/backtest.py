@@ -73,9 +73,31 @@ def aggregate_5m(bars_1m):
     return out
 
 
+def _to_seed_bars(warm_seed):
+    """warm_seed: DataFrame (chronological OHLCV rows) or a list of bar
+    dicts.  Returns a list of bar dicts (max 160) to preload into the
+    backtest history so the FIRST traded day is already indicator-warm
+    (the live worker seeds ~160 bars before 09:15 - see railway_worker)."""
+    if warm_seed is None:
+        return []
+    if hasattr(warm_seed, "iterrows"):
+        bars = []
+        for _, row in warm_seed.tail(160).iterrows():
+            bars.append({
+                "time": row["date"].to_pydatetime(),
+                "open": float(row["open"]), "high": float(row["high"]),
+                "low": float(row["low"]), "close": float(row["close"]),
+                "volume": float(row.get("volume", 0.0) or 0.0),
+            })
+        return bars
+    return list(warm_seed)[-160:]
+
+
 class Backtest:
     def __init__(self, cfg, path=None, max_days=None, last_days=None, verbose=False,
-                 target_date=None, df=None, df1m=None, regime_fn=None, vix_df=None):
+                 target_date=None, df=None, df1m=None, regime_fn=None, vix_df=None,
+                 warm_seed=None):
+        self.warm_seed = _to_seed_bars(warm_seed)
         self.cfg = cfg
         self.regime_fn = regime_fn   # optional callable(history) -> 'trend'|'flat'
         self._lab_gate = None        # lazy ML Lab gate (mirrors the live engine)
@@ -412,6 +434,15 @@ class Backtest:
         elif self.max_days:
             days = days[: self.max_days]
 
+        # WARM-HISTORY (default): indicator history is carried across days and
+        # the run is pre-seeded with up to 160 bars before the first traded
+        # day (warm_seed), exactly like the live worker's pre-open seeding.
+        # Set cfg.BT_WARM_HISTORY=False for the legacy cold-per-day behaviour
+        # (empty history each morning -> the first ~30 bars produce no
+        # signals, i.e. no trades before ~11:45).
+        _warm_history = bool(getattr(self.cfg, "BT_WARM_HISTORY", True))
+        history = list(self.warm_seed) if _warm_history else []
+
         for day in days:
             if self.state and self.state.get("trading_halted_month"):
                 # monthly loss limit reached.  With BT_MONTH_RESET_HALT the
@@ -440,7 +471,15 @@ class Backtest:
                 five = [dict(b) for b in bars5]
 
             day_trades = []
-            history = []
+            if _warm_history:
+                # WARM (live-faithful, default): carry indicator history across
+                # days so signals exist from the 09:15 open every day (the
+                # live worker seeds warm bars pre-open).  The old COLD
+                # behaviour (empty history per day -> no signals until ~11:45)
+                # is kept behind BT_WARM_HISTORY=False.
+                pass
+            else:
+                history = []
             active = None
             cooldown_until = None
             last_signal = None

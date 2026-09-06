@@ -163,6 +163,7 @@ with st.sidebar:
             "Dashboard",
             "Portfolio",
             "Trading",
+            "Futures",
             "Commodities",
             "Wealth",
             "Risk",
@@ -714,6 +715,148 @@ elif page == "Trading":
             width="stretch",
             hide_index=True,
         )
+
+# ------------------------------------------------------------
+# Futures (NIFTY index futures - separate engine, own DB/mode)
+# ------------------------------------------------------------
+
+elif page == "Futures":
+    import sqlite3 as _sq
+    st.subheader("Futures — NIFTY index future (own engine)")
+    st.caption("Same signal engine, exits in INDEX POINTS (HANDOVER §18 A/B). "
+               "Read-only page: paper/live is flipped ONLY via the Telegram bot "
+               "(/futures → confirm), exactly like the NIFTY mode rule. "
+               "Docs: `docs/V41_VALIDATION.md` §18 ledger, `proxy/futures_engine.py`.")
+
+    _fut_db = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", "proxy_state_futures.sqlite")
+    _fut_state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", "futures_state.json")
+
+    from proxy.mode import get_mode as _fut_mode
+    _fmode = _fut_mode("futures").upper()
+
+    @st.fragment(run_every="5s")
+    def futures_top():
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Futures mode", "🔴 LIVE" if _fmode == "LIVE" else "🟡 PAPER",
+                  help="Flipped only via Telegram /futures (CONFIRM-FUTURES-LIVE)")
+        try:
+            _snap = get_market_snapshot()
+            _nv = _snap.get("data", {}).get("NIFTY", {})
+            _ltp = _nv.get("ltp")
+            _pv = _nv.get("previous_close")
+            if _ltp is not None:
+                c2.metric("NIFTY index (fill proxy)", f"₹{_ltp:,.2f}",
+                          f"{_ltp - _pv:+,.2f}" if _pv else None)
+            else:
+                c2.metric("NIFTY index (fill proxy)", "—")
+        except Exception:
+            c2.metric("NIFTY index (fill proxy)", "—")
+        # position / state from the engine's persisted snapshot
+        _st = {}
+        try:
+            if os.path.exists(_fut_state_file):
+                _st = json.load(open(_fut_state_file))
+        except Exception:
+            _st = {}
+        _sn = (_st.get("snapshot") or {})
+        _act = _sn.get("active")
+        if _act:
+            _upnl = float(_act.get("unrealized_pnl") or 0)
+            c3.metric("Open position", f"{_act.get('direction')} {_act.get('lots')}L",
+                      f"entry {_act.get('entry_premium'):,.2f}")
+            c4.metric("Unrealized P&L", f"₹{_upnl:+,.2f}",
+                      "last " + str((_sn.get("last_ltp") or "—")))
+        else:
+            c3.metric("Open position", "FLAT")
+            c4.metric("Today P&L", f"₹{(_sn.get('realized_pnl_today') or 0):+,.2f}")
+    futures_top()
+
+    st.divider()
+
+    # ---- paper-engine DB: PnL analytics ----
+    st.subheader("Futures engine P&L (paper)")
+    if os.path.exists(_fut_db):
+        try:
+            _conn = _sq.connect(f"file:{_fut_db}?mode=ro", uri=True)
+            _rows = _conn.execute(
+                "SELECT trade_date,direction,lots,entry_level,exit_level,exit_reason,pnl,confidence "
+                "FROM futures_trades ORDER BY id DESC LIMIT 30").fetchall()
+            _agg = _conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(pnl),0), SUM(CASE WHEN pnl>0 THEN 1 ELSE 0 END), "
+                "COALESCE(SUM(CASE WHEN pnl>0 THEN pnl ELSE 0 END),0), "
+                "COALESCE(SUM(CASE WHEN pnl<=0 THEN -pnl ELSE 0 END),0) FROM futures_trades").fetchone()
+            _day = _conn.execute(
+                "SELECT trade_date, COALESCE(SUM(pnl),0) FROM futures_trades GROUP BY trade_date "
+                "ORDER BY trade_date DESC LIMIT 40").fetchall()
+            _conn.close()
+            n, net, wins, gw, gl = (_agg[0], _agg[1], _agg[2] or 0, _agg[3], _agg[4] or 0)
+            pf = (gw / gl) if gl > 0 else (None if n == 0 else float("inf"))
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Trades", f"{n}", f"{wins} wins / {n - wins} losses")
+            m2.metric("Net P&L (paper)", f"₹{net:+,.0f}")
+            m3.metric("Win rate", f"{wins / max(n, 1) * 100:.1f}%")
+            m4.metric("Profit factor", f"{pf:.2f}" if pf not in (None, float("inf")) else ("∞" if pf == float("inf") else "—"))
+            if _rows:
+                st.dataframe(pd.DataFrame(_rows, columns=["date", "dir", "lots", "entry",
+                                                          "exit", "reason", "pnl", "conf"]),
+                             width="stretch", hide_index=True)
+            if len(_day) > 1:
+                _dp = pd.DataFrame([{"day": k, "pnl": v} for k, v in _day])
+                st.caption("Daily P&L (paper)")
+                st.line_chart(_dp.iloc[::-1].set_index("day")["pnl"])
+            else:
+                st.info("Futures engine DB exists but has no closed trades yet — "
+                        "the futures worker has not run a session (paper).")
+        except Exception as _fe:
+            st.warning(f"Could not read futures state DB: {_fe}")
+    else:
+        st.info("No futures engine DB yet (reports/proxy_state_futures.sqlite). "
+                "It appears once the futures worker runs a paper session (post fill-validation).")
+
+    st.divider()
+
+    # ---- today's real spread capture (the fill-wall number) ----
+    st.subheader("Real NIFTY-futures spread capture")
+    _today = datetime.now().strftime("%Y-%m-%d")
+    _sp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", f"futures_spread_{_today}.json")
+    if os.path.exists(_sp):
+        try:
+            _s = json.load(open(_sp))
+            s1, s2, s3, s4 = st.columns(4)
+            s1.metric("Ticks captured", _s.get("n_ticks"))
+            s2.metric("Median round-trip spread", f"{_s['spread_pts'].get('median')} pts",
+                      f"median {_s.get('round_trip_crossing_pts_median')} pts crossing")
+            s3.metric("Median bps of mid", f"{(_s.get('spread_bps_of_mid') or {}).get('median')} bps")
+            _pct = (_s.get("pct_of_ticks_spread_le") or {})
+            s4.metric("Time spread ≤ 1 pt", f"{_pct.get('1.0')}%")
+            st.caption("Set FUT_SLIPPAGE_PTS to the median round-trip crossing before live sizing.")
+        except Exception as _se:
+            st.warning(f"Spread summary present but unreadable: {_se}")
+    else:
+        st.info("No spread capture for today yet — run `python tools/_futures_spread_capture.py` "
+                "during market hours (09:15–15:30 IST) to log the real bid/ask.")
+
+    st.divider()
+
+    # ---- validation recap ----
+    st.subheader("Validation recap (06-Sep)")
+    _warm = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports", "futures_engine_warm_validation.json")
+    if os.path.exists(_warm):
+        try:
+            _w = json.load(open(_warm))
+            for _k, _v in _w.items():
+                st.markdown(f"**{_k}** (engine, warm/live-faithful): {_v.get('trades')} trades · "
+                            f"{_v.get('win_rate')}% win · net ₹{_v.get('net'):+,.0f} · PF {_v.get('pf')} · "
+                            f"avg trade ₹{_v.get('avg_trade'):+,.0f}")
+        except Exception:
+            pass
+    st.caption("Backtests now run WARM by default (06-Sep, BT_WARM_HISTORY=True) - indicator "
+               "history is carried across days like the live worker, so the numbers above are "
+               "the live-faithful engine.  The earlier cold A/B tables (stop 5/arm 1.0 TRAIN PF "
+               "3.32 / TEST PF 5.41) are superseded legacy.  Still: warm is a simulation - judge "
+               "on Monday's real fills + paper parity, no real money before that.")
+    st.caption("Go live: Telegram bot → `/futures` → shows mode + position → `GO LIVE FUTURES` "
+               "requires typing CONFIRM-FUTURES-LIVE (mirrors the NIFTY rule). Dashboard stays read-only.")
 
 
 # ------------------------------------------------------------

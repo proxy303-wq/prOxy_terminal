@@ -42,12 +42,18 @@ MODE_KEYBOARD = [
     ["🔙 Main Menu"],
 ]
 
+FUT_KEYBOARD = [
+    ["🟢 GO LIVE FUTURES", "⚪ PAPER FUTURES"],
+    ["🔙 Main Menu"],
+]
+
 COMMANDS = [
     {"command": "balance", "description": "Check Dhan account balance"},
     {"command": "prices", "description": "Live NIFTY / BANKNIFTY"},
     {"command": "sentiment", "description": "Market sentiment gauge"},
     {"command": "report", "description": "Daily report (trades, P&L)"},
-    {"command": "mode", "description": "Show / toggle trading mode"},
+    {"command": "mode", "description": "NIFTY options mode (paper/live)"},
+    {"command": "futures", "description": "Futures engine status / mode"},
     {"command": "help", "description": "Show this menu"},
 ]
 
@@ -87,6 +93,7 @@ class TelegramMenu:
     def __init__(self, notify=print):
         self.notify = notify
         self._pending_live = {}      # chat_id -> awaiting "CONFIRM-LIVE"
+        self._pending_fut = {}     # chat_id -> awaiting "CONFIRM-FUTURES-LIVE"
         self._thread = None
         self._stop = threading.Event()
 
@@ -159,6 +166,17 @@ class TelegramMenu:
             else:
                 _send(chat_id, "❌ Cancelled - mode unchanged.", MENU_KEYBOARD)
             return
+        # FUTURES live confirmation (mirrors the NIFTY two-step; flips only
+        # reports/mode_futures.json - the futures worker reads it at session
+        # open AND must also run with FUTURES_ALLOW_LIVE=1 before any real
+        # order is possible)
+        if self._pending_fut.get(chat_id):
+            self._pending_fut.pop(chat_id)
+            if cmd in ("confirm-futures-live", "confirm-futures", "confirm"):
+                self._set_futures_mode(chat_id, "live")
+            else:
+                _send(chat_id, "❌ Cancelled - futures mode unchanged.", MENU_KEYBOARD)
+            return
 
         dispatch = {
             "start": self._help, "help": self._help, "menu": self._help,
@@ -169,6 +187,9 @@ class TelegramMenu:
             "mode": self._mode,
             "switch_live": self._ask_live, "live": self._ask_live,
             "switch_paper": self._switch_paper, "paper": self._switch_paper,
+            "futures": self._futures, "future": self._futures,
+            "futures_live": self._futures_ask_live,
+            "futures_paper": self._futures_paper,
             "btst": self._btst,
         }
         handler = dispatch.get(cmd)
@@ -182,6 +203,8 @@ class TelegramMenu:
             "🎛 mode": self._mode, "❓ help": self._help,
             "🟢 go live": self._ask_live, "⚪ paper": self._switch_paper,
             "🚀 btst picks": self._btst,
+            "🟢 go live futures": self._futures_ask_live,
+            "⚪ paper futures": self._futures_paper,
             "🔙 main menu": self._help,
         }
         handler = btn.get(text.lower())
@@ -202,8 +225,9 @@ class TelegramMenu:
               "📈 <b>Prices</b> - live NIFTY / BANKNIFTY\n"
               "🌡 <b>Sentiment</b> - market gauge vs prev close\n"
               "📊 <b>Daily Report</b> - today's trades + P&L\n"
-              "🎛 <b>Mode</b> - PAPER / LIVE (LIVE needs a confirm step)\n\n"
-              "Commands: /balance /prices /sentiment /report /mode",
+              "🎛 <b>Mode</b> - NIFTY PAPER / LIVE (LIVE needs a confirm step)\n"
+              "📉 <b>Futures</b> - futures engine status / mode\n\n"
+              "Commands: /balance /prices /sentiment /report /mode /futures",
               MENU_KEYBOARD)
 
     def _balance(self, chat_id):
@@ -392,3 +416,75 @@ class TelegramMenu:
             os._exit(1)              # supervisor restarts -> fresh LIVE session today
         else:
             _send(chat_id, f"✅ Mode switched to <b>{badge}</b>. No real orders.", MENU_KEYBOARD)
+
+    # ----------------------------------------------------------
+    # FUTURES engine (own mode file mode_futures.json, own DB)
+    # ----------------------------------------------------------
+
+    def _futures(self, chat_id):
+        from .mode import get_mode
+        mode = get_mode("futures")
+        badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
+        pos, today_pnl, net = self._futures_status()
+        lines = [
+            f"📉 <b>Futures: {badge}</b>\n",
+            f"Mode file: reports/mode_futures.json "
+            f"(absent = PAPER, never live by accident)",
+            f"Open position: {pos}",
+            f"Today P&L: {today_pnl}",
+            f"All-time net: {net}",
+            "\nLive ALSO needs FUTURES_ALLOW_LIVE=1 on the futures worker "
+            "AND the measured-spread/paper-parity gate (Monday) - flipping "
+            "this alone never places real orders.",
+        ]
+        _send(chat_id, "\n".join(lines), FUT_KEYBOARD)
+
+    def _futures_status(self):
+        pos, today, net = "FLAT", "—", "—"
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "reports")
+        state_file = os.path.join(base, "futures_state.json")
+        db_file = os.path.join(base, "proxy_state_futures.sqlite")
+        try:
+            if os.path.exists(state_file):
+                import json as _json
+                snap = (_json.load(open(state_file)).get("snapshot") or {})
+                act = snap.get("active")
+                if act:
+                    pos = f"{act.get('direction')} {act.get('lots')}L @ {act.get('entry_premium'):,.2f}"
+                t = float(snap.get("realized_pnl_today") or 0)
+                today = f"{t:+,.0f} INR"
+        except Exception:
+            pass
+        try:
+            if os.path.exists(db_file):
+                import sqlite3 as _sq
+                conn = _sq.connect(f"file:{db_file}?mode=ro", uri=True)
+                row = conn.execute("SELECT COUNT(*), COALESCE(SUM(pnl),0) FROM futures_trades").fetchone()
+                conn.close()
+                if row and row[0]:
+                    net = f"{row[1]:+,.0f} INR ({row[0]} trades)"
+        except Exception:
+            pass
+        return pos, today, net
+
+    def _futures_ask_live(self, chat_id):
+        self._pending_fut[chat_id] = True
+        _send(chat_id,
+              "⚠️ <b>Switch futures to LIVE?</b>\nThis writes "
+              "reports/mode_futures.json = live.  Real orders still require "
+              "FUTURES_ALLOW_LIVE=1 on the futures worker and the fill gate.\n\n"
+              "Type <b>CONFIRM-FUTURES-LIVE</b> to proceed, or anything else "
+              "to cancel.", FUT_KEYBOARD)
+
+    def _futures_paper(self, chat_id):
+        self._set_futures_mode(chat_id, "paper")
+
+    def _set_futures_mode(self, chat_id, mode):
+        from .mode import get_mode, set_mode
+        set_mode(mode, variant="futures")
+        badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
+        note = ("No real orders until FUTURES_ALLOW_LIVE=1 AND the measured-"
+                "spread/paper-parity gate pass (fill discipline).")
+        _send(chat_id,
+              f"✅ Futures mode set to <b>{badge}</b>.\n{note}", MENU_KEYBOARD)

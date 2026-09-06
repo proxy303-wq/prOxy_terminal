@@ -706,17 +706,115 @@ def probe_dhan_feed(notifier, skip_poll_test=False):
         notifier.log(f"LIVE Dhan REST probe failed: {exc}", "WARN")
 
 
+def run_futures_day(notifier, trade_date):
+    """One NIFTY-futures session (FuturesEngine, warm-seeded = live-faithful).
+
+    Gate discipline (fills first): the session is PAPER unless BOTH
+    reports/mode_futures.json = live (Telegram /futures) AND the worker env
+    carries FUTURES_ALLOW_LIVE=1.  Even then, real orders only start after
+    the measured-spread + paper-parity validation (Monday runbook) - until
+    then live mode logs a WARN and stays paper.
+    """
+    from proxy.futures_config import futures_config
+    from proxy.futures_engine import FuturesEngine
+    from proxy.mode import get_mode
+    from proxy.dhan_rest_feed import DhanRestFeed
+    from proxy.data import load_csv, csv_bars_for_day
+
+    cfg = futures_config()
+    mode = get_mode("futures")
+    _alloc = 1.0
+    try:
+        _alloc = float(os.environ.get("PROXY_ALLOCATION_PCT", "1.0") or 1.0)
+        _alloc = _alloc if 0.0 < _alloc <= 1.0 else 1.0
+    except Exception:
+        pass
+    allow_live = os.environ.get("FUTURES_ALLOW_LIVE", "0") == "1"
+    if mode == "live" and not allow_live:
+        notifier.log(
+            "FUTURES mode=live but FUTURES_ALLOW_LIVE != 1 - running PAPER "
+            "(fill gate: measured spread + paper parity required first)", "WARN")
+        mode = "paper"
+    if mode == "live" and allow_live:
+        notifier.log(
+            "FUTURES LIVE REQUESTED - REAL ORDERS. This path must NOT run until "
+            "the measured-spread + paper==live validation passes (Monday). "
+            "Aborting to paper for safety.", "WARN")
+        mode = "paper"   # real-money futures stays OFF until the fill gate
+    capital = cfg.CAPITAL * _alloc
+    notifier.log(f"FUTURES session {trade_date} - {mode.upper()} "
+                 f"(capital basis {capital:,.0f} INR, slip {cfg.FUT_SLIPPAGE_PTS}pt)", "INFO")
+
+    engine = FuturesEngine(cfg, notify=notifier.log, capital=capital)
+    # warm-up: today's real bars + last 3 CSV days so signals start at 09:15
+    warm = _fetch_today_bars(trade_date, security_id=cfg.INDEX_ID) or []
+    try:
+        _warm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "warmup_5m.csv")
+        _csv = cfg.CSV_PATH if os.path.exists(cfg.CSV_PATH) else _warm_path
+        _df = load_csv(_csv)
+        for _d in sorted(_df["date"].dt.date.unique())[-3:]:
+            warm.extend(csv_bars_for_day(_df, _d))
+    except Exception:
+        pass
+    engine.history = warm[-160:]
+    notifier.log(f"FUTURES warm-up: seeded {len(engine.history)} bars", "INFO")
+
+    feed = DhanRestFeed(poll_interval=float(getattr(cfg, "FEED_POLL_INTERVAL", 2.5) or 2.5),
+                        security_id=int(cfg.INDEX_ID))
+    feed.connect()
+    time.sleep(3)
+    last_bar = None
+    try:
+        while now_ist().time() <= dt_time(15, 31):
+            # intra-bar protective exit on the live index LTP (paper proxy
+            # for the future; real futures quote subscription is Monday work)
+            try:
+                _ltp = feed.live_ltps.get(str(cfg.INDEX_ID))
+                if _ltp:
+                    engine.last_ltp = float(_ltp)
+                    engine.check_live_ltp_exit(float(_ltp))
+            except Exception:
+                pass
+            bar = feed._next_5m_bar(block=False)
+            if bar is not None:
+                last_bar = bar
+                engine.process_bar(bar)
+                engine.persist_state()
+            else:
+                time.sleep(0.5)
+    finally:
+        try:
+            feed.close()
+        except Exception:
+            pass
+    summary = engine.finish_day(last_bar)
+    engine.persist_state()
+    if summary:
+        notifier.log(
+            f"FUTURES DAY SUMMARY {trade_date}\n"
+            f"Trades: {summary['trades_today']} | Day P&L: {summary['day_pnl']:+,.2f} INR\n"
+            f"Equity: {summary['equity']:,.2f} INR | Win rate: {summary['win_rate']:.1f}%\n"
+            f"Monthly target progress: {summary['monthly_progress_pct']:.1f}%", "TRADE")
+    else:
+        notifier.log(f"FUTURES DAY SUMMARY {trade_date}: no bars - session skipped", "WARN")
+    return summary
+
+
 def main(variant=None):
     import argparse
     if variant is None:
         _ap = argparse.ArgumentParser()
-        _ap.add_argument("--variant", choices=["nifty", "banknifty", "finnifty", "sensex"],
+        _ap.add_argument("--variant", choices=["nifty", "banknifty", "finnifty", "sensex", "futures"],
                          default="nifty")
         variant = _ap.parse_args().variant
 
     global STATE_FILE
-    from proxy.dual import variant_config
-    _cfg = variant_config(variant)   # nifty -> proxy.config; else the dual variant
+    if variant == "futures":
+        from proxy.futures_config import futures_config
+        _cfg = futures_config()
+    else:
+        from proxy.dual import variant_config
+        _cfg = variant_config(variant)   # nifty -> proxy.config; else the dual variant
     STATE_FILE = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "reports",
         f"worker_state_{variant}.json" if variant != "nifty" else "worker_state.json")
@@ -766,7 +864,10 @@ def main(variant=None):
                 ensure_token(notifier)
                 notifier.log(f"Market open - running {variant} session for {now.date()}", "INFO")
                 _write_heartbeat("session-start", now.date())
-                run_trading_day(notifier, now.date(), variant=variant)
+                if variant == "futures":
+                    run_futures_day(notifier, now.date())
+                else:
+                    run_trading_day(notifier, now.date(), variant=variant)
                 _save_state({"last_run_date": str(now.date())})
                 notifier.log("Session complete - will resume tomorrow", "INFO")
             else:

@@ -514,3 +514,202 @@ DAILY_TARGET_COMEBACK_MAX (1-2) A-Grade trades (conf>=90, |score|>=0.30,
 structure-aligned - no counter-regime) may still fire, symmetric to the
 SL-side POST_HALT_COMEBACK.  Knob DAILY_TARGET_COMEBACK (env =1 on workers),
 day must stay clearly green.  Default OFF; risk unit checks pass.
+
+
+---
+
+## HANDOVER §18 — INDEX-FUTURES INDICATIVE A/B (NIFTY, 06-Sep)
+
+Same honest harness (1m exits, V4 reverse-delay 1 bar, month-reset, pure
+engine: ADX 18 / conf 65 / RSI 50/50 / stops on / unarmed 4) replaying the
+INDEX in INDEX POINTS instead of the delta-premium option proxy.  The
+signal engine is untouched; only the instrument leg + exit geometry change
+(tools/_futures_lib.py monkeypatches select_leg/_premium_proxy/_close_trade
+hermetically - the shared engine is not edited).  Costs: Rs30/order
+brokerage + 1 index-pt round-trip slippage per unit (TRANSACTION_COST_PCT
+=0 - the % of-notional leg would overstate futures costs ~20x).  Sizing =
+the option-baseline machinery (0.5% of 500k, DEFAULT_LOTS 8) so halts and
+maxDD behave the same; live margin ~2L/lot caps 1-2 lots -> net scales
+down 3-6x live; PF/win/avgR are size-invariant.  Date 2026-09-06.
+Ledger JSONs under reports/v41/ (v41_futures_test_sweep.json,
+v41_futures_confirm.json, v41_futures_slip2.json,
+futures_ab_option_baseline.json, futures_ab_picks.json,
+v41_futures_ab_summary.txt).
+
+OPTION BASELINE reproduced on this checkout: TRAIN 692tr 68.4% +239,361
+PF 1.45 | TEST 326tr 73.6% +263,138 PF 2.32 (published +239,808/+263,078;
+PF/win/trades byte-equal, net within ~100-450 INR float noise).
+
+FUTURES - TEST 2026-01..08 (slip 1pt; target INERT in every cell - exits
+100% LOCK_PROFIT/STOP under the lock, same "stop/target decorative" shape
+as options):
+
+| cell | tr | win% | net | PF | maxDD | avgR |
+|---|---|---|---|---|---|---|
+| stop 5 / arm 1.5 | 317 | 83.0 | +615,428 | 4.37 | 1.91 | 0.539 |
+| stop 8 / arm 1.5 | 342 | 87.7 | +437,411 | 4.13 | 1.69 | 0.405 |
+| stop 10 / arm 1.5 | 345 | 89.0 | +292,350 | 3.57 | 1.46 | 0.307 |
+| stop 12 / arm 1.5 | 349 | 89.7 | +205,661 | 3.24 | 1.38 | 0.240 |
+
+FUTURES - TRAIN 2024-08..2025-12 + arm/slip sensitivity (slip 1pt unless
+noted):
+
+| cell | tr | win% | net | PF | maxDD | avgR |
+|---|---|---|---|---|---|---|
+| stop 5 / arm 1.0 TRAIN | 773 | 66.8 | +972,384 | 3.32 | 1.55 | 0.295 |
+| stop 5 / arm 1.0 TEST | 326 | 74.8 | +709,958 | 5.41 | 1.85 | 0.577 |
+| stop 5 / arm 1.5 TRAIN | 717 | 79.2 | +686,496 | 2.31 | 2.14 | 0.255 |
+| stop 5 / arm 1.5 TEST | 317 | 83.0 | +615,428 | 4.37 | 1.91 | 0.539 |
+| stop 5 / arm 1.5 slip0.5 TEST | 317 | 83.0 | +711,544 | 5.18 | 1.63 | 0.594 |
+| stop 5 / arm 2.0 TRAIN | 673 | 73.3 | +461,193 | 1.73 | 4.86 | 0.210 |
+| stop 5 / arm 2.0 TEST | 311 | 78.1 | +508,856 | 3.23 | 1.91 | 0.482 |
+| stop 8 / arm 1.5 TRAIN | 757 | 84.4 | +469,724 | 2.03 | 2.24 | 0.195 |
+| stop 10 / arm 2.0 TRAIN (=option-analog geo) | 744 | 82.3 | +167,410 | 1.42 | 4.77 | 0.091 |
+| stop 10 / arm 2.0 TEST | 342 | 86.3 | +230,179 | 2.69 | 1.18 | 0.258 |
+
+SLIPPAGE 2pt ROBUSTNESS (double friction - the fill-wall question):
+
+| cell | TRAIN PF | TEST PF |
+|---|---|---|
+| stop 5 / arm 1.0 | 1.88 (+512k, win 54.0) | 3.44 (+514k, win 62.6) |
+| stop 5 / arm 1.5 | 1.39 (+260k, win 49.1) | 2.86 (+425k, win 61.2) |
+| stop 8 / arm 1.5 | 1.27 (+125k, win 50.7) | 2.60 (+268k, win 63.7) |
+
+READING:
+1. Gate verdict (HANDOVER §18 item 4: indicative PF clearly > option-
+   realistic ~1.5+ on BOTH windows): PASS at 1pt slippage for the tight
+   family - stop5/arm1.0 TRAIN 3.32 / TEST 5.41, stop5/arm1.5 2.31 / 4.37,
+   stop8/arm1.5 2.03 / 4.13 (all p<0.01, all vs option-realistic 1.3-1.7
+   and vs the option-mid TRAIN 1.45 that the option build barely clears).
+2. COST-SENSITIVE: doubling slippage to 2pt keeps only arm 1.0 alive on
+   both windows (1.88/3.44); arm 1.5 / stop 8 TRAIN falls below the gate
+   (1.39 / 1.27).  The tight lock arms (1.0-1.5 idx) sit AT the modelled
+   fill cost - the option arm-0.5 lesson in index points.  The verdict
+   HOLDS ONLY IF the real NIFTY-futures book crosses ~<=1pt round trip on
+   the median trade: real book-spread capture is the #1 next step.
+3. The tight-geometry advantage is the mechanism: stop5 idx ~= the option
+   stop at ~2.5 premium pts / arm1.0 ~ 0.5 premium pts - economically
+   TIGHTER than the option live profile, and unplayable on options because
+   the premium spread makes such arms invisible (V4.1 item-2).  Futures
+   retain the modelled directional edge at the tightness the option spread
+   tax forbids.  At the ECONOMICALLY EQUIVALENT geometry (10 idx/arm2 vs
+   the option 5-prem/arm1) futures TRAIN PF 1.42 ~= option TRAIN 1.45 -
+   futures do NOT beat options at equal geometry; they beat them by
+   unlocking the tighter locking regime.
+4. Target knob is inert under the lock (100% LOCK_PROFIT/STOP exits in
+   every cell incl. TEST sweep rows identical across tgt 6.5/10/13); the
+   lock trail IS the exit, exactly like the option repo's conclusion.
+5. Trade counts on TRAIN run HIGHER than the option baseline (717-773 vs
+   692) because futures mode has no strike-once (ONE_TRADE_PER_STRIKE_DAY
+   off - a single tradable, re-entries allowed).  A live design must
+   revisit position-once/cooldown before real fills.
+6. Caveats: level fills are mid-priced with a flat per-trade slippage (no
+   per-side executable model on stops beyond it); NIFTY cash used as the
+   futures proxy (basis/roll not modelled); net INR is at the 0.5%-risk
+   sizing basis - live margin (2L/lot) implies 1-2 lots, ~3-6x smaller.
+
+LOT-SIZE CORRECTION (scrip master, 06-Sep): the real NIFTY index
+futures contract is SEM_LOT_UNITS = 65 (near-month NIFTY-Sep2026-FUT,
+sid 68407), NOT the 75 assumed in §18 - the backtest sizing used 75, so
+all net INR figures above are 75/65 of the 1-lot basis; PF / win / avgR
+are unaffected (size-invariant).  Same lesson as §12.3: always verify
+LOT_SIZE against the live scrip master before sizing anything.
+
+SPREAD-CAPTURE TOOL READY (06-Sep, for Monday): tools/_futures_spread_capture.py
+polls Dhan /v2/marketfeed/quote (full 5-level depth, verified live: bid/ask/
+qty/OI per tick) for the near-month regular index future and logs the real
+book spread through the session (reports/futures_spread_<date>.csv/.json).
+Monday 09:15 run settles the 1pt-vs-2pt fill question that the verdict
+above depends on: set FUT_SLIPPAGE_PTS to the measured median round-trip
+crossing and rerun the top cells, THEN build the live futures engine.
+
+VERDICT: indicative PASS for the stop-5 / arm 1.0-1.5 family at 1pt
+slippage; NOT robust to 2pt on the wider-arm cells.  Before any live path
+(HANDOVER §18 item 5: Dhan NSE_FNO futures orders + paper==live parity):
+(a) capture the REAL NIFTY futures book spread per trade (like the option
+chain logger) to settle the <=1pt question; (b) confirm slippage + limit-
+fill reality on paper-live-like fills; (c) decide the margin-based lot
+size (1-2 lots) and whether the master governor spans a futures engine on
+the same account.  Do NOT deploy without (a).
+
+### WARM-HISTORY IS NOW THE REPO DEFAULT (06-Sep, user decision "set all to warm")
+
+proxy/backtest.py no longer resets indicator history per day and pre-seeds
+each run with the ~160 bars before the first traded day - mirroring the
+live worker's pre-open seeding (railway_worker.py).  Knob:
+config.BT_WARM_HISTORY (default True); False reproduces the legacy cold
+numbers.  Every validation tool that uses Backtest/replay() is now warm.
+
+IMPACT (option baseline, NIFTY, 2026-01 single month): cold 50 tr / 64.0%
+/ +5,460 / PF 1.14 / avgR 0.048 -> WARM 137 tr / 78.1% / +134,198 / PF
+2.81 / avgR 0.371 (p<0.01).  The strategy's edge was hiding in the
+09:15-11:45 window the cold harness never traded.  Expect every published
+cold-era table in this repo (V4.1 baselines, A/B grids, item datasets,
+walk-forward logs, reports/v41/*.json, HANDOVER §13-14 numbers) to be
+SUPERSEDED - counts roughly 1.5-3x and PF/avgR materially higher in the
+warm world.  DO NOT compare a warm number to a cold table.
+
+RERUN STATUS (06-Sep evening): warm option baseline DONE (reports/v41/
+v41_baseline_WARM.json + futures_ab_option_baseline.json):
+  NIFTY TRAIN 2024-08..25-12: 1789 tr / 74.3% / +1,487,195 / PF 2.27 /
+  maxDD 2.22% / avgR 0.161 (cold was 692 / 68.4% / +239,808 / PF 1.45)
+  NIFTY TEST  2026-01..08:     880 tr / 77.0% / +827,091 / PF 2.61 /
+  maxDD 1.64% / avgR 0.233 (cold was 326 / 73.6% / +263,078 / PF 2.32)
+Both windows p<0.01.  Trade counts ~2.6x cold (morning window now
+traded); net 3-6x; PF up on TRAIN (1.45->2.27) and TEST (2.32->2.61);
+TEST avgR per trade slightly lower (0.278->0.233) because the added
+morning trades dilute the afternoon R - the system-level picture is much
+stronger but the per-trade edge mix changed, so re-run A/B decisions
+warm before changing any knob.
+Futures warm reference already exists (engine warm validation below:
+TRAIN 2636tr/+1.63M, TEST 1273tr/+874k - unvalidated upper bound).  The
+cold futures A/B grid (stop x target x arm) still needs a warm rerun
+before its cells are quoted again.  Rule for the next window: every new
+A/B and every re-quote runs warm by default; only use
+BT_WARM_HISTORY=False when deliberately reproducing a legacy cold table.
+
+### FILL-WALL FINDING (06-Sep) - COLD HARNESS MISSES THE WARM MORNING WINDOW
+
+The engine (proxy/futures_engine.py) replays cold-per-day at 56 trades /
++26,033 on Jan-26 vs the A/B's 51 / +22,245 (mechanics faithful, ~10%).
+WARM-SEEDED (history carried across days = what the LIVE worker does:
+railway_worker seeds 160 bars pre-open) the SAME engine makes ~174 trades
+in Jan - the cold per-day A/B loses the 09:15-11:45 window to indicator
+warm-up every day.  Full warm-engine validation (reports/futures_engine_
+warm_validation.json, 1 lot, ₹125/trade friction, stop5/arm1.0):
+  TRAIN 2024-08..25-12: 2636 tr / 82.0% / +1,628,366 / PF 18.8 / avgR 1.9
+  TEST  2026-01..08:    1273 tr / 84.1% / +874,167  / PF 22.9 / avgR 2.1
+MARK AS UNVALIDATED UPPER BOUND, not a trading claim: 1-lot flat-fee
+distorts PF (micro -60/-40 lock "losses"), avgR ~2R is far above the cold
+A/B (~0.25-0.5R) because warm morning entries ride the day's biggest
+legs, and fills are mid-level with flat 1pt slippage (Thursday's real
+close book measured 1.9pt wide).  The real NIFTY-futures book decides -
+same fill-first discipline, now with a bigger prize (and a bigger gap)
+than the cold A/B suggested.  NOTE this applies to the OPTION engine too
+(all option backtests are cold-per-day; the live paper engine is
+warm-seeded) - a repo-wide honesty item for the next window.
+
+### FUTURES PRODUCT SURFACE (06-Sep, built + tested)
+* proxy/futures_config.py + proxy/futures_engine.py: NIFTY-futures paper
+  engine (LONG/SHORT, index-pt geometry, V4 delay, unarmed cut, halts,
+  own DB reports/proxy_state_futures.sqlite + state json, snapshot()).
+  Cold replay reproduces the A/B; warm = live-faithful session.
+* railway_worker.py --variant futures: warm-seeded paper session; LIVE
+  permanently gated (mode_futures.json=live AND FUTURES_ALLOW_LIVE=1 AND
+  the Monday fill gate) - real orders still OFF by design.
+* streamlit_app.py "Futures" tab (read-only): mode chip, NIFTY feed,
+  open position + unrealized, PnL analytics (trades/net/win/PF/daily
+  chart) from the futures DB, today's real-spread capture card, warm +
+  A/B validation recap.
+* proxy/telegram_menu.py: /futures command + GO LIVE FUTURES / PAPER
+  FUTURES buttons - CONFIRM-FUTURES-LIVE flips reports/mode_futures.json
+  (dashboard stays read-only per the mode-flip rule).
+* tests/test_futures_engine.py (4 tests PASS).  tools/_futures_engine_
+  validate.py reruns the warm validation; tools/_futures_e2e_verify.py
+  replays into the canonical DB and exercises the exact page queries.
+* VERIFIED (06-Sep round 2): the streamlit Futures source block was
+  runtime-executed against a populated DB/state (no exceptions); a missing
+  "elif page == Commodities" from the page insert (which would have merged
+  Commodities into the Futures tab) was caught and fixed; mode_futures.json
+  flip verified isolated (NIFTY mode untouched); sample replay artifacts
+  cleared so Monday's paper session starts from an empty ledger.

@@ -89,20 +89,71 @@ def banknifty_config():
 
 
 def finnifty_config():
-    """FINNIFTY variant - same strategy, its own geometry (lot 40, strike
-    step 50, Friday expiry, Dhan index id 27).  ADX left 0 (off) pending a
-    per-index walk-forward (NIFTY wants 18, BANKNIFTY wants 0)."""
+    """FINNIFTY variant - a complete SELF-CONTAINED live profile (mirrors
+    banknifty_config).  HANDOVER §17 scout (06-Sep, tools/_finnifty_scout.py)
+    PASSED the pre-spread gate (test PF 2.77 ADX0/18; every regime fold
+    positive) - see docs/FINNIFTY_SCOUT.md.
+
+    REAL Dhan contract facts (scrip master 06-Sep, NOT the §17 assumptions):
+      * Dhan lists FINNIFTY **MONTHLY** expiries only (2026-09-29/10-27/
+        11-23, EXPIRY_FLAG=M) - exactly like BANKNIFTY, not the weekly-
+        Friday/lot-40 the plan assumed.
+      * LOT_SIZE **60** (dual.py said 40 - first live order would have been
+        DH-905 Invalid Quantity, the BN lot lesson repeated).
+      * index id 27 = charts feed + option-chain/expiry calls (verified);
+        FNO UNDERLYING id = 26037 (scrip-master rows 35034+).
+      * REAL premium scale + spreads are UNMEASURED (chain fetch returns
+        None on Sundays) - §17 step 4.  Exit geometry below is a PLACEHOLDER
+        pending that measurement; paper day-1 (real chain) IS the capture.
+    """
     c = types.SimpleNamespace(**vars(_base))
     c.OPTION_SYMBOL = "FINNIFTY"
-    c.LOT_SIZE = 40                    # FINNIFTY lot size
-    c.OPTION_STRIKE_STEP = 50.0        # FINNIFTY strike ladder (like NIFTY)
+    c.LOT_SIZE = 60                    # REAL Dhan lot (scrip master 06-Sep)
+    c.OPTION_STRIKE_STEP = 50.0        # FINNIFTY strike ladder
     c.CSV_PATH = os.path.join(_base.DATA_DIR, "FINNIFTY_5m.csv")
     c.CSV_PATH_1M = os.path.join(_base.DATA_DIR, "FINNIFTY_1m.csv")
     c.DB_PATH = os.path.join(_base.REPORT_DIR, "proxy_state_finnifty.sqlite")
     c.DASHBOARD_HTML = os.path.join(_base.REPORT_DIR, "dashboard_finnifty.html")
-    c.INDEX_ID = 27                    # Dhan FINNIFTY security id
-    c.WEEKLY_EXPIRY_WEEKDAY = 4        # FINNIFTY weekly expiry = Friday
-    c.MIN_TREND_ADX = 0.0
+    c.INDEX_ID = 27                    # Dhan FINNIFTY index id (feed + chain)
+    c.FNO_UNDERLYING_ID = 26037        # FINNIFTY options underlying (scrip)
+    # The live path picks expiries from Dhan's REAL list (monthly on Dhan);
+    # WEEKLY_EXPIRY_WEEKDAY only drives synthetic/fallback expiry math.
+    c.WEEKLY_EXPIRY_WEEKDAY = 4
+    # ---- LIVE profile discipline (NEVER inherit the box config) ----
+    # dual variants are self-contained: they must not pick up the NIFTY
+    # data-mode / live knobs that the box config.py happens to hold.
+    c.MIN_TREND_ADX = 0.0              # scout ADX0 == ADX18 on test (PF 2.77)
+    c.SL_MODE = "points"
+    c.LOCK_PROFIT_ENABLED = True
+    c.LOCK_TRAIL_ENABLED = True
+    c.TRAIL_SL_TO_ENTRY = True
+    # PLACEHOLDER exit geometry (real premium scale UNMEASURED - §17 step 4).
+    # Monthly FINNIFTY premium will be ~2x the weekly proxy (BN lesson), so
+    # these NIFTY-weekly points are NOT live-ready: fix from the real-chain
+    # capture before flipping live (paper day-1 measures it).
+    c.LOCK_ARM_POINTS = 2.0
+    c.LOCK_FLOOR_POINTS = 1.0
+    c.LOCK_TRAIL_STEP_POINTS = 1.0
+    c.SL_POINTS = 5.0
+    c.TARGET_POINTS = 6.5
+    c.REVERSE_EXIT_DELAY_BARS = 1      # V4 policy
+    c.NO_STOP_LOSS = False
+    c.MIN_CONFIDENCE_PCT = 65.0
+    c.MAX_UNARMED_BARS = 4
+    c.RSI_ENTRY_GATE_BULL = 50.0
+    c.RSI_ENTRY_GATE_BEAR = 50.0
+    c.LUNCH_DOLDRUMS_ENABLED = True
+    c.ML_LAB_ENABLED = False
+    c.ML_ENABLED = False
+    c.META_ENABLED = False
+    c.DEFAULT_LOTS = 1                 # monthly notional is big (lot 60 x ~400+):
+                                       # start ONE lot paper until fills measured
+    c.RISK_PER_TRADE_PCT = 0.0050
+    c.MAX_DAILY_LOSS_PCT = 0.0100
+    c.MAX_MONTHLY_LOSS_PCT = 0.0500
+    c.FEED_POLL_INTERVAL = 2.5         # 3rd worker on one Dhan client id: poll
+                                       # slower (NIFTY 1.8 / BN 2.5) to stay
+                                       # under the ~1 req/s marketfeed budget
     return c
 
 

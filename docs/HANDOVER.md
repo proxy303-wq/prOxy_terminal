@@ -948,6 +948,38 @@ PLAN (cheap, disciplined - drop early if pre-spread edge is not there):
 PRIORITY: NIFTY fill measurement (Monday paper) comes FIRST - NIFTY is the
 live engine; FINNIFTY is a scout-only side quest.
 
+### §17a. SCOUT RESULT (06-Sep, honest mid-model, 2y data now fetched)
+
+FINNIFTY 5m + 1m history was fetched 2024-08-26..2026-09-04 (504 days) -
+the §17 step-1 blocker is GONE (data/FINNIFTY_1m.csv, 188,663 rows).
+Scout tools: tools/_fetch_finnifty.py, tools/_finnifty_scout.py,
+tools/_finnifty_walkforward.py.  Full write-up:
+reports/finnifty_scout_results.md + reports/v41/v41_finnifty_{scout,
+walkforward}.json.
+
+PRE-SPREAD MID-MODEL RESULT (honest harness, 1m exits, V4, month-reset,
+0.20% RT - same as NIFTY/BN baselines):
+  FINNIFTY TRAIN 2024-08..2025-12  ADX0  853tr 72.0%  +336,391 PF1.87
+  FINNIFTY TEST  2026-01..2026-08  ADX0  389tr 77.4%  +244,034 PF2.77
+  (ADX 18: train PF1.90 / test PF2.77; like-for-like on NIFTY's exact days
+  still PF 2.75/2.71 - the edge is not the 6 extra Aug days).
+  Regime walk-forward (item-10 folds): test PF [2.43, 2.62, 3.04, 3.11],
+  median 2.83, EVERY fold positive.
+  GATE §17.3: PASS (test PF 2.77 >= ~1.4-1.5, above NIFTY's own 2.32).
+  Monthly-scale sensitivity (BN-eq 0.0144, ~2.2x proxy): test PF 2.25 /
+  train 1.53 - still clears the gate, so the raw edge is not a weekly-
+  scale artifact.  Details: docs/FINNIFTY_SCOUT.md.
+
+⚠ REAL-CONTRACT REALITY (Dhan scrip master 06-Sep) - fix BEFORE any live
+  thinking: dual.finnifty_config() assumes lot 40 + WEEKLY Friday; Dhan
+  actually lists FINNIFTY **MONTHLY** (2026-09-29/10-27/11-23, EXPIRY_FLAG
+  =M) with LOT_SIZE **60** and FNO UNDERLYING id **26037** (id 27 = index
+  candles only).  Same BN trap (assumed weekly/lot35, real monthly/lot30).
+  Monthly premium scale will be ~2x the 0.65% weekly proxy - measure the
+  real FINNIFTY chain premium + spreads in a market session BEFORE any
+  expectation (chain fetch returns None on Sundays).  Spread capture per
+  strike is the next gate and still cannot run off-hours.
+
 ## 18. INDEX FUTURES SCALP (user 05-Sep) — NEW CHAT: NIFTY futures vs options
 
 Hypothesis (from this session's evidence): the option build's biggest cost

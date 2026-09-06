@@ -116,6 +116,116 @@ class TestFuturesEngineReplay(unittest.TestCase):
         self.assertIsNotNone(rec)
 
 
+class FakeLiveBroker:
+    """Live broker stub that records bracket/plain orders (no network)."""
+    live = True
+
+    def __init__(self):
+        self.brackets = []
+        self.orders = []
+        self.cancelled = []
+
+    def place_resolved_bracket(self, side, security_id, trading_symbol, quantity,
+                               entry_price=0.0, target_price=0.0, stop_price=0.0,
+                               order_type="MARKET", trigger_price=None, tag="", instrument=None):
+        self.brackets.append(dict(side=side, sid=security_id, sym=trading_symbol,
+                                  qty=quantity, entry=entry_price, target=target_price,
+                                  stop=stop_price, order_type=order_type,
+                                  trigger=trigger_price, tag=tag))
+        return {"orderId": "BK-1"}
+
+    def place_order(self, side, instrument, qty):
+        self.orders.append((side, instrument, qty))
+        return {"orderId": "O-1"}
+
+    def cancel_bracket(self, order_id):
+        self.cancelled.append(order_id)
+        return {"status": "OK"}
+
+
+def _plan_dict(direction="LONG", entry=25000.0):
+    sign = 1.0 if direction == "LONG" else -1.0
+    return {
+        "instrument": "NIFTY FUT", "direction": direction, "option_type": "FUT",
+        "lots": 1, "quantity": 65, "entry_premium": entry, "entry_spot": entry,
+        "stop_premium": entry - sign * 5.0, "target_premium": entry + sign * 6.5,
+        "entry_level": entry, "stop_per_unit": 5.0, "target_per_unit": 6.5,
+        "sl_total": 325.0, "risk_rs": 325.0, "pnl_peak": None, "peak_pct": 0.0,
+        "lock_armed": False, "lock_floor_pct": 0.0, "theta_day_pct": 0.0,
+        "bars_held": 0, "setup_type": "", "confidence": 90.0, "score": 0.5,
+        "trend": "DOWNTREND", "entry_time": None, "reverse_pending_at": None,
+    }
+
+
+class TestFuturesBracket(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        self._tmp.close()
+        self.addCleanup(lambda: os.path.exists(self._tmp.name) and os.remove(self._tmp.name))
+
+    def _eng(self, broker, style="limit", bracket_on=True):
+        from proxy.futures_config import futures_config
+        from proxy.futures_engine import FuturesEngine
+        cfg = futures_config()
+        cfg.DB_PATH = self._tmp.name
+        cfg.BRACKET_LIVE_ENABLED = bracket_on
+        cfg.BRACKET_ENTRY_STYLE = style
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None, broker=broker)
+        eng._fut_sid = 68407
+        eng._fut_symbol = "NIFTY-Sep2026-FUT"
+        return eng
+
+    def test_limit_bracket_long_entry_and_cancel(self):
+        br = FakeLiveBroker()
+        eng = self._eng(br, style="limit")
+        plan = _plan_dict("LONG", 25000.0)
+        self.assertTrue(eng._live_enter(plan))
+        self.assertEqual(len(br.brackets), 1)
+        b = br.brackets[0]
+        self.assertEqual(b["side"], "BUY")
+        self.assertEqual(b["order_type"], "LIMIT")
+        self.assertEqual(b["target"], 25006.5)   # entry + target pts
+        self.assertEqual(b["stop"], 24995.0)      # entry - stop pts
+        self.assertEqual(b["qty"], 65)
+        self.assertEqual(plan.get("bracket_id"), "BK-1")
+        self.assertEqual(br.orders, [], "bracket path must not fall back to plain orders")
+        # engine-side close cancels the resting bracket
+        eng.active = plan
+        eng._bracket_id = "BK-1"
+        eng._close(24996.0, "LOCK_PROFIT", {"time": datetime.datetime(2026, 1, 8, 12, 0)})
+        self.assertIn("BK-1", br.cancelled)
+
+    def test_stop_bracket_short_sets_trigger(self):
+        br = FakeLiveBroker()
+        eng = self._eng(br, style="stop")
+        plan = _plan_dict("SHORT", 25000.0)
+        self.assertTrue(eng._live_enter(plan))
+        b = br.brackets[0]
+        self.assertEqual(b["side"], "SELL")
+        self.assertEqual(b["order_type"], "STOP_LOSS_MARKET")
+        # short continuation trigger below the level (down move)
+        self.assertAlmostEqual(b["trigger"], 25000.0 - 1.0, places=3)
+
+    def test_no_bracket_falls_back_to_plain_order(self):
+        br = FakeLiveBroker()
+        eng = self._eng(br, bracket_on=False)
+        plan = _plan_dict("LONG", 25000.0)
+        self.assertTrue(eng._live_enter(plan))
+        self.assertEqual(br.brackets, [])
+        self.assertEqual(len(br.orders), 1)
+
+    def test_payload_builder_accepts_futures_symbol(self):
+        from proxy.dhan_broker import DhanBroker
+        p = DhanBroker.build_bracket_payload(
+            "1100220382", "SELL", "NIFTY-Sep2026-FUT", 65, 68407,
+            "NIFTY-Sep2026-FUT", 0.0, 24993.5, 25005.0, order_type="MARKET", tag="PrOxyFut")
+        self.assertEqual(p["exchangeSegment"], "NSE_FNO")
+        self.assertEqual(p["transactionType"], "SELL")
+        self.assertEqual(p["securityId"], 68407)
+        self.assertEqual(p["orderType"], "MARKET")
+        self.assertEqual(p["price"], 0.0)
+
+
 class TestFuturesMode(unittest.TestCase):
     def test_mode_defaults_paper(self):
         from proxy.mode import get_mode, set_mode, mode_file_for

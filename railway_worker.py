@@ -753,6 +753,15 @@ def run_futures_day(notifier, trade_date):
             "the measured-spread + paper==live validation passes (Monday). "
             "Aborting to paper for safety.", "WARN")
         mode = "paper"   # real-money futures stays OFF until the fill gate
+    # bracket / super-order entry knobs (live-only; env like the option worker)
+    for _k, _t in (("BRACKET_LIVE_ENABLED", bool), ("BRACKET_ENTRY_STYLE", str),
+                   ("BRACKET_LIMIT_OFFSET_PTS", float), ("BRACKET_TRIGGER_OFFSET_PTS", float)):
+        try:
+            _v = os.environ.get(_k)
+            if _v is not None and _v != "":
+                setattr(cfg, _k, _t(_v))
+        except Exception:
+            pass
     capital = cfg.CAPITAL * _alloc
     notifier.log(f"FUTURES session {trade_date} - {mode.upper()} "
                  f"(capital basis {capital:,.0f} INR, slip {cfg.FUT_SLIPPAGE_PTS}pt)", "INFO")

@@ -47,6 +47,43 @@ from .scoring import generate_signal
 
 IST = ZoneInfo("Asia/Kolkata")
 WARMUP_BARS = 30
+SCRIB_MASTER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "data", "scrip_master", "api-scrip-master.csv")
+
+
+def resolve_futures_contract(symbol="NIFTY", instrument_name="FUTIDX"):
+    """Near-month regular (non-FPI) index future from the Dhan scrip master.
+    Returns (security_id:int, trading_symbol:str, expiry:str, lot:float) or
+    (None, None, None, None)."""
+    import csv as _csv
+    from datetime import datetime as _dt
+    rows = []
+    try:
+        with open(SCRIB_MASTER, encoding="utf-8") as fh:
+            for r in _csv.DictReader(fh):
+                sym = (r.get("SEM_TRADING_SYMBOL") or "")
+                if (r.get("SEM_INSTRUMENT_NAME") or "") != instrument_name:
+                    continue
+                if not sym.upper().startswith(symbol.upper() + "-"):
+                    continue
+                if "FPI" in sym.upper():
+                    continue
+                expiry = (r.get("SEM_EXPIRY_DATE") or "")[:10]
+                if not expiry:
+                    continue
+                rows.append((expiry, sym, r.get("SEM_SMST_SECURITY_ID"),
+                             r.get("SEM_LOT_UNITS") or ""))
+    except Exception:
+        return None, None, None, None
+    rows.sort(key=lambda x: x[0])
+    today = _dt.now().date()
+    for expiry, sym, sid, lot in rows:
+        try:
+            if _dt.strptime(expiry, "%Y-%m-%d").date() >= today:
+                return int(sid), sym, expiry, float(lot or 0)
+        except ValueError:
+            continue
+    return (int(rows[0][2]), rows[0][1], rows[0][0], float(rows[0][3] or 0)) if rows else (None, None, None, None)
 
 
 class FuturesEngine:
@@ -85,6 +122,19 @@ class FuturesEngine:
         self.bars_processed = 0
         self.last_ltp = None
         self._last_signal = None
+        # live futures contract (resolved lazily for the bracket path)
+        self._fut_sid = getattr(self.cfg, "FUTURES_SECURITY_ID", None)
+        self._fut_symbol = getattr(self.cfg, "FUTURES_TRADING_SYMBOL", None)
+        self._bracket_id = None
+        self._resolve_contract()
+
+    def _resolve_contract(self):
+        if self._fut_sid and self._fut_symbol:
+            return
+        sid, sym, _exp, _lot = resolve_futures_contract(
+            getattr(self.cfg, "FUT_SYMBOL", "NIFTY"))
+        self._fut_sid = self._fut_sid or sid
+        self._fut_symbol = self._fut_symbol or sym
 
     # ---------------------------------------------------------- db / log
 
@@ -267,6 +317,19 @@ class FuturesEngine:
 
     def _close(self, exit_price, exit_reason, bar):
         t = self.active
+        # LIVE + BRACKET: cancel the resting broker target/SL legs BEFORE the
+        # engine books its own exit - a residual bracket leg must never fire
+        # after the engine has closed (no double fill).  The broker exit
+        # order itself is placed by _live_close once fill anchoring lands
+        # (Monday); until then the live path stays gated OFF.
+        if (getattr(self.broker, "live", False)
+                and bool(getattr(self.cfg, "BRACKET_LIVE_ENABLED", False))
+                and self._bracket_id and hasattr(self.broker, "cancel_bracket")):
+            try:
+                self.broker.cancel_bracket(self._bracket_id)
+                self._bracket_id = None
+            except Exception:
+                pass
         sign = 1.0 if t["direction"] == "LONG" else -1.0
         qty = int(t["quantity"] or 0)
         gross = (float(exit_price) - float(t["entry_premium"])) * qty * sign
@@ -391,23 +454,77 @@ class FuturesEngine:
 
     def _live_enter(self, plan):
         """Paper: accept immediately at the level.  Live: place the real
-        NSE_FNO futures order and accept only a confirmed fill."""
+        NSE_FNO futures order and accept only a confirmed fill.
+
+        BRACKET / SUPER-ORDER mode (cfg.BRACKET_LIVE_ENABLED, live only):
+        the ENTRY is placed as a Dhan SUPER order with our target/SL resting
+        at the broker (crash safety + prompt, slippage-capped fills) instead
+        of a bare market order.  Entry styles (cfg.BRACKET_ENTRY_STYLE):
+          market -> MARKET entry, resting target/SL (recommended for zero
+                    entry delay)
+          limit  -> LIMIT at entry +/- BRACKET_LIMIT_OFFSET_PTS (direction
+                    aware: LONG bids below the level to fill cheaper - can
+                    wait/miss fast moves; raise the offset for speed)
+          stop   -> STOP_LOSS_MARKET triggered at entry +/-
+                    BRACKET_TRIGGER_OFFSET_PTS (continuation entry - waits
+                    on purpose)
+        Before ANY engine-side close the resting legs are cancelled
+        (cancel_bracket in _close) so there is never a double fill.  The
+        broker SL leg is a FIXED backstop (trailingJump 0) - the engine's
+        validated lock/trail stays in charge while it is alive.
+        Real-fill anchoring + 1-lot bracket acceptance check = Monday."""
         if not getattr(self.broker, "live", False):
             return True
         side = "BUY" if plan["direction"] == "LONG" else "SELL"
-        try:
-            res = self.broker.place_order(side, plan["instrument"], plan["quantity"])
-            ok = bool(res)
-            if isinstance(res, dict):
-                ok = bool(res.get("orderId")) or bool((res.get("data") or {}).get("orderId"))
-            if not ok:
-                self.log(f"LIVE order rejected: {str(res)[:200]}", "WARN")
+        is_long = plan["direction"] == "LONG"
+        res = None
+        bracket_on = (bool(getattr(self.cfg, "BRACKET_LIVE_ENABLED", False))
+                      and hasattr(self.broker, "place_resolved_bracket")
+                      and self._fut_sid and self._fut_symbol)
+        if bracket_on:
+            try:
+                style = str(getattr(self.cfg, "BRACKET_ENTRY_STYLE", "market")).lower()
+                lvl = float(plan["entry_premium"])
+                off_lim = float(getattr(self.cfg, "BRACKET_LIMIT_OFFSET_PTS", 0.0) or 0.0)
+                off_trg = float(getattr(self.cfg, "BRACKET_TRIGGER_OFFSET_PTS", 1.0) or 1.0)
+                if style == "stop":
+                    otype, price, trigger = "STOP_LOSS_MARKET", 0.0,                         lvl + (off_trg if is_long else -off_trg)
+                elif style == "limit":
+                    otype, price, trigger = "LIMIT",                         lvl - (off_lim if is_long else -off_lim), None
+                else:
+                    otype, price, trigger = "MARKET", 0.0, None
+                res = self.broker.place_resolved_bracket(
+                    side, self._fut_sid, self._fut_symbol, int(plan["quantity"]),
+                    entry_price=price, target_price=float(plan["target_premium"]),
+                    stop_price=float(plan["stop_premium"]), order_type=otype,
+                    trigger_price=trigger, tag="PrOxyFut",
+                    instrument=plan["instrument"])
+                _bid = (res.get("orderId") or ((res.get("data") or {}).get("orderId")
+                                               if isinstance(res.get("data"), dict) else None))                     if isinstance(res, dict) else None
+                if _bid:
+                    plan["bracket_id"] = _bid
+                    self._bracket_id = _bid
+                    self.log(f"LIVE bracket {style} entry placed (bracket {_bid})", "TRADE")
+                    return True
+                self.log(f"BRACKET place failed ({str(res)[:160]}) - falling back", "WARN")
+                res = None
+            except Exception as exc:
+                self.log(f"BRACKET place error ({str(exc)[:160]}) - falling back", "WARN")
+                res = None
+        if res is None:
+            try:
+                res = self.broker.place_order(side, plan["instrument"], plan["quantity"])
+            except Exception as exc:
+                self.log(f"LIVE order failed ({exc}) - entry skipped", "WARN")
                 return False
-            plan["broker_order_id"] = res.get("orderId") or (res.get("data") or {}).get("orderId")
-            return True
-        except Exception as exc:
-            self.log(f"LIVE order failed ({exc}) - entry skipped", "WARN")
+        ok = bool(res)
+        if isinstance(res, dict):
+            ok = bool(res.get("orderId")) or bool((res.get("data") or {}).get("orderId"))
+        if not ok:
+            self.log(f"LIVE order rejected: {str(res)[:200]}", "WARN")
             return False
+        plan["broker_order_id"] = res.get("orderId") or (res.get("data") or {}).get("orderId")
+        return True
 
     def finish_day(self, last_bar=None):
         """Force-close any open position and return the day summary."""

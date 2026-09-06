@@ -381,6 +381,33 @@ class DhanBroker(Broker):
             res.setdefault("tradingSymbol", trading_symbol)
         return res
 
+    def place_resolved_bracket(self, side, security_id, trading_symbol, quantity,
+                                entry_price, target_price, stop_price,
+                                trailing_jump=0.0, order_type="MARKET",
+                                tag="PrOxyBracket", trigger_price=None,
+                                product="INTRADAY", instrument=None):
+        """Place a Dhan SUPER order (bracket) on an ALREADY-RESOLVED NSE_FNO
+        instrument (security_id + trading_symbol supplied) - the futures path
+        (index futures / any instrument that is not an option-chain symbol,
+        so place_bracket's option-format mismatch check does not apply).
+        Levels rest at the broker; the engine cancels them before any
+        engine-side close (no double fill)."""
+        self._ensure_valid_token()
+        payload = self.build_bracket_payload(
+            self.client_id, side, instrument or trading_symbol, quantity,
+            security_id, trading_symbol, entry_price, target_price, stop_price,
+            trailing_jump=trailing_jump, order_type=order_type, tag=tag,
+            trigger_price=trigger_price, product=product)
+        print(("[bracket:%s] %s %s qty %s entry %s tgt %s sl %s" % (
+            instrument or trading_symbol, side, order_type, quantity,
+            payload["price"], payload["targetPrice"], payload["stopLossPrice"])), flush=True)
+        with self._lock:
+            res = self._api.dhan_http.post("/super/orders", payload)
+        if isinstance(res, dict):
+            res.setdefault("securityId", int(security_id))
+            res.setdefault("tradingSymbol", trading_symbol)
+        return res
+
     def cancel_bracket(self, order_id):
         """Cancel the RESTING legs of a super order (a filled entry position stays).
         We cancel the whole bracket so no residual target/SL can fire later."""

@@ -668,6 +668,31 @@ before its cells are quoted again.  Rule for the next window: every new
 A/B and every re-quote runs warm by default; only use
 BT_WARM_HISTORY=False when deliberately reproducing a legacy cold table.
 
+### SUPER-ORDER / BRACKET ENTRIES - futures + option enable staged (06-Sep)
+
+proxy/dhan_broker.py: place_resolved_bracket() - SUPER-order placement for
+an ALREADY-RESOLVED NSE_FNO instrument (futures; skips the option-symbol
+mismatch check).  FuturesEngine._live_enter now uses it when
+BRACKET_LIVE_ENABLED (styles: market | limit +/- BRACKET_LIMIT_OFFSET_PTS
+| stop trigger +/- BRACKET_TRIGGER_OFFSET_PTS; target/SL rest at the
+broker as a FIXED crash-safety backstop, trailingJump 0 so the engine's
+validated lock/trail stays authoritative) and _close cancels the resting
+legs before any engine close (no double fill).  railway_worker maps the
+BRACKET_* env knobs for the futures variant too.  Tests 8/8 PASS
+(bracket payload for FUT symbols + entry styles + cancel + fallback).
+
+ENTRY-STYLE HONESTY (for 'no delayed entries'): market = fills now, legs
+rest at broker; limit below market can WAIT (delayed by design); stop =
+continuation entry, waits on purpose.  For prompt signal entries use
+BRACKET_ENTRY_STYLE=market.
+
+BOX: the NIFTY/BN live engines already had the bracket path (engine.py +
+run_trading_day env mapping) but BRACKET_LIVE_ENABLED is OFF on the box.
+Enable = append the knobs to /opt/proxy/.env + restart
+(tools/_enable_bracket_box.py, DRY RUN by default).  Per the V41 runbook
+the bracket was to be acceptance-tested 1-lot on Monday first - flipping
+real-money order behaviour is the user's explicit go.
+
 ### WARM FUTURES GRID (06-Sep evening, reports/v41/v41_futures_warm_grid.json)
 
 Full stop x arm warm rerun (BT_WARM_HISTORY=True, slip 1pt, fee Rs30/side,

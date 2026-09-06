@@ -52,9 +52,23 @@ after the futures session's worker commit).
 3. railway_worker.py: FINNIFTY_ALLOW_LIVE env gate in the generic live
    branch for variant == "finnifty" (mode file + env, like futures).
 4. Deploy to the box + first PAPER session (real chain -> real premium
-   scale + spread capture -> then decide live geometry) - still pending.
+   scale + spread capture -> then decide live geometry) - DEPLOYED 06-Sep
+   ~19:57 IST (commit 86fb82f; tools/_fin_deploy_box.py, targeted scp, no
+   config.py push - the box keeps its own LIVE profile).
+
+## DEPLOY STATE (06-Sep ~20:00 IST, verified)
+- Box: dual.py (lot 60 / FNO 26037) + railway_worker.py (FINNIFTY_ALLOW_LIVE
+  gate) + streamlit_app.py (FINNIFTY page) + telegram_menu.py (/finnifty) +
+  start.sh (third worker loop) all uploaded, COMPILE_OK, service restarted
+  (Sunday, market closed, flat), streamlit health 200.
+- Three workers up: NIFTY (live), BANKNIFTY (live), FINNIFTY (paper - mode
+  file absent).  [FINNIFTY] REST probe OK + poller alive + tracker DB
+  created (/opt/proxy/reports/proxy_state_finnifty.sqlite).
+- mode.json + mode_banknifty.json = live, UNTOUCHED.  mode_finnifty.json
+  absent -> paper.  NO mode flips done.
+- First FINNIFTY PAPER session = Monday market day (real chain capture).
 
 ## Safety invariant
 mode_finnifty.json absent = PAPER, exactly like BANKNIFTY/futures.  Live
 requires BOTH the real-scale measurement marker AND the worker allow-env.
-No mode flips were done; the box keeps running NIFTY+BN as-is.
+No mode flips were done; the box runs NIFTY+BN live + FINNIFTY paper.

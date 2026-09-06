@@ -673,7 +673,10 @@ BT_WARM_HISTORY=False when deliberately reproducing a legacy cold table.
 Account topped to ~7L.  BANKNIFTY DISABLED COMPLETELY (start.sh loop
 removed, mode_banknifty.json deleted, 0 positions confirmed).  Live split
 on the FULL balance (start.sh envs): NIFTY 0.20 / FINNIFTY 0.30 /
-FUTURES 0.50.  Target = 12.5%/mo of 7L = ~87,500 INR/mo.  Gates intact:
+FUTURES 0.50 - REBALANCED (same evening): NIFTY 0.40 / FINNIFTY 0.30 /
+FUTURES 0.30 so the NIFTY 4-lot standard fits the 0.5% risk rule
+(4 lots x 325 = 1,300 needs >= ~2.6L basis; 40% of 7L = 2.8L).
+Target = 12.5%/mo of 7L = ~87,500 INR/mo.  Gates intact:
 FINNIFTY paper until mode_finnifty.json (own session); FUTURES paper until
 mode_futures.json + FUTURES_ALLOW_LIVE + measured-spread fill gate.
 Honest note recorded at decision time: 50% to futures rides warm

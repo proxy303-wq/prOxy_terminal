@@ -668,6 +668,27 @@ before its cells are quoted again.  Rule for the next window: every new
 A/B and every re-quote runs warm by default; only use
 BT_WARM_HISTORY=False when deliberately reproducing a legacy cold table.
 
+### WARM FUTURES GRID (06-Sep evening, reports/v41/v41_futures_warm_grid.json)
+
+Full stop x arm warm rerun (BT_WARM_HISTORY=True, slip 1pt, fee Rs30/side,
+target inert, 0.5%-risk sizing basis; all p<0.01):
+
+| cell | TRAIN tr / win / net / PF / avgR | TEST tr / win / net / PF / avgR |
+|---|---|---|
+| stop 5 arm 1.0 | 2291 / 71.4% / +4,681,332 / 4.98 / 0.212 | 1140 / 74.6% / +2,566,661 / 5.99 / 0.332 |
+| stop 5 arm 1.5 | 2125 / 81.5% / +3,815,856 / 3.66 / 0.211 | 1039 / 82.1% / +2,048,835 / 4.06 / 0.328 |
+| stop 8 arm 1.0 | 2234 / 73.3% / +4,290,476 / 4.34 / 0.213 | 1142 / 76.6% / +2,277,360 / 5.06 / 0.321 |
+| stop 8 arm 1.5 | 2076 / 85.1% / +3,324,913 / 3.11 / 0.208 | 1064 / 85.9% / +1,831,125 / 3.62 / 0.310 |
+| stop 10 arm 1.0 | 2303 / 74.3% / +4,084,141 / 4.15 / 0.206 | 1145 / 76.9% / +1,949,820 / 4.50 / 0.303 |
+| stop 10 arm 2.0 | 2026 / 84.0% / +2,405,359 / 2.32 / 0.189 | 1038 / 85.5% / +1,218,844 / 2.67 / 0.264 |
+
+DECISION: stop 5 / arm 1.0 is the best warm cell on BOTH windows (PF
+4.98/5.99) - the futures_config default (deployed) stands; NO geometry
+change.  Trades ~3x the cold grid (morning window traded), nets 4-7x,
+TRAIN PF up (cold stop5/arm1.0 3.32 -> warm 4.98).  Same caveats: warm
+is live-faithful but mid-filled with flat 1pt slip - Monday's real book
+is the adjudicator.
+
 ### FILL-WALL FINDING (06-Sep) - COLD HARNESS MISSES THE WARM MORNING WINDOW
 
 The engine (proxy/futures_engine.py) replays cold-per-day at 56 trades /

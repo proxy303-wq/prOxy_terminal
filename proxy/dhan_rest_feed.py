@@ -144,8 +144,19 @@ class DhanRestFeed:
         self.poll_interval = poll_interval
         self.timeout = timeout
         self.notify = notify
+        # Poll set must include the feed's OWN security_id or no bar can ever
+        # form: _next_5m_bar only builds bars from ticks whose sid ==
+        # security_id, so a FINNIFTY worker (security_id=27) polling only
+        # 13/25 got ZERO bars all session (07-Sep zero-bars bug).  NIFTY 13
+        # and BANKNIFTY 25 stay polled (dashboards/probes read both), and any
+        # other index id (FINNIFTY 27 / SENSEX 51) is added so its worker
+        # receives ticks.  The option-only feed starts empty (subscribed
+        # NSE_FNO legs are added later).
         self.instruments = [] if option_only else [
             ("IDX_I", NIFTY_INDEX_ID), ("IDX_I", BANKNIFTY_INDEX_ID)]
+        if not option_only and int(self.security_id or NIFTY_INDEX_ID) not in (
+                NIFTY_INDEX_ID, BANKNIFTY_INDEX_ID):
+            self.instruments.append(("IDX_I", int(self.security_id)))
         self.live_ltps = {}           # sid (str) -> last price
         # REAL option LTP bars (NSE_FNO): polled continuously, finalised
         # per 5-min bucket so the engine can trigger exits on the ACTUAL

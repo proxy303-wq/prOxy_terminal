@@ -550,44 +550,63 @@ class PaperEngine:
             f"stop {plan['stop_premium']:.2f} target {plan['target_premium']:.2f}", "TRADE")
         return True
 
-    def _anchor_exit_to_fill(self, t, booked_price, booked_pnl):
-        """Re-book a LIVE exit at the REAL broker fill.
+    def _anchor_exit_to_fill(self, t, booked_price, booked_pnl, order_id=None):
+        """Re-book a LIVE exit at the REAL broker fill - PER ORDER.
 
-        The exit order is MARKET, so the actual fill differs from the
-        trigger level the engine books (04-Sep: a BN target exit booked
-        @ 671.49 / +898 actually filled ~677 / +1,278 - Dhan's realized;
-        day-1 stops slipped the OTHER way on fast moves).  After the
-        order fills, poll the position book until the security nets to 0
-        and read Dhan's own realizedProfit + the sell/buy average - the
-        same numbers the app shows.  The anchor window is safe: this
-        engine holds ONE position per symbol and the next entry can only
-        come at a later bar close, minutes away.
+        The exit order fills away from the trigger level the engine books
+        (04-Sep: BN target booked @ 671.49/+898 actually filled ~677/
+        +1,278).  FIX 07-Sep: anchor to the EXIT ORDER's own fill
+        (averageTradedPrice once TRADED) instead of the position row's
+        realizedProfit - the position row is CUMULATIVE PER SYMBOL for the
+        day, so when the same strike is traded more than once the realised
+        figure bundles the earlier legs and misattributes P&L (07-Sep:
+        24250-PE x3 -> the 2nd leg booked -517 while its real fill was
+        +110.5).  The per-order average is leg-exact.
 
         Returns (real_exit_price, real_pnl); falls back to the booked
-        level values when the fill cannot be confirmed (position book
-        lag / API hiccup)."""
-        if not (getattr(self.broker, "live", False) and hasattr(self.broker, "get_positions")):
-            return booked_price, booked_pnl
-        sid = str(t.get("security_id") or "")
-        if not sid:
+        values when the fill cannot be confirmed (order lag / API hiccup)."""
+        if not getattr(self.broker, "live", False):
             return booked_price, booked_pnl
         import time as _t
-        for _attempt in range(15):
-            try:
-                for p in self.broker.get_positions():
-                    if str(p.get("securityId")) == sid and int(p.get("netQty") or 0) == 0:
-                        rp = float(p.get("realizedProfit") or 0)
-                        if t["direction"] == "LONG":
-                            sa = float(p.get("sellAvg") or 0)
-                            if sa > 0 and rp != 0:
-                                return round(sa, 2), round(rp, 2)
-                        else:
-                            ba = float(p.get("buyAvg") or 0)
-                            if ba > 0 and rp != 0:
-                                return round(ba, 2), round(rp, 2)
-            except Exception:
-                pass
-            _t.sleep(0.7)
+        get_order = getattr(self.broker, "get_order", None)
+        qty = int(t.get("quantity") or 0)
+        entry = float(t.get("entry_premium") or 0)
+        sign = 1.0 if t["direction"] == "LONG" else -1.0
+        if get_order is not None and order_id:
+            for _attempt in range(15):
+                try:
+                    o = get_order(order_id)
+                    st = (o or {}).get("orderStatus")
+                    avg = float((o or {}).get("averageTradedPrice") or 0)
+                    if st == "TRADED" and avg > 0 and qty > 0:
+                        pnl = (avg - entry) * qty * sign
+                        return round(avg, 2), round(pnl, 2)
+                    if st in ("REJECTED", "CANCELLED"):
+                        break
+                except Exception:
+                    pass
+                _t.sleep(0.7)
+            return booked_price, booked_pnl
+        # fallback: position-row realised (only safe when the symbol traded ONCE)
+        if hasattr(self.broker, "get_positions"):
+            sid = str(t.get("security_id") or "")
+            if sid:
+                for _attempt in range(15):
+                    try:
+                        for p in self.broker.get_positions():
+                            if str(p.get("securityId")) == sid and int(p.get("netQty") or 0) == 0:
+                                rp = float(p.get("realizedProfit") or 0)
+                                if t["direction"] == "LONG":
+                                    sa = float(p.get("sellAvg") or 0)
+                                    if sa > 0 and rp != 0:
+                                        return round(sa, 2), round(rp, 2)
+                                else:
+                                    ba = float(p.get("buyAvg") or 0)
+                                    if ba > 0 and rp != 0:
+                                        return round(ba, 2), round(rp, 2)
+                    except Exception:
+                        pass
+                    _t.sleep(0.7)
         return booked_price, booked_pnl
 
     # ----------------------------------------------------------
@@ -896,6 +915,9 @@ class PaperEngine:
                         f"LIVE exit order REJECTED ({_ost}) - position still open, retrying next bar",
                         "WARN")
                     return None
+                _exit_oid = (res.get("orderId")
+                             or ((res.get("data") or {}).get("orderId")
+                                 if isinstance(res.get("data"), dict) else None))                     if isinstance(res, dict) else None
             except Exception as exc:
                 self.notify(
                     f"LIVE exit order failed: {exc} - position still open, retrying next bar",
@@ -903,8 +925,12 @@ class PaperEngine:
                 return None
             # anchor the booked exit to the REAL broker fill (bookkeeping
             # only): the market order fills away from the trigger level, so
-            # the record + daily P&L should track real money, not the level
-            _real_exit, _real_pnl = self._anchor_exit_to_fill(t, exit_price, pnl)
+            # the record + daily P&L should track real money, not the level.
+            # 07-Sep: anchor to the EXIT ORDER's own fill (per-leg) - the
+            # position-row realisedProfit is cumulative per symbol for the
+            # day and misattributes repeats of the same strike.
+            _real_exit, _real_pnl = self._anchor_exit_to_fill(
+                t, exit_price, pnl, order_id=_exit_oid)
             if _real_exit != exit_price or _real_pnl != pnl:
                 _booked_exit, _booked_pnl = exit_price, pnl
                 exit_price, pnl = _real_exit, _real_pnl

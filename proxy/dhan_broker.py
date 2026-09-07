@@ -408,6 +408,23 @@ class DhanBroker(Broker):
             res.setdefault("tradingSymbol", trading_symbol)
         return res
 
+    def get_order(self, order_id):
+        """Fetch one order by id from the full /orders list (Dhan has no
+        single-order GET endpoint).  Returns the raw order dict or None."""
+        if not order_id:
+            return None
+        try:
+            with self._lock:
+                res = self._api.dhan_http.get("/orders")
+            data = (res or {}).get("data") or []
+            if isinstance(data, list):
+                for row in data:
+                    if str(row.get("orderId")) == str(order_id):
+                        return row
+            return None
+        except Exception:
+            return None
+
     def cancel_bracket(self, order_id):
         """Cancel the RESTING legs of a super order (a filled entry position stays).
         We cancel the whole bracket so no residual target/SL can fire later."""

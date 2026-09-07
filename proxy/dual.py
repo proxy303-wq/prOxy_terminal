@@ -84,6 +84,7 @@ def banknifty_config():
     # req/s) on the SAME Dhan client id - BN polls slower (0.4 req/s) so
     # the two feeds + dashboard stay under Dhan's ~1 req/s.  The feed
     # batches index + subscribed options into ONE request per poll.
+    c.EXPIRY_ROLL_DAYS = 2             # dual variants keep their own roll (NIFTY=3)
     c.FEED_POLL_INTERVAL = 2.5
     return c
 
@@ -155,6 +156,8 @@ def finnifty_config():
     c.RISK_PER_TRADE_PCT = 0.0050
     c.MAX_DAILY_LOSS_PCT = 0.0100
     c.MAX_MONTHLY_LOSS_PCT = 0.0500
+    c.EXPIRY_ROLL_DAYS = 2             # NIFTY rolls at 3 (07-Sep user rule) - the
+                                       # dual variants keep their own window
     c.FEED_POLL_INTERVAL = 2.5         # 3rd worker on one Dhan client id: poll
                                        # slower (NIFTY 1.8 / BN 2.5) to stay
                                        # under the ~1 req/s marketfeed budget
@@ -174,6 +177,7 @@ def sensex_config():
     c.DASHBOARD_HTML = os.path.join(_base.REPORT_DIR, "dashboard_sensex.html")
     c.INDEX_ID = 51                    # Dhan SENSEX security id
     c.WEEKLY_EXPIRY_WEEKDAY = 2        # SENSEX weekly expiry = Wednesday
+    c.EXPIRY_ROLL_DAYS = 2             # dual variants keep their own roll (NIFTY=3)
     c.MIN_TREND_ADX = 0.0
     return c
 

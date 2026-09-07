@@ -254,8 +254,13 @@ MAX_STOP_FRACTION = 0.65       # stop can never exceed 65% of the premium
 MIN_TARGET_PTS = 1.0           # target never tighter than 1 premium point
 
 # ---- EXPIRY ROLL: on/near expiry day the premium melts (theta), so long
-# entries auto-roll to the UPCOMING expiry instead of the decaying one
-EXPIRY_ROLL_DAYS = 2            # roll when the current expiry is within N days
+# entries auto-roll to the UPCOMING expiry instead of the decaying one.
+# NIFTY weekly expiry = TUESDAY (user 07-Sep): roll when the current expiry
+# is within 3 days, so on Monday AND Tuesday every entry trades the NEXT
+# week's chain (never the expiring one - verified live 07-Sep: Monday
+# entries went to 15SEP, not 08SEP).  Dual variants pin their own roll
+# (proxy/dual.py) so this stays NIFTY-only.
+EXPIRY_ROLL_DAYS = 3            # roll when the current expiry is within N days (NIFTY)
 
 # ---- UNARMED TIME-STOP: if a trade has not armed the lock-profit within N
 # 5-min bars, cut it at market - the maximals stop is so wide that losers
@@ -502,11 +507,13 @@ OPTION_DELTA_EST = 0.50         # ATM option delta used for the premium model
 OPTION_IV_EST = 0.13            # annualized IV used when no data is loaded
 OPTION_DTE = 7                  # days to expiry (weekly NIFTY)
 
-# Expiry selection (NIFTY weekly expiries on Thursday)
+# Expiry selection (NIFTY weekly expiries on TUESDAY - real Dhan chain,
+# 07-Sep; drives only synthetic/fallback expiry math, the live path uses
+# Dhan's real expiry list)
 EXPIRY_BUCKETS = ["current_week", "next_week", "current_month", "next_month"]
 OPTION_EXPIRY_BUCKET = "current_week"   # expiry used for trade selection
-WEEKLY_EXPIRY_WEEKDAY = 3               # 3 = Thursday
-MONTHLY_EXPIRY_LAST_WEEKDAY = 3         # monthly expiry = last Thursday
+WEEKLY_EXPIRY_WEEKDAY = 2               # 2 = Tuesday (NIFTY weekly)
+MONTHLY_EXPIRY_LAST_WEEKDAY = 2         # monthly expiry = last Tuesday
 OPTION_DELTA_MIN = 0.55         # preferred long-leg delta band (ITM bias)
 OPTION_DELTA_MAX = 0.80
 SELECT_BY_DELTA = True          # True = auto-pick the best delta-band (ITM bias)

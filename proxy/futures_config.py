@@ -87,6 +87,9 @@ def futures_config():
     # ~3.5L basis, 2 lots if the basis clears ~4.4L (MAX_LOTS hard cap).
     c.FUTURES_MARGIN_PER_LOT = 200_000.0   # ~2L/lot (Dhan); env-overridable
     c.DEFAULT_LOTS = 1                     # recomputed from margin at session open
+    c.FUTURES_PAPER_LOTS = 2               # PAPER session budget (user 07-Sep): the
+                                           # paper engine simulates 2 lots regardless of
+                                           # margin (live stays margin-gated via MAX_LOTS)
     c.MAX_LOTS = 2                         # hard cap (whole-account margin safety)
     c.RISK_PER_TRADE_PCT = 0.0050          # 0.5% of the allocated capital
     c.RISK_DD_TAPER = False                # off until live sizing is settled

@@ -776,9 +776,21 @@ def run_futures_day(notifier, trade_date):
     except Exception:
         cfg.DEFAULT_LOTS = max(1, min(int(getattr(cfg, "DEFAULT_LOTS", 1)),
                                       int(getattr(cfg, "MAX_LOTS", 2))))
+    # PAPER budget: the paper session simulates the user's chosen size
+    # (FUTURES_PAPER_LOTS, default 2) regardless of margin - live stays
+    # margin-gated by MAX_LOTS until the basis clears ~4.4L.
+    if mode == "paper":
+        try:
+            _pl = int(os.environ.get("FUTURES_PAPER_LOTS",
+                                     str(getattr(cfg, "FUTURES_PAPER_LOTS", 2))))
+            cfg.DEFAULT_LOTS = min(max(1, _pl), int(getattr(cfg, "MAX_LOTS", 2)))
+        except Exception:
+            cfg.DEFAULT_LOTS = max(1, min(int(getattr(cfg, "DEFAULT_LOTS", 1)),
+                                          int(getattr(cfg, "MAX_LOTS", 2))))
     notifier.log(f"FUTURES session {trade_date} - {mode.upper()} "
-                 f"(capital basis {capital:,.0f} INR, margin-lots {cfg.DEFAULT_LOTS} "
-                 f"x ~{_mpl:,.0f}/lot, slip {cfg.FUT_SLIPPAGE_PTS}pt)", "INFO")
+                 f"(capital basis {capital:,.0f} INR, lots {cfg.DEFAULT_LOTS} "
+                 f"[{'paper budget' if mode == 'paper' else 'margin'}], "
+                 f"slip {cfg.FUT_SLIPPAGE_PTS}pt)", "INFO")
 
     engine = FuturesEngine(cfg, notify=notifier.log, capital=capital)
     # warm-up: today's real bars + last 3 CSV days so signals start at 09:15

@@ -226,6 +226,38 @@ class TestFuturesBracket(unittest.TestCase):
         self.assertEqual(p["price"], 0.0)
 
 
+class TestFuturesTimezone(unittest.TestCase):
+    """Regression: warm bars mix tz-aware (Dhan REST) and naive (CSV) times -
+    pandas refused the mixed index at ~160 bars (live day-1 crash).  All
+    times must be flattened to naive IST before any frame build."""
+
+    def test_mixed_tz_history_does_not_crash(self):
+        import datetime as _dt
+        from zoneinfo import ZoneInfo as _ZI
+        from proxy.futures_config import futures_config
+        from proxy.futures_engine import FuturesEngine
+        _ist = _ZI("Asia/Kolkata")
+        _tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        _tmp.close()
+        self.addCleanup(lambda: os.path.exists(_tmp.name) and os.remove(_tmp.name))
+        cfg = futures_config()
+        cfg.DB_PATH = _tmp.name
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
+        base = _dt.datetime(2026, 9, 4, 9, 15)
+        eng.history = [
+            {"time": (base + _dt.timedelta(minutes=5 * i)).replace(tzinfo=_ist) if i % 2
+             else base + _dt.timedelta(minutes=5 * i),
+             "open": 25000.0, "high": 25001.0, "low": 24999.0,
+             "close": 25000.5, "volume": 0.0}
+            for i in range(165)
+        ][-160:]
+        bar = {"time": _dt.datetime(2026, 9, 7, 9, 20, tzinfo=_ist), "open": 23900.0,
+               "high": 23910.0, "low": 23895.0, "close": 23905.0, "volume": 0.0}
+        ev = eng.process_bar(bar)   # used to raise ValueError (mixed tz)
+        self.assertEqual(eng.bars_processed, 1)
+        self.assertIsNotNone(ev.get("signal"))
+
+
 class TestFuturesMode(unittest.TestCase):
     def test_mode_defaults_paper(self):
         from proxy.mode import get_mode, set_mode, mode_file_for

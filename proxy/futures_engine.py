@@ -51,6 +51,26 @@ SCRIB_MASTER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
                             "data", "scrip_master", "api-scrip-master.csv")
 
 
+def _naive_ist(t):
+    """Normalise any bar timestamp to a NAIVE IST datetime (wall clock).
+
+    Sources mix conventions: Dhan REST bars carry tz-aware times, the CSV
+    files are naive-IST, and replay/backtests pass naive times.  pandas
+    to_datetime refuses to mix them ('Tz-aware datetime cannot be converted
+    unless utc=True'), so everything is flattened to naive IST here - the
+    engine treats all times as IST wall-clock anyway (time-window checks,
+    cooldown comparisons, day roll)."""
+    if hasattr(t, "to_pydatetime"):
+        t = t.to_pydatetime()
+    if getattr(t, "tzinfo", None) is not None:
+        try:
+            t = t.astimezone(IST)
+        except Exception:
+            pass
+        t = t.replace(tzinfo=None)
+    return t
+
+
 def resolve_futures_contract(symbol="NIFTY", instrument_name="FUTIDX"):
     """Near-month regular (non-FPI) index future from the Dhan scrip master.
     Returns (security_id:int, trading_symbol:str, expiry:str, lot:float) or
@@ -177,8 +197,8 @@ class FuturesEngine:
         if len(self.history) < WARMUP_BARS:
             return None
         import pandas as pd
-        frame = pd.DataFrame(self.history).set_index(
-            pd.to_datetime([b["time"] for b in self.history]))
+        times = pd.to_datetime([_naive_ist(b["time"]) for b in self.history])
+        frame = pd.DataFrame(self.history).set_index(times)
         return frame.tail(160)
 
     @staticmethod
@@ -387,7 +407,7 @@ class FuturesEngine:
         if self.active is None or ltp is None or float(ltp) <= 0:
             return None
         self.last_ltp = float(ltp)
-        now = datetime.now(IST)
+        now = _naive_ist(datetime.now(IST))
         bar = {"time": now, "open": ltp, "high": ltp, "low": ltp,
                "close": ltp, "volume": 0.0}
         exit_price, reason = check_exits(self.active, ltp, ltp, ltp, self.cfg)
@@ -404,6 +424,8 @@ class FuturesEngine:
 
     def process_bar(self, bar):
         """Handle one closed 5m bar (live feed or replay)."""
+        bar = dict(bar)
+        bar["time"] = _naive_ist(bar["time"])
         self.bars_processed += 1
         self._roll_day(bar)
         self.history.append(bar)

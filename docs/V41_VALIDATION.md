@@ -796,3 +796,53 @@ warm-seeded) - a repo-wide honesty item for the next window.
   Commodities into the Futures tab) was caught and fixed; mode_futures.json
   flip verified isolated (NIFTY mode untouched); sample replay artifacts
   cleared so Monday's paper session starts from an empty ledger.
+
+---
+
+## LIVE DAY-2 / RUNBOOK SESSION (Tue 08-Sep) - verified mid-session state
+
+### FINNIFTY zero-bars bug - ROOT CAUSE was CLIENT-SIDE, FIXED + LIVE-VERIFIED
+- Handover suspect (Dhan does not serve IDX_I 27) was WRONG: live probe 09:22
+  IST returns IDX_I 13 NIFTY 23682.6 / 25 BN 56969.2 / **27 FINNIFTY 25833.35**,
+  NSE_FNO 68391 FINNIFTY future 25955.2 (works, not needed).  Charts API serves
+  the full 07-Sep session too (last close 25935.6 = chain spot).
+- REAL BUG: proxy/dhan_rest_feed.py hardcoded instruments=[(IDX_I,13),(IDX_I,25)]
+  regardless of security_id, while _next_5m_bar only builds bars from ticks whose
+  sid == security_id.  A FINNIFTY worker (security_id=27) polled NIFTY/BN and
+  built NOTHING all of 07-Sep (deterministic; SENSEX 51 latent same).
+- FIX (commit 16b457a): poll set includes the feed's own index id; 8 regression
+  tests (tests/test_dhan_rest_feed.py).  Deployed pre-market + service restart.
+- VERIFIED LIVE: FINNIFTY paper took REAL-BAR trades (09:50 25950 PE, 10:45 26000
+  PE conf 90% -> 10:50 LOCK_PROFIT +6,176 on the REAL option LTP).
+
+### INCIDENT + RECOVERY (token expiry 08:45, the 08:45 push FAILED exit-1)
+- Box token expired 08:45:04 IST; daily push task returned code 1 (no stdout,
+  Task Scheduler discards it).  NIFTY live + FINNIFTY feeds 401-dead ~09:30;
+  NIFTY live entries rejected DH-901 (no position taken - protective).  Reconnect
+  budget 8/8 would have ABORTED the live session.
+- RECOVERY: fresh TOTP token (local generator) pushed to box reports/dhan_token.txt
+  + .env; account verified FLAT; systemctl restart 09:49:39 IST.  All 3 workers on
+  a 23.4h token; feeds connected; FINNIFTY paper trading by 09:50.
+- ROOT-CAUSE FIX (commit b5d47e0): tools/push_token_vps.py retries TOTP across the
+  30s code window (5x @ 11s) + logs to reports/token_push.log (diagnosable).
+
+### NIFTY exit-anchor (4dd8398) VERIFIED LIVE - booked == real
+- 10:00 entry anchored to real fill 174.68 (was 163.65); 10:05 LOCK exit at real
+  179.11 -> +1,152.45 booked == real.  10:05 entry 23900 PE anchored 243.72; 10:07
+  STOP exit at real 231.00 -> -3,307.20.  Real realized -2,154.75 == booked sum.
+  (Booked P&L now tracks real fills exactly - the 07-Sep misattribution is gone.)
+
+### Gates + config (user-driven, NOT flipped without confirmation)
+- FINNIFTY + futures stay PAPER (mode files absent; no ALLOW envs).
+- NIFTY DEFAULT_LOTS 4 -> 7 in repo + box config (user 08-Sep; sha MATCH, backup
+  config.py.7lots.20260908).  File-only push; activates at next worker restart
+  (12h supervisor ~21:49 -> 09-Sep session).  In-process session still 4 lots.
+- PENDING USER DECISIONS: (a) FINNIFTY live flip (real chain spread 7-123pt vs 5pt
+  stop placeholder - gate blocks most signals; geometry not executable); (b) 50/50
+  allocation + futures budget; (c) 7-lot activation timing.  NO live change made.
+
+### Futures spread capture (runbook item 2) - in progress at write time
+- tools/_futures_spread_capture.py running 09:30-15:35 (pwsh-11).  Mid-session:
+  median spread ~3.1-4pt (09:30-11:33, n~945).  Full-day JSON + geometry re-tune
+  (tools/_futures_retune_measured.py, arm 1.0/1.5/2.0 at measured FUT_SLIPPAGE_PTS)
+  runs when the capture lands.

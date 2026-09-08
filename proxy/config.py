@@ -364,6 +364,27 @@ BRACKET_LIVE_ENABLED = False
 BRACKET_ENTRY_STYLE = "market"    # "market" | "limit" (limit price = LTP +/- offset)
 BRACKET_LIMIT_OFFSET_PTS = 0.0    # limit entry below LTP (fill cheaper if it dips)
 BRACKET_TRIGGER_OFFSET_PTS = 1.0  # stop entry: trigger ABOVE LTP (confirmation jump)
+# USER 09-Sep (super-order-only): live OPTION entries are placed ONLY as
+# Dhan SUPER orders - the engine has no plain-order opening path at all
+# (enforced structurally in proxy/engine.py).  If the super order cannot be
+# placed the entry is SKIPPED.  BRACKET_LIVE_ENABLED therefore gates whether
+# live entries can happen at all: no bracket = no live trade.
+#
+# USER 09-Sep (adopted profile = OLD engine, conf>=80 ONLY):
+# Both execution experiments below are OFF by default (09-Sep evening
+# decision: the 1-week A/B showed the conf>=80 subset of the OLD engine
+# carried the edge; the exec/broker-managed variants were not better).
+#   INTRA_BAR_ENTRY        - OFF: entries fire at the 5-min candle CLOSE
+#                            (pre-update behaviour).  Set env =1 to re-enable
+#                            mid-candle immediate entries (live-only gain).
+#   BROKER_MANAGED_EXITS   - OFF: the engine manages exits as before
+#                            (cancel bracket legs, engine closes at levels on
+#                            the live option LTP).  Set env =1 to let the
+#                            super order's TARGET/SL legs execute at Dhan
+#                            (engine then only manages the lock via
+#                            modify_super_order).
+INTRA_BAR_ENTRY = False
+BROKER_MANAGED_EXITS = False
 
 # ---- PAPER == LIVE parity (user request 05-Sep) ----
 # Paper mode should cost what live costs.  When PAPER_LIVE_LIKE is on the
@@ -400,7 +421,10 @@ SCORE_VOLUME_W   = 0.20
 SCORE_BUY_THRESHOLD  =  0.15
 SCORE_SELL_THRESHOLD = -0.15
 
-MIN_CONFIDENCE_PCT   = 65.0     # PAPER DATA MODE: 0 = take every signal
+# USER 09-Sep (mid-ceiling policy): trade ONLY signals with confidence
+# >= 80%.  Matches the conf>80 census used by the walk-forward reports;
+# the scorer (proxy/scoring.py) will not even emit BUY/SELL below this.
+MIN_CONFIDENCE_PCT   = 80.0     # >=80% confidence only (was 65.0)
                                # (live = 60-70; "Signal Strength > 70%" plan rule)
 MIN_SETUP_STRENGTH   = 0.0     # PAPER DATA MODE: 0 = no setup-strength floor
 
@@ -529,7 +553,8 @@ LOTS_TARGET       = (8, 8)      # the 8-lot operating band: uses the FULL 0.5%
 # +16.2k -> +23.1k, June +35.0k -> +52.8k on NIFTY at same PF ~2.5; BANKNIFTY
 # July 5m +48.9k -> +100.3k (PF 1.70 -> 2.25).  Risk/trade stays <= 0.5% of
 # equity (the plan's rule) - the engine was under-sizing at 5 lots.
-DEFAULT_LOTS      = 4
+# USER 08-Sep: 7 lots default for NIFTY.
+DEFAULT_LOTS      = 7
 
 # Option liquidity gates (paper validation)
 MIN_OPTION_VOLUME = 100

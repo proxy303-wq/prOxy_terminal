@@ -437,6 +437,26 @@ class DhanBroker(Broker):
         except Exception as exc:
             return {"status": "ERROR", "reason": str(exc)}
 
+    def modify_bracket_sl(self, order_id, stop_loss_price, trailing_jump=0.0):
+        """Move the STOP_LOSS_LEG of a live super order (broker-managed lock).
+
+        PUT /super/orders/{order_id} with legName=STOP_LOSS_LEG - the resting SL
+        level is updated at the broker so the LOCK-PROFIT (breakeven / trail
+        floor) is executed broker-side; the engine only manages the level.
+        Returns the API response dict (never raises)."""
+        if not order_id:
+            return {"status": "OK", "reason": "no bracket id"}
+        try:
+            payload = {"orderId": str(order_id), "legName": "STOP_LOSS_LEG",
+                       "stopLossPrice": float(stop_loss_price),
+                       "trailingJump": float(trailing_jump or 0.0)}
+            with self._lock:
+                res = self._api.dhan_http.put(
+                    "/super/orders/" + str(order_id), payload)
+            return res if isinstance(res, dict) else {"status": "OK", "raw": res}
+        except Exception as exc:
+            return {"status": "ERROR", "reason": str(exc)}
+
     def bracket_status(self, order_id):
         if not order_id:
             return None

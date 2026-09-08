@@ -139,7 +139,11 @@ def finnifty_config():
     c.TARGET_POINTS = 6.5
     c.REVERSE_EXIT_DELAY_BARS = 1      # V4 policy
     c.NO_STOP_LOSS = False
-    c.MIN_CONFIDENCE_PCT = 65.0
+    # USER 09-Sep (policy mirrors NIFTY): conf>=80 only; LIVE entries are
+    # SUPER-ORDER-ONLY (engine has no plain-order opening path).  Execution
+    # = OLD engine (09-Sep evening): candle-close entries + engine-managed
+    # exits (INTRA_BAR_ENTRY / BROKER_MANAGED_EXITS inherit base = False).
+    c.MIN_CONFIDENCE_PCT = 80.0
     c.MAX_UNARMED_BARS = 4
     c.RSI_ENTRY_GATE_BULL = 50.0
     c.RSI_ENTRY_GATE_BEAR = 50.0

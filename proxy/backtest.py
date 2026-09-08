@@ -224,7 +224,12 @@ class Backtest:
                     # ask once; LOCK/STOP/TARGET exits fill AT the level you set
                     # (no extra spread); only true market exits (time/reverse/day-
                     # end) additionally pay the bid side.
+                    # BT_LIMIT_ENTRY_MID (A/B knob, 09-Sep): a LIMIT entry resting
+                    # at the current LTP fills WITHOUT crossing the spread (no ask
+                    # tax) - approximation assumes the limit fills (liquid option).
                     _unit = (_e * _s + _sp) if _sp > 0 else _e * _s
+                    if bool(getattr(self.cfg, "BT_LIMIT_ENTRY_MID", False)):
+                        _unit = 0.0
                     if str(exit_reason or "") in ("REVERSE_SIGNAL", "DAY_END") \
                             or str(exit_reason or "").startswith("TIME_STOP"):
                         _unit += (_x * _s + _sp) if _sp > 0 else _x * _s

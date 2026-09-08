@@ -196,6 +196,12 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             if os.environ.get("BRACKET_LIVE_ENABLED", "0") == "1":
                 cfg.BRACKET_LIVE_ENABLED = True
                 cfg.BRACKET_ENTRY_STYLE = os.environ.get("BRACKET_ENTRY_STYLE", "market")
+            # 09-Sep live-execution knobs: env override for instant rollback
+            # (INTRA_BAR_ENTRY=0 / BROKER_MANAGED_EXITS=0) without a deploy.
+            for _k in ("INTRA_BAR_ENTRY", "BROKER_MANAGED_EXITS"):
+                _v = os.environ.get(_k, "")
+                if _v != "":
+                    setattr(cfg, _k, _v == "1")
             if os.environ.get("PAPER_LIVE_LIKE", "0") == "1":
                 cfg.PAPER_LIVE_LIKE = True
             if os.environ.get("PAPER_MODEL_SPREAD", "0") == "1":
@@ -499,6 +505,16 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
             # crossed, not at the next 5-min bar close (day-1 live gap).
             try:
                 engine.check_live_ltp_exit()
+            except Exception:
+                pass
+            # INTRA-BAR ENTRY (09-Sep): evaluate the FORMING candle on the live
+            # index LTP every poll - a conf>=80 signal fires the super-order
+            # immediately (no waiting for the candle close).  Live-only + the
+            # engine guards (one entry per candle).
+            try:
+                _iltp = feed.live_ltps.get(str(_index_id))
+                if _iltp:
+                    engine.try_intrabar_entry(float(_iltp))
             except Exception:
                 pass
             bar = feed._next_5m_bar(block=False)

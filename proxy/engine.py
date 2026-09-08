@@ -848,7 +848,10 @@ class PaperEngine:
             return prem * slip, "REVERSE_SIGNAL"
         return None, None
 
-    def _close(self, exit_price, exit_reason, bar):
+    def _close(self, exit_price, exit_reason, bar, external_fill=False):
+        """external_fill=True: the position was already closed by a broker
+        (super-order) leg - book the exit without cancelling legs or placing
+        an engine exit order (used by the broker-managed fill booker)."""
         t = self._active_trade
         direction_sign = 1.0 if t["direction"] == "LONG" else -1.0
         pnl = (exit_price - t["entry_premium"]) * t["quantity"] * direction_sign
@@ -884,7 +887,7 @@ class PaperEngine:
         # engine places its own exit - no double fill from a residual
         # target/SL the broker would still fire.
         try:
-            if getattr(self, "_bracket_id", None) \
+            if not external_fill and getattr(self, "_bracket_id", None) \
                     and getattr(self.cfg, "BRACKET_LIVE_ENABLED", False) \
                     and getattr(self.broker, "live", False) \
                     and hasattr(self.broker, "cancel_bracket"):
@@ -892,7 +895,7 @@ class PaperEngine:
                 self._bracket_id = None
         except Exception:
             pass
-        if getattr(self.broker, "live", False):
+        if getattr(self.broker, "live", False) and not external_fill:
             try:
                 side = "SELL" if t["direction"] == "LONG" else "BUY"
                 # ORDER TYPE (04-Sep fix): a TARGET exit is a LIMIT AT the
@@ -982,6 +985,140 @@ class PaperEngine:
         self.notify(f"EXIT  {record['instrument']} @ {exit_price:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR | exit priced on {_src}", "EXIT")
         return record
 
+    # ---- BROKER-MANAGED EXITS (user 09-Sep) ----
+    # The super order's TARGET_LEG / STOP_LOSS_LEG execute target/stop/lock
+    # exits at the broker.  The engine NEVER self-closes those; its only exit
+    # role is LOCK-PROFIT: moving the SL leg (modify_super_order) to breakeven
+    # and then trailing the floor.  Reverse-signal / unarmed-time-stop / 15:15
+    # day-end remain engine-side closes (safety / session hygiene).
+
+    def _broker_managed_active(self, t=None):
+        t = t if t is not None else (self.active_trade or self._active_trade)
+        try:
+            return bool(t and t.get("broker_managed")
+                        and getattr(self.cfg, "BROKER_MANAGED_EXITS", False)
+                        and getattr(self.broker, "live", False)
+                        and getattr(self.cfg, "BRACKET_LIVE_ENABLED", False)
+                        and getattr(self, "_bracket_id", None))
+        except Exception:
+            return False
+
+    @staticmethod
+    def _broker_leg_reason(reason):
+        r = str(reason or "")
+        return (r.startswith("TARGET_HIT") or r.startswith("STOP_LOSS_HIT")
+                or r.startswith("LOCK_PROFIT") or r.startswith("TRAIL"))
+
+    def _sync_broker_stop(self, t):
+        """Broker-managed lock: keep the super order's STOP_LOSS_LEG at the
+        effective protective level - the original stop until the lock arms,
+        then the lock floor.  Only sends a broker modify when the level
+        actually changes (never on every poll)."""
+        try:
+            if t is None or not self._broker_managed_active(t):
+                return
+            if t.get("broker_exit_pending"):
+                return
+            if not hasattr(self.broker, "modify_bracket_sl"):
+                return
+            entry = float(t.get("entry_premium") or 0)
+            if entry <= 0:
+                return
+            is_long = t["direction"] == "LONG"
+            desired = float(t.get("stop_premium") or 0)
+            if t.get("lock_armed"):
+                fp = float(t.get("lock_floor_pct") or 0.0)
+                if fp > 0:
+                    lp = entry * (1.0 + fp) if is_long else entry * (1.0 - fp)
+                    if is_long:
+                        desired = max(desired, lp)
+                    elif desired > 0:
+                        desired = min(desired, lp)
+                    else:
+                        desired = lp
+            desired = max(0.05, round(desired, 2))
+            prev = float(t.get("broker_sl_price") or 0)
+            if abs(desired - prev) < 0.05:
+                return
+            res = self.broker.modify_bracket_sl(self._bracket_id, desired)
+            t["broker_sl_price"] = desired
+            _bad = isinstance(res, dict) and str(res.get("status") or "").upper() == "ERROR"
+            if _bad:
+                self.notify(f"LOCK: broker SL modify FAILED ({res.get('reason', '?')}) - SL stays {prev:.2f}", "WARN")
+            else:
+                self.notify(f"LOCK: broker SL leg moved to {desired:.2f}", "INFO")
+        except Exception:
+            pass
+
+    def _dispatch_exit(self, exit_price, reason, bar):
+        """Route an exit decision.  Broker-managed (target/stop/lock) trades
+        let the Dhan legs execute - the engine books the fill instead of
+        racing the legs with its own order.  Engine-side reasons (reverse,
+        unarmed time-stop, 15:15 day-end) close engine-side as before."""
+        try:
+            t = self.active_trade or self._active_trade
+            if self._broker_managed_active(t) and self._broker_leg_reason(reason):
+                return self._begin_broker_leg_exit(t, float(exit_price), reason)
+        except Exception:
+            pass
+        return self._close(exit_price, reason, bar)
+
+    def _begin_broker_leg_exit(self, t, exit_price, reason):
+        if t.get("broker_exit_pending"):
+            return "BROKER_PENDING"
+        t["broker_exit_pending"] = {"reason": reason, "level": exit_price,
+                                    "since": __import__("time").time()}
+        self.notify(
+            f"BROKER leg exit: {reason} at {exit_price:.2f} - resting SL/target "
+            f"leg fires at the broker; engine books the fill", "TRADE")
+        return "BROKER_PENDING"
+
+    def _check_broker_leg_fill(self, t):
+        """After a broker-leg exit, confirm the broker position is gone and
+        book the real (or level) fill.  Escalates to an engine close (cancel
+        legs + market) if the leg never fills within 60s."""
+        try:
+            import time as _tm
+            import datetime as _dtm
+            from zoneinfo import ZoneInfo as _ZI
+            pend = t.get("broker_exit_pending")
+            if not pend:
+                return None
+            if _tm.time() - float(pend.get("since") or 0) < 3.0:
+                return None
+            if _tm.time() - float(t.get("_fill_poll_at") or 0) < 4.0:
+                return None
+            t["_fill_poll_at"] = _tm.time()
+            found_open = False
+            fill = None
+            for p in (self.broker.get_positions() or []):
+                if str(p.get("securityId")) == str(t.get("security_id")):
+                    found_open = True
+                    if int(p.get("netQty") or 0) == 0:
+                        a = (float(p.get("avgSellPrice") or 0)
+                             or float(p.get("sellAvg") or 0)
+                             or float(p.get("sellPrice") or 0)
+                             or float(p.get("averagePrice") or 0))
+                        fill = a if a > 0 else None
+                    break
+            if (not found_open) or fill:
+                px = fill or float(pend.get("level") or 0)
+                bar = {"time": _dtm.datetime.now(_ZI("Asia/Kolkata")),
+                       "open": px, "high": px, "low": px, "close": px, "volume": 0.0}
+                self.notify(f"BROKER leg fill confirmed ({pend['reason']}) @ {px:.2f} - booking", "TRADE")
+                t.pop("broker_exit_pending", None)
+                return self._close(px, pend["reason"], bar, external_fill=True)
+            if _tm.time() - float(pend.get("since") or 0) > 60.0:
+                px = float(pend.get("level") or 0)
+                bar = {"time": _dtm.datetime.now(_ZI("Asia/Kolkata")),
+                       "open": px, "high": px, "low": px, "close": px, "volume": 0.0}
+                self.notify(f"BROKER leg NOT filled in 60s ({pend['reason']}) - engine closing at {px:.2f}", "WARN")
+                t.pop("broker_exit_pending", None)
+                return self._close(px, pend["reason"], bar)
+            return None
+        except Exception:
+            return None
+
     def check_live_ltp_exit(self, now=None):
         """LIVE-only intra-bar protective exit, polled every ~2s by the
         worker while a trade is open.
@@ -1019,27 +1156,91 @@ class PaperEngine:
             # against the ACTUAL premium (never the model).  signal=None
             # keeps reverse-signal exits on the 5m path; only lock/stop/
             # target/time-stop can fire here.
+            if t.get("broker_exit_pending"):
+                return self._check_broker_leg_fill(t)
             exit_price, reason = self._check_exits(
                 bar, None, 0.0,
                 real_bar={"open": ltp, "high": ltp, "low": ltp, "close": ltp})
+            self._sync_broker_stop(t)
         except Exception:
             return None
         if exit_price is None:
             return None
         self._active_trade = t
-        return self._close(exit_price, reason, bar)
+        _r = self._dispatch_exit(exit_price, reason, bar)
+        return None if _r == "BROKER_PENDING" else _r
 
     # ----------------------------------------------------------
     # main bar processing
     # ----------------------------------------------------------
 
-    def process_bar(self, bar):
-        """Handle one newly closed bar. Returns an event dict."""
-        self.bars_processed += 1
+    # ---- INTRA-BAR (mid-candle) IMMEDIATE ENTRY (user 09-Sep) ----
+    def try_intrabar_entry(self, ltp, now=None):
+        """Evaluate the FORMING 5-min candle on the live index LTP and place
+        the super-order entry IMMEDIATELY when a conf>=80 signal appears - no
+        waiting for the candle close.  One entry per candle (an entered
+        position blocks re-evaluation); a rejected live order cools down 20s.
+        Live + INTRA_BAR_ENTRY only - paper/backtests never call it."""
+        try:
+            if not getattr(self.cfg, "INTRA_BAR_ENTRY", False):
+                return None
+            if not getattr(self.broker, "live", False):
+                return None
+            if self.active_trade is not None or self.cooldown_until is not None:
+                return None
+            import datetime as _dtm
+            from zoneinfo import ZoneInfo as _ZI
+            now = now or _dtm.datetime.now(_ZI("Asia/Kolkata"))
+            if self.trade_date != now.date():
+                return None
+            _now_t = now.time()
+            if _now_t < TRADE_START or _now_t > NO_NEW_ENTRY_AFTER:
+                return None
+            try:
+                if self._in_lunch({"time": now}):
+                    return None
+            except Exception:
+                pass
+            if getattr(self, "_probe_cool_until", None) is not None                     and now < self._probe_cool_until:
+                return None
+            _ltp = float(ltp)
+            if _ltp <= 0 or not self.history:
+                return None
+            _open = float(self.history[-1].get("close") or _ltp)
+            bar = {"time": now, "open": _open,
+                   "high": max(_open, _ltp), "low": min(_open, _ltp),
+                   "close": _ltp, "volume": 0.0}
+            events = self.process_bar(bar, probe=True)
+            if events and events.get("live_order_rejected"):
+                self._probe_cool_until = now + _dtm.timedelta(seconds=20)
+            return events
+        except Exception:
+            return None
+
+    def process_bar(self, bar, probe=False):
+        """Handle one newly closed bar. Returns an event dict.
+
+        probe=True: evaluate a FORMING candle for an immediate conf>=80
+        entry (try_intrabar_entry) - the probe bar is NOT kept in history;
+        the real closed bar for the same candle arrives later via the feed."""
+        if probe and self.active_trade is not None:
+            return {"bar": bar, "signal": None, "entered": None, "exited": None}
+        if not probe:
+            self.bars_processed += 1
         self.history.append(bar)
         if len(self.history) > self.max_history:
             self.history = self.history[-self.max_history:]
+        try:
+            return self._process_bar_inner(bar)
+        finally:
+            if probe:
+                for _i in range(len(self.history) - 1, -1, -1):
+                    if self.history[_i] is bar:
+                        del self.history[_i]
+                        break
 
+    def _process_bar_inner(self, bar):
+        """The bar-processing body shared by closed bars and intra-bar probes."""
         events = {"bar": bar, "signal": None, "entered": None, "exited": None}
         df = self._frame()
         if df is None or len(df) < 30:
@@ -1091,11 +1292,12 @@ class PaperEngine:
             if real_bar and float(real_bar.get("close") or 0) > 0:
                 self.active_trade["last_real_close"] = float(real_bar["close"])
             exit_price, exit_reason = self._check_exits(bar, signal, spot, real_bar=real_bar)
+            self._sync_broker_stop(self.active_trade)
             if exit_price is not None:
-                rec = self._close(exit_price, exit_reason, bar)
-                # rec is None when the live exit order was REJECTED - the
-                # trade stays open (no phantom close recorded)
-                if rec is not None:
+                rec = self._dispatch_exit(exit_price, exit_reason, bar)
+                if rec == "BROKER_PENDING":
+                    pass  # broker leg exit in flight - booked on fill
+                elif rec is not None:
                     events["exited"] = rec
                 else:
                     self.notify(f"EXIT  {self.active_trade['instrument']} @ {exit_price:.2f} | {exit_reason} | ORDER REJECTED - keeping position open")
@@ -1241,12 +1443,19 @@ class PaperEngine:
                         # LIVE mode: place the real order first; only track
                         # the trade if the broker confirms a fill.
                         if getattr(self.broker, "live", False):
+                            # SUPER-ORDER-ONLY (user 09-Sep): live option entries are
+                            # placed ONLY as Dhan SUPER orders (entry + resting TARGET/SL
+                            # legs at OUR levels).  There is intentionally NO plain-order
+                            # path in this branch: if the super order cannot be placed
+                            # (BRACKET_LIVE_ENABLED off, PARTIAL_PROFIT on, non-LONG leg,
+                            # or the broker rejects/errors) the entry is SKIPPED - no
+                            # position can ever open without resting protective legs.
                             _bracket_ok = False
-                            if getattr(self.cfg, "BRACKET_LIVE_ENABLED", False) \
-                                    and not getattr(self.cfg, "PARTIAL_PROFIT_ENABLED", False) \
-                                    and hasattr(self.broker, "place_bracket") \
-                                    and plan["direction"] == "LONG":
-
+                            _bracket_ready = (getattr(self.cfg, "BRACKET_LIVE_ENABLED", False)
+                                              and not getattr(self.cfg, "PARTIAL_PROFIT_ENABLED", False)
+                                              and hasattr(self.broker, "place_bracket")
+                                              and plan["direction"] == "LONG")
+                            if _bracket_ready:
                                 try:
                                     _eref = float(plan.get("entry_premium") or 0)
                                     _ostyle = str(getattr(self.cfg, "BRACKET_ENTRY_STYLE", "market")).lower()
@@ -1271,25 +1480,33 @@ class PaperEngine:
                                         _bracket_ok = True
                                         plan["bracket_id"] = _bid
                                         self._bracket_id = _bid
+                                        # broker-managed exits: the SL/TARGET
+                                        # legs execute at Dhan; engine only
+                                        # manages the lock (moves the SL leg)
+                                        plan["broker_managed"] = True
                                 except Exception as _be:
-                                    self.notify("BRACKET place failed (" + str(_be)[:120] + ") - falling back", "WARN")
+                                    self.notify("SUPER-ORDER place failed (" + str(_be)[:120] + ") - entry SKIPPED", "WARN")
                                     _bracket_ok = False
                             if not _bracket_ok:
-                                res = self.broker.place_order(
-                                    "BUY" if plan["direction"] == "LONG" else "SELL",
-                                    plan["instrument"], plan["quantity"])
-                            filled = self._order_filled(res)
-
-                            if not filled:
-                                self.notify(f"GATE  LIVE order rejected: {res}")
+                                # no bracket, no trade (super-order-only policy).
+                                if not _bracket_ready:
+                                    self.notify("GATE  SUPER-ORDER-ONLY: bracket path unavailable - entry SKIPPED "
+                                                "(needs BRACKET_LIVE_ENABLED, no PARTIAL_PROFIT, LONG leg)", "WARN")
                                 events["live_order_rejected"] = True
+                                res = None
                             else:
-                                plan["broker_order_id"] = res.get("orderId") or res.get("data", {}).get("orderId")
-                                # the broker resolved the exact security it
-                                # filled - use it for real-premium exits
-                                _sid_res = res.get("securityId") or (res.get("data") or {}).get("securityId")
-                                if _sid_res and not plan.get("security_id"):
-                                    plan["security_id"] = int(_sid_res)
+                                filled = self._order_filled(res)
+
+                                if not filled:
+                                    self.notify(f"GATE  LIVE super order rejected: {res}")
+                                    events["live_order_rejected"] = True
+                                else:
+                                    plan["broker_order_id"] = res.get("orderId") or res.get("data", {}).get("orderId")
+                                    # the broker resolved the exact security it
+                                    # filled - use it for real-premium exits
+                                    _sid_res = res.get("securityId") or (res.get("data") or {}).get("securityId")
+                                    if _sid_res and not plan.get("security_id"):
+                                        plan["security_id"] = int(_sid_res)
                                 # (entry anchoring now runs AFTER the Telegram
                                 # push - execution + push come first, the
                                 # position-book retry must never delay them)

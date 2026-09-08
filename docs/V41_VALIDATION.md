@@ -846,3 +846,21 @@ warm-seeded) - a repo-wide honesty item for the next window.
   median spread ~3.1-4pt (09:30-11:33, n~945).  Full-day JSON + geometry re-tune
   (tools/_futures_retune_measured.py, arm 1.0/1.5/2.0 at measured FUT_SLIPPAGE_PTS)
   runs when the capture lands.
+
+### FUTURES SPREAD CAPTURE + GEOMETRY RE-TUNE (08-Sep, completed evening)
+- Full-session capture (reports/futures_spread_2026-09-08.json): n=1675 ticks
+  09:30-15:35.  Median spread 3.9pt, mean 4.38, p25 2.0 / p75 6.5 / p99 11.6;
+  RT crossing median 3.9pt.  Only 12.8% of ticks <=1.0pt, 42.3% <=3.0pt - the
+  real NIFTY futures book is NOT the ~1pt the backtests assumed.
+- Re-tune at measured FUT_SLIPPAGE_PTS=3.9 (tools/_futures_retune_measured.py,
+  reports/v41/v41_futures_warm_measured.json):
+    stop5/arm1.0 TRAIN PF1.46 +935k / TEST PF1.70 +695k (both sig)  <- KEEP
+    stop5/arm1.5 1.25/1.41 sig | stop5/arm2.0 1.10/1.20 NS | stop8/arm1.5 NS
+  VERDICT: keep stop5/arm1.0 (current default).  Handover's 'arm 1.5-2.0
+  re-tune' REJECTED by measured evidence - only arm 1.0 survives both windows
+  at 3.9pt (consistent with V41 slip-2: arm 1.0 survives 2pt, wider arms not).
+- HEADLINE: real ~3.9pt crossing cuts the futures edge from the warm-grid PF
+  ~5-6 (at assumed 1pt) to ~1.5-1.7 (win ~46-50%, maxDD ~6%).  Warm numbers
+  were ceilings; fills decide.  Futures stays PAPER (fill gate + no mode/env).
+- EOD real account: NIFTY-Sep2026-FUT LONG 195 (3 lots) @23779.1 user-owned,
+  open overnight (user: 'I placed it / will manage it').  No bot action.

@@ -82,26 +82,59 @@ def push_to_vps(token):
     return True
 
 
+_LOG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+             "reports", "token_push.log")
+
+
+def log_line(msg):
+    """Append a timestamped line to reports/token_push.log (Task Scheduler
+    discards stdout - this file is the only record when the daily push
+    fails with a bare exit code)."""
+    try:
+        with open(_LOG, "a", encoding="utf-8") as fh:
+            fh.write(time.strftime("%Y-%m-%d %H:%M:%S ") + msg + "\n")
+    except Exception:
+        pass
+    print(msg)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-push", action="store_true")
     args = ap.parse_args()
 
     if not (PIN and TOTP_SECRET):
-        print("FAIL: DHAN_PIN / DHAN_TOTP_SECRET not set in C:\\Athena_X\\.env")
+        log_line("FAIL: DHAN_PIN / DHAN_TOTP_SECRET not set in C:\\Athena_X\\.env")
         sys.exit(1)
 
-    token = auto_token_from_totp(CLIENT_ID, PIN, TOTP_SECRET)
+    # Retry TOTP generation across a 30s code window (a single attempt fired
+    # at the window edge fails with DH-90x - the 08-Sep 08:45 bare exit-1
+    # that left the box on an expired token).  Space retries ~11s apart so
+    # each attempt lands in a fresh code period.
+    token = None
+    last = ""
+    for attempt in range(1, 6):
+        token = auto_token_from_totp(CLIENT_ID, PIN, TOTP_SECRET,
+                                     notify=lambda m: log_line("  " + m))
+        if token:
+            break
+        last = f"attempt {attempt}/5 failed"
+        log_line(last)
+        time.sleep(11)
     if not token:
-        print("FAIL: token generation failed (rate limit or bad PIN/TOTP)")
+        log_line("FAIL: token generation failed after 5 attempts (" + last + ")")
         sys.exit(1)
 
     path = save_locally(token)
-    print("fresh token generated + saved locally:", path)
+    log_line("fresh token generated + saved locally: " + path)
     if not args.no_push:
-        push_to_vps(token)
+        ok = push_to_vps(token)
+        if not ok:
+            log_line("FAIL: VPS push failed - box may hold an expired token")
+            sys.exit(1)
+        log_line("push complete - verify box token below (journal tail printed above)")
     else:
-        print("--no-push: not pushed to the VPS")
+        log_line("--no-push: not pushed to the VPS")
 
 
 if __name__ == "__main__":

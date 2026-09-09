@@ -82,9 +82,11 @@ def run_optsell_day(cfg=None, poll=300, max_ticks=0, notify=print, dry=False):
     while True:
         now = datetime.datetime.now(IST)
         hm = now.strftime("%H:%M")
-        if not ("09:15" <= hm <= "15:35") and not dry:
-            notify("outside market hours - session idle", "INFO")
-            return
+        if not ("09:15" <= hm <= "15:35"):
+            if dry:
+                break
+            time.sleep(60)          # supervised idle - do NOT exit (restart churn)
+            continue
         if max_ticks and ticks >= max_ticks:
             return
         chain = None if dry else fetch_option_chain(13)
@@ -107,7 +109,7 @@ def run_optsell_day(cfg=None, poll=300, max_ticks=0, notify=print, dry=False):
             ticks += 1
             notify("tick %d @ %s spot %,.1f" % (ticks, ts.strftime("%H:%M"), spot), "INFO")
         if dry:
-            return
+            break
         time.sleep(max(1, int(poll)))
 
 

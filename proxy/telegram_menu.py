@@ -35,7 +35,7 @@ MENU_KEYBOARD = [
     ["🌡 Sentiment", "📊 Daily Report"],
     ["🚀 BTST Picks", "🎛 Mode"],
     ["📉 Futures", "📗 FINNIFTY"],
-    ["❓ Help"],
+    ["🧩 Opt-Sell", "❓ Help"],
 ]
 
 MODE_KEYBOARD = [
@@ -53,6 +53,11 @@ FIN_KEYBOARD = [
     ["🔙 Main Menu"],
 ]
 
+OPT_KEYBOARD = [
+    ["🟢 GO LIVE OPTSELL", "⚪ PAPER OPTSELL"],
+    ["🔙 Main Menu"],
+]
+
 COMMANDS = [
     {"command": "balance", "description": "Check Dhan account balance"},
     {"command": "prices", "description": "Live NIFTY / BANKNIFTY / FINNIFTY"},
@@ -61,6 +66,7 @@ COMMANDS = [
     {"command": "mode", "description": "NIFTY options mode (paper/live)"},
     {"command": "futures", "description": "Futures engine status / mode"},
     {"command": "finnifty", "description": "FINNIFTY engine status / mode"},
+    {"command": "optsell", "description": "Opt-Sell engine status / mode"},
     {"command": "help", "description": "Show this menu"},
 ]
 
@@ -102,6 +108,7 @@ class TelegramMenu:
         self._pending_live = {}      # chat_id -> awaiting "CONFIRM-LIVE"
         self._pending_fut = {}     # chat_id -> awaiting "CONFIRM-FUTURES-LIVE"
         self._pending_fin = {}     # chat_id -> awaiting "CONFIRM-FINNIFTY-LIVE"
+        self._pending_opt = {}     # chat_id -> awaiting "CONFIRM-OPTSELL-LIVE"
         self._thread = None
         self._stop = threading.Event()
 
@@ -195,6 +202,16 @@ class TelegramMenu:
             else:
                 _send(chat_id, "❌ Cancelled - finnifty mode unchanged.", MENU_KEYBOARD)
             return
+        # OPT-SELL live confirmation (flips reports/mode_optsell.json only; the
+        # optsell worker must ALSO run with OPTSELL_ALLOW_LIVE=1 and the broker
+        # must expose a multi-leg SELL path - flipping alone never trades live)
+        if self._pending_opt.get(chat_id):
+            self._pending_opt.pop(chat_id)
+            if cmd in ("confirm-optsell-live", "confirm-optsell", "confirm"):
+                self._set_opt_mode(chat_id, "live")
+            else:
+                _send(chat_id, "❌ Cancelled - opt-sell mode unchanged.", MENU_KEYBOARD)
+            return
 
         dispatch = {
             "start": self._help, "help": self._help, "menu": self._help,
@@ -211,6 +228,9 @@ class TelegramMenu:
             "finnifty": self._finnifty, "fin": self._finnifty,
             "finnifty_live": self._finnifty_ask_live,
             "finnifty_paper": self._finnifty_paper,
+            "optsell": self._opt, "opt": self._opt, "os": self._opt,
+            "optsell_live": self._opt_ask_live,
+            "optsell_paper": self._opt_paper,
             "btst": self._btst,
         }
         handler = dispatch.get(cmd)
@@ -230,6 +250,9 @@ class TelegramMenu:
             "⚪ paper futures": self._futures_paper,
             "🟢 go live finnifty": self._finnifty_ask_live,
             "⚪ paper finnifty": self._finnifty_paper,
+            "🧩 opt-sell": self._opt,
+            "🟢 go live optsell": self._opt_ask_live,
+            "⚪ paper optsell": self._opt_paper,
             "🔙 main menu": self._help,
         }
         handler = btn.get(text.lower())
@@ -252,8 +275,10 @@ class TelegramMenu:
               "📊 <b>Daily Report</b> - today's trades + P&L\n"
               "🎛 <b>Mode</b> - NIFTY PAPER / LIVE (LIVE needs a confirm step)\n"
               "📉 <b>Futures</b> - futures engine status / mode\n"
-              "📗 <b>FINNIFTY</b> - FINNIFTY engine status / mode\n\n"
-              "Commands: /balance /prices /sentiment /report /mode /futures /finnifty",
+              "📗 <b>FINNIFTY</b> - FINNIFTY engine status / mode\n"
+              "🧩 <b>Opt-Sell</b> - options-selling engine status / paper-live\n\n"
+              "Commands: /balance /prices /sentiment /report /mode /futures "
+              "/finnifty /optsell",
               MENU_KEYBOARD)
 
     def _balance(self, chat_id):
@@ -585,3 +610,76 @@ class TelegramMenu:
                 "measurement gate pass (HANDOVER 17 step 4).")
         _send(chat_id,
               f"✅ FINNIFTY mode set to <b>{badge}</b>.\n{note}", FIN_KEYBOARD)
+    # ----------------------------------------------------------
+    # OPT-SELL options-selling engine (own mode/DB, paper-first)
+    # ----------------------------------------------------------
+
+    def _opt(self, chat_id):
+        from .mode import get_mode
+        mode = get_mode("optsell")
+        badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
+        pos, today_pnl, net = self._opt_status()
+        lines = [
+            f"🧩 <b>Opt-Sell: {badge}</b>\n",
+            "Mode file: reports/mode_optsell.json "
+            "(absent = PAPER, never live by accident)",
+            f"Open structure: {pos}",
+            f"Today P&L: {today_pnl}",
+            f"Journal net (paper): {net}",
+            "\nLive ALSO needs OPTSELL_ALLOW_LIVE=1 on the optsell worker "
+            "AND a broker multi-leg SELL-to-open path - flipping this alone "
+            "never places real structure orders.",
+        ]
+        _send(chat_id, "\n".join(lines), OPT_KEYBOARD)
+
+    def _opt_status(self):
+        pos, today, net = "FLAT", "—", "—"
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "reports")
+        state_file = os.path.join(base, "optsell_state.json")
+        db_file = os.path.join(base, "proxy_state_optsell.sqlite")
+        try:
+            if os.path.exists(state_file):
+                import json as _json
+                snap = _json.load(open(state_file))
+                act = snap.get("active") or {}
+                if act:
+                    pos = f"{act.get('family')} {act.get('lots')}L "
+                    pos += "spot " + str(round(act.get('entry_spot') or 0, 0))
+                t = float(snap.get("realized_pnl_today") or 0)
+                today = f"{t:+,.0f} INR"
+        except Exception:
+            pass
+        try:
+            if os.path.exists(db_file):
+                import sqlite3 as _sq
+                conn = _sq.connect(f"file:{db_file}?mode=ro", uri=True)
+                row = conn.execute("SELECT COUNT(*), COALESCE(SUM(pnl_inr),0) "
+                                   "FROM optsell_trades").fetchone()
+                conn.close()
+                if row and row[0]:
+                    net = f"{row[1]:+,.0f} INR ({row[0]} structures)"
+        except Exception:
+            pass
+        return pos, today, net
+
+    def _opt_ask_live(self, chat_id):
+        self._pending_opt[chat_id] = True
+        _send(chat_id,
+              "⚠️ <b>Switch Opt-Sell to LIVE?</b>\nThis writes "
+              "reports/mode_optsell.json = live.  Real orders still require "
+              "OPTSELL_ALLOW_LIVE=1 on the optsell worker AND a broker "
+              "multi-leg SELL-to-open path (not present yet).\n\nType "
+              "<b>CONFIRM-OPTSELL-LIVE</b> to proceed, or anything else to cancel.", OPT_KEYBOARD)
+
+    def _opt_paper(self, chat_id):
+        self._set_opt_mode(chat_id, "paper")
+
+    def _set_opt_mode(self, chat_id, mode):
+        from .mode import get_mode, set_mode
+        set_mode(mode, variant="optsell")
+        badge = "🟢 LIVE" if mode == "live" else "🟡 PAPER"
+        note = ("No real structure orders until OPTSELL_ALLOW_LIVE=1 AND a "
+                "broker multi-leg SELL-to-open path exists.")
+        _send(chat_id,
+              f"✅ Opt-Sell mode set to <b>{badge}</b>.\n{note}", OPT_KEYBOARD)

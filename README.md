@@ -31,6 +31,40 @@ plus the Athena-X price-action layer as the quality gate: a candlestick /
 structure **setup** (STRUCTURE_BREAKOUT, DEAD_ZONE_BREAKOUT, PULLBACK_ENTRY,
 LIQUIDITY_SWEEP) with strength ≥ 55 and **confidence ≥ 70%** before any entry.
 
+## Athena 2.0 sub-project (new, built alongside)
+
+This repo hosts a NEW clean strategy stack per the two controlling specs
+(Athena_2_0_DeepSeek_Harness_Handover_Plan.docx and
+Athena_2_0_Master_Trader_Strategy_Blueprint_v2.docx): a deterministic NIFTY
+futures + short-options premium-selling engine (no option buying, Rs 7,00,000
+capital, regime-adaptive). It is implemented as the athena2/ package and does
+NOT import strategy logic from the older athena/ futures research package.
+Existing live integrations (proxy Dhan broker, Telegram) are preserved and
+reached only through adapters (athena2/execution.py ExistingDhanAdapter,
+athena2/events.py TelegramRelay).
+
+Key principles: deterministic risk engine with absolute veto; every order must
+carry an APPROVE/MODIFY risk decision; NO TRADE is a first-class output; all
+strategy hypotheses must survive realistic-cost out-of-sample validation.
+
+Docs: docs/ATHENA2_RECONNAISSANCE.md, docs/ATHENA2_ARCHITECTURE.md,
+docs/ATHENA2_TRADING_SPEC.md, docs/ATHENA2_RISK_SPEC.md, docs/ATHENA2_DATA_SPEC.md,
+docs/ATHENA2_EXECUTION_SPEC.md, docs/ATHENA2_BACKTEST_SPEC.md,
+docs/ATHENA2_METACOGNITION_SPEC.md, docs/ATHENA2_AGENT_SPEC.md,
+docs/ATHENA2_CHANGELOG.md, athena2/README.md.
+
+Run the athena2 test suite:
+
+```bash
+python -m pytest tests/test_athena2_bsm.py tests/test_athena2_vol.py tests/test_athena2_data.py tests/test_athena2_surface.py tests/test_athena2_regime.py tests/test_athena2_strategy.py tests/test_athena2_risk.py tests/test_athena2_execution.py tests/test_athena2_backtest.py tests/test_athena2_engine.py tests/test_athena2_observability.py -q
+```
+
+Real-data validation replay:
+
+```bash
+python -m athena2.run_demo --start 2025-05-12 --end 2025-07-04 --risk-pct 8
+```
+
 ## Quick start
 
 \`\`\`bash

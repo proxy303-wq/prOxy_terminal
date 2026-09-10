@@ -51,6 +51,20 @@ class CostModel:
 
 
 @dataclass
+class SegmentPolicy:
+    """ONE live segment at a time; blocked signals are shadow-traded on paper.
+
+    Futures and options share the same Rs 7L margin, so running both live would
+    burn the utilisation cap.  The operator policy (2026-09-10) is: whichever
+    segment opens first owns the live book until it is flat; every signal for
+    the other segment is executed on the paper (shadow) book instead, which
+    still produces labelled training data and journal records.
+    """
+    single_live_segment: bool = True
+    prefer: str = "OPTIONS"      # which segment wins when both fire while flat
+
+
+@dataclass
 class GreekLimits:
     """Portfolio-level greek exposure caps.
 
@@ -64,7 +78,7 @@ class GreekLimits:
     abs_gamma_units: float = 1.0
     abs_vega_units: float = 30000.0
     min_theta_per_day_rs: float = 0.0  # informational, not a veto
-    margin_util_max_pct: float = 60.0
+    margin_util_max_pct: float = 75.0   # operator policy 2026-09-10 (was 60)
     max_concentration_pct: float = 40.0   # max % of greek budget at one strike/expiry
 
 
@@ -114,6 +128,7 @@ class Athena2Config:
     bars_per_day: int = 75                 # 5-minute bars per session (9:15-15:30)
     risk: RiskConfig = field(default_factory=RiskConfig)
     greeks: GreekLimits = field(default_factory=GreekLimits)
+    segments: SegmentPolicy = field(default_factory=SegmentPolicy)
     strategy: StrategyConfig = field(default_factory=StrategyConfig)
     costs: CostModel = field(default_factory=CostModel)
     data_root: str = "data"

@@ -260,6 +260,7 @@ class RiskCode(Enum):
     MANDATE_VIOLATION = "MANDATE_VIOLATION"   # e.g. buying an option
     DATA_QUALITY = "DATA_QUALITY"
     EXECUTION_ORPHAN = "EXECUTION_ORPHAN"
+    SEGMENT_BUSY = "SEGMENT_BUSY"     # another segment owns the live book
     EMERGENCY = "EMERGENCY"
 
 

@@ -67,6 +67,19 @@ class PortfolioRisk:
         self.state = RiskState(day_start_equity_rs=cfg.risk.capital_rs,
                                equity_rs=cfg.risk.capital_rs,
                                peak_equity_rs=cfg.risk.capital_rs)
+        # segment lock: the live book belongs to ONE segment at a time
+        self.live_segment: Optional[str] = None
+
+    def set_live_segment(self, segment: Optional[str]) -> None:
+        self.live_segment = segment.upper() if segment else None
+
+    def segment_available(self, segment: str) -> bool:
+        if not getattr(self.cfg, "segments", None):
+            return True
+        if not self.cfg.segments.single_live_segment:
+            return True
+        return self.live_segment is None or self.live_segment == str(segment).upper()
+
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -187,7 +200,8 @@ class PortfolioRisk:
                      proposal_greeks: Dict[str, float], legs: List[dict],
                      existing_greeks: Optional[Dict[str, float]] = None,
                      existing_margin: float = 0.0,
-                     allow_modify: bool = True) -> RiskDecision:
+                     allow_modify: bool = True,
+                     segment: Optional[str] = None) -> RiskDecision:
         """Gate a new TradeProposal (or position change).
 
         MODIFY carries the largest whole-lot size passing every cap (0 = no
@@ -195,6 +209,12 @@ class PortfolioRisk:
         or agent can override the action returned here.
         """
         d = RiskDecision(action=RiskAction.APPROVE, codes=[], ts=datetime.now())
+        if segment and not self.segment_available(segment):
+            _append(d, RiskCode.SEGMENT_BUSY,
+                    "live book owned by " + str(self.live_segment)
+                    + "; " + str(segment).upper() + " signal belongs on the paper book")
+            d.action = RiskAction.REJECT
+            return d
         if self.state.flattened or self.state.day_halted:
             _append(d, RiskCode.EMERGENCY,
                     "risk session halted - no new entries")

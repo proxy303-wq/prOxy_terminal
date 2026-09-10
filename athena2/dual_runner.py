@@ -314,6 +314,8 @@ def main(argv=None) -> int:
     ap.add_argument("--once", action="store_true")
     ap.add_argument("--capital", type=float, default=700000.0)
     ap.add_argument("--risk-pct", type=float, default=6.0)
+    ap.add_argument("--tail-pct", type=float, default=None,
+                    help="tail-loss cap %% (paper phase uses 12; live runs lower)")
     ap.add_argument("--margin-util", type=float, default=75.0)
     ap.add_argument("--futures-lots", type=int, default=1)
     ap.add_argument("--futures-symbol", default="NIFTY-Sep2026-FUT")
@@ -328,6 +330,8 @@ def main(argv=None) -> int:
     cfg = Athena2Config()
     cfg.risk.capital_rs = float(args.capital)
     cfg.risk.risk_per_trade_pct = args.risk_pct
+    if args.tail_pct is not None:
+        cfg.risk.tail_loss_cap_pct = float(args.tail_pct)
     cfg.greeks.margin_util_max_pct = float(args.margin_util)
     cfg.segments.prefer = args.prefer
     notify = None if args.no_telegram else telegram_sender()
@@ -348,6 +352,7 @@ def main(argv=None) -> int:
         return 3
     print("start: " + json.dumps(info, default=str)[:300])
     print("policy: margin_util=" + str(cfg.greeks.margin_util_max_pct)
+          + "% | tail cap=" + str(cfg.risk.tail_loss_cap_pct)
           + "% | single live segment=" + str(cfg.segments.single_live_segment)
           + " | prefer " + cfg.segments.prefer)
     if args.once:

@@ -544,8 +544,9 @@ def main(argv=None) -> int:
     ap.add_argument("--start", default="2026-08-17")
     ap.add_argument("--end", default="2026-08-28")
     ap.add_argument("--risk-pct", type=float, default=6.0)
-    ap.add_argument("--tail-pct", type=float, default=None,
-                    help="override tail-loss cap %% (EXPLORATORY; production 4%%)")
+    ap.add_argument("--tail-pct", type=float, default=12.0,
+                    help="tail-loss cap %% for the PAPER phase (operator policy 2026-09-10: "
+                         "12%% while testing; live will run lower). Pass 0 to use config.")
     ap.add_argument("--replay-eff", default=None, help="effective expiry for replay (ISO)")
     ap.add_argument("--band-lo", type=float, default=None,
                     help="override |delta| band floor (EXPLORATORY)")
@@ -558,8 +559,12 @@ def main(argv=None) -> int:
     load_repo_env()
     cfg = Athena2Config()
     cfg.risk.risk_per_trade_pct = args.risk_pct
-    if args.tail_pct is not None:
-        cfg.risk.tail_loss_cap_pct = args.tail_pct
+    if args.tail_pct:
+        cfg.risk.tail_loss_cap_pct = float(args.tail_pct)
+    print("paper policy: capital " + str(cfg.risk.capital_rs)
+          + " | risk/idea " + str(cfg.risk.risk_per_trade_pct) + "%"
+          + " | tail cap " + str(cfg.risk.tail_loss_cap_pct) + "%"
+          + " | margin util cap " + str(cfg.greeks.margin_util_max_pct) + "%")
     if args.band_lo is not None and args.band_hi is not None:
         cfg.strategy.put_delta_band = (args.band_lo, args.band_hi)
         cfg.strategy.call_delta_band = (args.band_lo, args.band_hi)

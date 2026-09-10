@@ -94,6 +94,17 @@ enabled = false   # retired: systematic loser (see docstring evidence)
 stop_atr_mult = 0.4
 target_r = 3.0
 
+[strategies.orb_sniper]
+# Opening-Range Breakout scalper: first close beyond the session's opening range.
+# Disabled by default - scalp horizons are cost-sensitive (see docs/TIMEFRAME_COST_STUDY.md).
+enabled = false
+opening_range_minutes = 15
+session_start_hour = 0        # UTC hour that defines the session (13.5 = US cash open)
+stop_mode = "midpoint"        # midpoint | opposite | atr
+target_r = 1.5
+min_range_atr = 0.25
+max_range_atr = 3.0
+
 [strategies.range_mean_reversion]
 enabled = false   # retired: negative expectancy at every timeframe tested
 stop_atr_mult = 0.5
@@ -122,7 +133,6 @@ min_interval = 1.0
 [logging]
 level = "INFO"
 file = "data/athena.log"
-
 
 
 

@@ -9,6 +9,57 @@ from .features import (
 )
 
 
+def _session_block(candles, session_start_hour=0, or_minutes=15):
+    """Opening-range context for the current trading session.
+
+    Crypto has no market open, so the session is defined by a configurable UTC hour
+    (00:00 = daily open, 13:30 = US cash open). The opening range is the first
+    or_minutes of that session; the block reports the range and whether the current
+    bar is the FIRST close beyond it (which is what an ORB entry triggers on).
+    """
+    if len(candles) < 3:
+        return {"ready": False}
+    step = candles[-1].time - candles[-2].time
+    if step <= 0:
+        step = 300
+    t = candles[-1].time
+    day = int(t // 86400) * 86400
+    session_start = day + int(session_start_hour * 3600)
+    if session_start > t:
+        session_start -= 86400
+    bars_since_open = int((t - session_start) // step) + 1
+    or_bars = max(1, int(round(or_minutes * 60.0 / step)))
+    session = [c for c in candles if c.time >= session_start]
+    if len(session) < or_bars:
+        return {"ready": False, "bars_since_open": bars_since_open,
+                "session_start": session_start, "or_bars": or_bars}
+    or_slice = session[:or_bars]
+    or_high = max(c.high for c in or_slice)
+    or_low = min(c.low for c in or_slice)
+    first_break = None
+    first_break_time = None
+    for c in session[or_bars:]:
+        if c.close > or_high:
+            first_break, first_break_time = "up", c.time
+            break
+        if c.close < or_low:
+            first_break, first_break_time = "down", c.time
+            break
+    return {
+        "ready": True,
+        "session_start": session_start,
+        "bars_since_open": bars_since_open,
+        "or_bars": or_bars,
+        "or_high": or_high,
+        "or_low": or_low,
+        "or_range": or_high - or_low,
+        "or_complete": bars_since_open > or_bars,
+        "first_breakout": first_break,
+        "first_breakout_time": first_break_time,
+        "is_breakout_bar": bool(first_break_time is not None and first_break_time == t),
+    }
+
+
 def build(symbol, candles, ticker=None, book=None, trades=None,
           cfg=None, funding_history=None):
     """Build a full state snapshot at the last closed candle.
@@ -72,4 +123,7 @@ def build(symbol, candles, ticker=None, book=None, trades=None,
         "derivatives": deriv,
         "crowding": crowd,
         "ticker_age_sec": ticker_age,
+        "session": _session_block(candles,
+                                  session_start_hour=cfg.get("session_start_hour", 0),
+                                  or_minutes=cfg.get("opening_range_minutes", 15)),
     }

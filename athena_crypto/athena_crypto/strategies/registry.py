@@ -1,5 +1,6 @@
 """Strategy registry."""
 from .breakout_retest import BreakoutRetest
+from .orb_sniper import OrbSniper
 from .range_mean_reversion import RangeMeanReversion
 from .sweep_reversal import SweepReversal
 from .trend_pullback import TrendPullback
@@ -9,6 +10,7 @@ _STRATEGIES = {
     "breakout_retest": BreakoutRetest,
     "sweep_reversal": SweepReversal,
     "range_mean_reversion": RangeMeanReversion,
+    "orb_sniper": OrbSniper,
 }
 
 

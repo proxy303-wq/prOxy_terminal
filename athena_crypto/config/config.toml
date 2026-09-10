@@ -9,7 +9,12 @@ env = "india_prod"
 # 4h is the validated default: at 15m the gross edge (+0.07R/trade) is smaller than
 # the cost drag (-0.07R/trade). See research/validation.py evidence in README section 13.
 timeframe = "4h"
-symbols = ["BTCUSD", "ETHUSD", "SOLUSD"]
+# BTC, ETH and gold traded DIRECTLY as perpetuals (no options, no tokenised wrappers).
+# XAU exposure on Delta India is XAUTUSD (Tether Gold, ~5x PAXGUSD volume) or PAXGUSD.
+# Measured on our only validated strategy (trend_pullback 4h): BTC +0.167R, ETH -0.075R,
+# XAUT -0.317R (12 trades, negative even before costs). Gold is therefore carried in the
+# DEMO campaign for forward evidence, not yet approved for production capital.
+symbols = ["BTCUSD", "ETHUSD", "XAUTUSD"]
 
 [account]
 # Paper account starting equity, expressed in settlement currency (USD for India linear perps)
@@ -133,6 +138,5 @@ min_interval = 1.0
 [logging]
 level = "INFO"
 file = "data/athena.log"
-
 
 

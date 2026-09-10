@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from .clock import now_ist
 from .env import load_creds_env
 
 DEFAULT_OUTDIR = os.path.join("data", "options", "chain")
@@ -74,10 +75,11 @@ class ChainCapture:
         self._seen: Dict[str, set] = {}
 
     def in_window(self, ts=None) -> bool:
-        t = (ts or pd.Timestamp.now()).time()
+        ts = ts if ts is not None else now_ist()
+        t = pd.Timestamp(ts).time()
         lo = dtime.fromisoformat(self.market_window[0])
         hi = dtime.fromisoformat(self.market_window[1])
-        return (lo <= t <= hi) and (ts or pd.Timestamp.now()).weekday() < 5
+        return (lo <= t <= hi) and pd.Timestamp(ts).weekday() < 5
 
     def _seen_today(self, day: date) -> set:
         key = day.isoformat()
@@ -96,7 +98,7 @@ class ChainCapture:
             return []
 
     def _log(self, msg: str) -> None:
-        stamp = datetime.now().strftime("%H:%M:%S")
+        stamp = now_ist().strftime("%H:%M:%S")
         print("[" + stamp + "] " + msg, flush=True)
         if self.notify:
             try:
@@ -115,7 +117,7 @@ class ChainCapture:
         if not snap or not snap.get("rows"):
             self.errors += 1
             return None
-        now = pd.Timestamp(ts) if ts is not None else pd.Timestamp.now()
+        now = pd.Timestamp(ts) if ts is not None else now_ist()
         return {
             "ts": now.isoformat(),
             "underlying": str(self.underlying_id),
@@ -139,7 +141,7 @@ class ChainCapture:
         return True
 
     def capture_once(self, ts=None) -> int:
-        now = pd.Timestamp(ts) if ts is not None else pd.Timestamp.now()
+        now = pd.Timestamp(ts) if ts is not None else now_ist()
         expiries = self._expiry_list()
         if not expiries:
             rec = self.snapshot_once(ts=now)
@@ -158,7 +160,7 @@ class ChainCapture:
                   + ", every " + str(interval) + "s, outdir " + self.outdir + ")")
         ticks = 0
         while True:
-            now = pd.Timestamp.now()
+            now = now_ist()
             if only_in_window and not self.in_window(now):
                 self._log("outside market window - waiting")
             else:

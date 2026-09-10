@@ -31,6 +31,7 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
+from .clock import now_ist
 from .config import Athena2Config
 from .contracts import ChainSnapshot, OptionType, RiskAction
 from .data import load_option_expiry, load_spot
@@ -89,9 +90,21 @@ class LiveDhanFeed:
         self.underlying_id = underlying_id
         self.notes: List[str] = []
 
-    def spot_history(self, days: int = 5) -> pd.DataFrame:
+    def spot_history(self, days: int = 45) -> pd.DataFrame:
+        """Index bars for the regime warm-up.
+
+        MA10/MA20 need 21+ sessions, so ask for Dhan's maximum window (~45
+        calendar days) and fall back down the list when the API returns empty.
+        """
         from proxy.dhan_data import fetch_intraday_last_days
-        df = fetch_intraday_last_days(days=days, interval=5)
+        df = None
+        for d in (days, 45, 30, 15, 5):
+            try:
+                df = fetch_intraday_last_days(days=d, interval=5)
+            except Exception:
+                df = None
+            if df is not None and len(df):
+                break
         if df is None or len(df) == 0:
             return pd.DataFrame(columns=["time", "open", "high", "low", "close", "volume"])
         df = df.copy()
@@ -107,7 +120,7 @@ class LiveDhanFeed:
             self.notes.append("chain fetch returned nothing")
             return None
         exp = date.fromisoformat(str(snap["expiry"]))
-        return LiveTick(ts=pd.Timestamp(datetime.now()), spot=float(snap["spot"]),
+        return LiveTick(ts=now_ist(), spot=float(snap["spot"]),
                         expiry=exp, rows=list(snap["rows"]))
 
 
@@ -269,7 +282,8 @@ class PaperRunner:
 
     # ------------------------------------------------------------- lifecycle
 
-    def warmup(self, days: int = 5) -> int:
+    def warmup(self, days: int = 45) -> int:
+        """Load enough history for MA10/20 + RV (regime) to be computable."""
         self.spot_df = self.feed.spot_history(days=days)
         return len(self.spot_df)
 

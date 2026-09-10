@@ -78,9 +78,14 @@ class RiskConfig:
     stress_moves_pct: list = field(default_factory=lambda: [-2.0, -1.0, -0.5, 0.5, 1.0, 2.0])
     stress_iv_shock_pts: list = field(default_factory=lambda: [-3.0, 3.0, 6.0])
     tail_loss_cap_pct: float = 4.0         # worst scenario loss cap per idea (policy tail veto)
-    # margin estimates (offline SPAN replacement; replace with broker margin)
-    margin_short_option_per_lot_rs: float = 60000.0
-    margin_future_per_lot_rs: float = 90000.0
+    # Margin per lot.  MEASURED 2026-09-10 on the live account: a NIFTY Sep FUT
+    # position of 195 qty (2.6 lots) blocked Rs 5,19,706 => ~Rs 2,00,000/lot at
+    # NIFTY ~23,700.  The option figure is an estimate from NSE SPAN+exposure for
+    # a short OTM NIFTY option (the Dhan /margincalculator API is entitlement-
+    # gated on this account: DH-905) - replace it with the measured value after
+    # the first live option fill.
+    margin_short_option_per_lot_rs: float = 130000.0
+    margin_future_per_lot_rs: float = 200000.0
 
 
 @dataclass

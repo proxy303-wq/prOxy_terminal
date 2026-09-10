@@ -29,7 +29,7 @@ from .dhan_rules import round_tick
 from .events import AthenaEvent, EventType
 from .journal import AthenaJournal2
 from .live_runner import LiveBrokerError, LiveRunner
-from .paper_runner import (JOURNAL_PATH, STATE_PATH, LiveDhanFeed, LiveTick,
+from .paper_runner import (JOURNAL_PATH, LIVE_STATE, STATE_PATH, LiveDhanFeed, LiveTick,
                            PaperBook, PaperRunner, load_repo_env, telegram_sender)
 from .regime import assemble_regime
 
@@ -323,7 +323,8 @@ def main(argv=None) -> int:
     ap.add_argument("--prefer", default="OPTIONS", choices=["OPTIONS", "FUTURES"])
     ap.add_argument("--adopt-positions", action="store_true",
                     help="take over existing broker positions instead of refusing")
-    ap.add_argument("--state", default=STATE_PATH)
+    ap.add_argument("--state", default=LIVE_STATE,
+                    help="LIVE book state (the paper/shadow book has its own file)")
     ap.add_argument("--no-telegram", action="store_true")
     args = ap.parse_args(argv)
 

@@ -35,8 +35,8 @@ from .dhan_rules import (PRODUCT_MARGIN, PaperOrder, dhan_symbol, map_status,
                          order_payload, round_tick)
 from .events import AthenaEvent, EventType
 from .journal import AthenaJournal2
-from .paper_runner import (JOURNAL_PATH, STATE_PATH, LiveDhanFeed, PaperBook,
-                           PaperRunner, load_repo_env, telegram_sender)
+from .paper_runner import (JOURNAL_PATH, LIVE_STATE, STATE_PATH, LiveDhanFeed,
+                           PaperBook, PaperRunner, load_repo_env, telegram_sender)
 
 
 class LiveBrokerError(Exception):
@@ -108,9 +108,11 @@ class LiveRunner(PaperRunner):
                     "qty_mismatch": [], "error": str(exc)[:200]}
         broker = {}
         for p in positions or []:
+            qty = int(p.get("netQty") or p.get("quantity") or p.get("net_qty") or 0)
+            if qty == 0:
+                continue          # a flat/square-off row is not an open position
             key = str(p.get("tradingSymbol") or p.get("trading_symbol")
                       or p.get("instrument") or "?")
-            qty = int(p.get("netQty") or p.get("quantity") or p.get("net_qty") or 0)
             broker[key] = {"qty": qty}
         diff = {"missing_in_broker": [], "missing_in_ledger": [], "qty_mismatch": []}
         for row in ledger:
@@ -293,7 +295,8 @@ def main(argv=None) -> int:
     ap.add_argument("--band-lo", type=float, default=None)
     ap.add_argument("--band-hi", type=float, default=None)
     ap.add_argument("--product", default=PRODUCT_MARGIN)
-    ap.add_argument("--state", default=STATE_PATH)
+    ap.add_argument("--state", default=LIVE_STATE,
+                    help="LIVE book state file (separate from the paper book)")
     ap.add_argument("--no-telegram", action="store_true")
     ap.add_argument("--allow-unreconciled", action="store_true",
                     help="skip the reconcile stop-gate (NOT recommended)")

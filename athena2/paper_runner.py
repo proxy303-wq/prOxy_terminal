@@ -43,6 +43,8 @@ from .journal import AthenaJournal2
 from .risk import PortfolioRisk
 
 STATE_PATH = os.path.join("reports", "athena2_paper_state.json")
+# the LIVE book keeps its own state: a paper position is NOT a broker position
+LIVE_STATE = os.path.join("reports", "athena2_live_state.json")
 JOURNAL_PATH = os.path.join("reports", "athena2_paper_journal.jsonl")
 NIFTY_UNDERLYING_ID = 13
 IST = "Asia/Kolkata"

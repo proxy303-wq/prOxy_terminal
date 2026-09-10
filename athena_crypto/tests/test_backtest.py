@@ -89,6 +89,19 @@ def test_backtest_runs_and_has_metrics():
     assert len(rep["closed_trades"]) == report["trades"]
 
 
+def test_trades_carry_simulated_bar_times():
+    """closed_at is wall-clock; period attribution needs the simulated bar times."""
+    candles = oscillate(n=900)
+    bt = Backtester(["BTCUSD"], _strategies(), {"BTCUSD": PRODUCT}, _cfg())
+    rep = bt.run_symbol(candles, "BTCUSD", start_equity=1000.0)
+    trades = rep["closed_trades"]
+    assert trades, "expected at least one trade"
+    for t in trades:
+        assert t.get("exit_bar_time"), "exit_bar_time missing"
+        assert t["meta"].get("entry_bar_time"), "entry_bar_time missing"
+        assert t["exit_bar_time"] >= t["meta"]["entry_bar_time"]
+
+
 def test_no_position_open_at_end():
     candles = oscillate(n=500)
     bt = Backtester(["BTCUSD"], _strategies(), {"BTCUSD": PRODUCT}, _cfg())

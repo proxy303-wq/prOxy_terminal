@@ -70,6 +70,7 @@ class Backtester:
             exit_fill = broker.manage_exits(symbol, candles[i])
             if exit_fill:
                 exit_fill["exit_bar_idx"] = i
+                exit_fill["exit_bar_time"] = candles[i].time
                 exit_fill["entry_bar_idx"] = exit_fill.get("meta", {}).get("bar_idx")
                 risk.release(symbol)
                 if journal:
@@ -88,12 +89,14 @@ class Backtester:
                     ts_fill = broker.close_position(symbol, candles[i].close, reason="time_stop")
                     if ts_fill:
                         ts_fill["exit_bar_idx"] = i
+                        ts_fill["exit_bar_time"] = candles[i].time
                         ts_fill["entry_bar_idx"] = ts_fill.get("meta", {}).get("bar_idx")
                         risk.release(symbol)
                         if journal:
                             journal.log_trade_result(ts_fill)
             # pending market entry fills at this bar's open (only when no position)
             if pending is not None and not portfolio.has_position(symbol):
+                pending.meta["entry_bar_time"] = candles[i].time
                 fill = broker.place(pending, ref_price=candles[i].open)
                 risk.register_open(symbol)
                 if journal:
@@ -155,6 +158,7 @@ class Backtester:
         end_fill = broker.close_position(symbol, end_price, reason="eod_flat")
         if end_fill:
             end_fill["exit_bar_idx"] = n - 1
+            end_fill["exit_bar_time"] = candles[-1].time
             end_fill["entry_bar_idx"] = end_fill.get("meta", {}).get("bar_idx")
             risk.release(symbol)
             if journal:

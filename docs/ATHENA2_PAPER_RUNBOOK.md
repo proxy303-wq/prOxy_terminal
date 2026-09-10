@@ -112,4 +112,42 @@ NO TRADE fired (reason histogram), closed trades with P&L/costs, open book, even
 Expect NO TRADE most of the day.  With the LIVE chain the engine can now reach
 the real delta bands, so entries become possible (regime + IV-RV edge + risk
 approval permitting).  Everything is logged; nothing can place an order.
+## Dhan parity + LIVE runner
+
+Paper replicates Dhan rules (athena2/dhan_rules.py, from DhanHQ API v2 docs plus the
+verified live payload):
+* Dhan order lifecycle statuses (TRANSIT/PENDING/PART_TRADED/TRADED/REJECTED/
+  CANCELLED/CLOSED/TRIGGERED) mapped onto OrderState;
+* LIMIT fills only when the touch is through the limit, MARKET at the far touch plus
+  slippage; an untraded LIMIT stays PENDING like a real DAY order;
+* productType MARGIN (carry forward) because exits span days - INTRADAY would be
+  auto-squared off by the broker;
+* tick rounding 0.05 and freeze-quantity slicing (1800 qty per child order);
+* charges per Dhan/NSE schedule: brokerage Rs 20/order, STT 0.1% of premium on SELL,
+  exchange txn 0.03503%, SEBI 0.0001%, IPFT 0.0000001%, stamp 0.003% buy, GST 18%
+  on (brokerage+txn+SEBI+IPFT);
+* margin from Dhan POST /v2/margincalculator (read-only) when a client is attached,
+  else the config per-lot estimate.
+
+Live runner (athena2/live_runner.py):
+
+    # full live loop with SIMULATED fills, zero orders (run this first)
+    python -m athena2.live_runner --dry-run --poll 60 --max-polls 400
+
+    # real orders on the SAME Dhan account (reconcile gate active)
+    python -m athena2.live_runner --mode live --poll 60 --max-polls 400
+
+Live safety behaviour:
+* refuses to start when the broker cannot be reached;
+* reconciles broker positions vs the internal book first and REFUSES to trade on any
+  mismatch (this account also runs the legacy terminal, so blind trading would
+  double up exposure);
+* re-checks the risk decision (APPROVE/MODIFY) immediately before sending the order;
+* ORDER_SUBMITTED / ORDER_FILLED / ORDER_REJECTED / POSITION_* / RISK_* go to the
+  same Telegram owner chat;
+* risk EMERGENCY_STOP invokes the broker kill switch;
+* exits are LIMIT at the ask with an automatic MARKET fallback.
+
+Progression: paper (days) -> live --dry-run -> live 1 lot with the reconcile gate ->
+scale only after the journal shows the expected edge and cost profile.
 

@@ -34,6 +34,8 @@ import pandas as pd
 from .config import Athena2Config
 from .contracts import ChainSnapshot, OptionType, RiskAction
 from .data import load_option_expiry, load_spot
+from .dhan_rules import (DhanCharges, PaperOrder, PRODUCT_MARGIN, charges_from_config,
+                         dhan_symbol, margin_for_order, round_tick, simulate_fill)
 from .engine import Athena2Engine
 from .events import AthenaEvent, EventHub, EventType, TelegramRelay
 from .journal import AthenaJournal2
@@ -209,9 +211,16 @@ class PaperRunner:
                  book: Optional[PaperBook] = None,
                  journal: Optional[AthenaJournal2] = None,
                  notify_text=None, entry_window=("09:30", "14:30"),
-                 target_frac: float = 0.5, stop_mult: float = 2.0):
+                 target_frac: float = 0.5, stop_mult: float = 2.0,
+                 product_type: str = PRODUCT_MARGIN, broker_client=None,
+                 mode: str = "paper"):
         self.cfg = cfg or Athena2Config()
         self.feed = feed
+        self.mode = mode
+        self.product_type = product_type
+        self.broker_client = broker_client   # read-only margin/order status when live
+        self.dhan = charges_from_config(self.cfg)
+        self.orders: List[dict] = []
         self.book = book or PaperBook()
         self.journal = journal or AthenaJournal2(JOURNAL_PATH)
         self.hub = EventHub()
@@ -264,6 +273,57 @@ class PaperRunner:
         self.spot_df = self.feed.spot_history(days=days)
         return len(self.spot_df)
 
+    def _row_lookup(self, tick: LiveTick):
+        out = {}
+        for r in tick.rows:
+            otype = "CALL" if str(r["option_type"]).upper().startswith("C") else "PUT"
+            out[(otype, float(r["strike"]))] = r
+        return out
+
+    def _place_order(self, opt_type: str, strike: float, side: str, qty: int,
+                     limit_price: float, tick: LiveTick, tag: str) -> PaperOrder:
+        """Place an order with Dhan semantics (paper: simulated at the touch).
+
+        Live mode overrides this in LiveRunner and routes to the broker.
+        """
+        rows = self._row_lookup(tick)
+        row = rows.get((opt_type, float(strike)), {})
+        order = PaperOrder(
+            security_id=str(row.get("security_id") or ""),
+            trading_symbol=str(row.get("trading_symbol")
+                               or dhan_symbol(tick.expiry.isoformat(), strike, opt_type)),
+            side=side.upper(), qty=int(qty), order_type="LIMIT",
+            product_type=self.product_type, price=round_tick(limit_price))
+        bid = float(row.get("bid") or row.get("ltp") or limit_price)
+        ask = float(row.get("ask") or row.get("ltp") or limit_price)
+        slippage = float(getattr(self.cfg.costs, "slippage_pts_flat", 0.0)) if side.upper() == "BUY" else 0.0
+        simulate_fill(order, bid=bid, ask=ask, slippage_pts=slippage)
+        rec = order.to_dict()
+        rec["tag"] = tag
+        self.orders.append(rec)
+        self._emit(EventType.ORDER_SUBMITTED,
+                   {"order_id": order.order_id, "side": order.side, "qty": order.qty,
+                    "symbol": order.trading_symbol, "limit": order.price,
+                    "product": order.product_type, "mode": self.mode}, "info")
+        if order.status == "TRADED":
+            self._emit(EventType.ORDER_FILLED,
+                       {"order_id": order.order_id, "side": order.side,
+                        "qty": order.filled_qty, "avg_price": order.avg_price,
+                        "mode": self.mode})
+        else:
+            self._emit(EventType.ORDER_REJECTED,
+                       {"order_id": order.order_id, "status": order.status,
+                        "message": order.message, "mode": self.mode}, "warning")
+        return order
+
+    def _order_charges(self, premium_pts: float, units: int, side: str) -> float:
+        return self.dhan.order_charges_rs(premium_pts, units, side)["total"]
+
+    def _margin_for(self, security_id, side: str, qty: int, price: float) -> dict:
+        return margin_for_order(security_id, side, qty, price,
+                                product_type=self.product_type,
+                                client=self.broker_client, cfg=self.cfg)
+
     def manage(self, tick: LiveTick) -> Optional[dict]:
         """Revalue the open paper trade and apply the deterministic exits."""
         book = self.book.open_trade
@@ -314,18 +374,37 @@ class PaperRunner:
         return out
 
     def close_trade(self, tick: LiveTick, reason: str) -> dict:
+        """Close with Dhan semantics: LIMIT at the ask, MARKET fallback."""
         book = self.book.open_trade
         asks = self._asks(tick)
         units = self.cfg.lot_size
         pnl = 0.0
-        costs = 0.0
+        costs = float(book.get("entry_charges_rs", 0.0))
         for leg in book["legs"]:
             key = (leg["opt_type"], float(leg["strike"]))
-            exit_px = asks.get(key, float(leg["entry_pts"]))
-            q_units = int(leg["qty"]) * units
+            limit = asks.get(key, float(leg["entry_pts"]))
+            qty = int(leg["qty"])
+            order = self._place_order(leg["opt_type"], float(leg["strike"]), "BUY",
+                                      qty, limit, tick, tag="ATHENA2_CLOSE")
+            if order.status != "TRADED":
+                order.order_type = "MARKET"
+                rows = self._row_lookup(tick)
+                row = rows.get((leg["opt_type"], float(leg["strike"])), {})
+                simulate_fill(order,
+                              bid=float(row.get("bid") or limit),
+                              ask=float(row.get("ask") or limit),
+                              slippage_pts=float(getattr(self.cfg.costs, "slippage_pts_flat", 0.0)))
+                self.orders.append(order.to_dict())
+                self._emit(EventType.ORDER_FILLED if order.status == "TRADED"
+                           else EventType.ORDER_REJECTED,
+                           {"order_id": order.order_id, "side": "BUY",
+                            "qty": order.filled_qty, "avg_price": order.avg_price,
+                            "fallback": "MARKET", "mode": self.mode},
+                           "info" if order.status == "TRADED" else "warning")
+            exit_px = float(order.avg_price or limit)
+            q_units = qty * units
             pnl += (float(leg["entry_pts"]) - exit_px) * q_units
-            costs += self.cfg.costs.charges_rs(float(leg["entry_pts"]), q_units, False, True, 1)
-            costs += self.cfg.costs.charges_rs(exit_px, q_units, True, False, 1)
+            costs += self._order_charges(exit_px, q_units, "BUY")
         net = pnl - costs
         rec = dict(book)
         rec.update({"exit_ts": tick.ts.isoformat(), "exit_reason": reason,
@@ -363,22 +442,39 @@ class PaperRunner:
             lots = dec.risk.modified_lots
         legs = []
         credit = 0.0
+        entry_charges = 0.0
+        order_ids = []
         for leg in dec.proposal.legs:
             key = (leg["opt_type"], float(leg["strike"]))
-            fill = bids.get(key)
-            if fill is None:
+            limit = bids.get(key)
+            if limit is None:
                 return None
             qty = lots if lots is not None else int(leg["qty"])
             if qty <= 0:
                 return None
+            order = self._place_order(leg["opt_type"], float(leg["strike"]), "SELL",
+                                      qty, limit, tick, tag="ATHENA2_OPEN")
+            if order.status != "TRADED":
+                self.last_decision["fill"] = order.to_dict()
+                return None
+            fill = float(order.avg_price)
+            units = qty * self.cfg.lot_size
+            entry_charges += self._order_charges(fill, units, "SELL")
+            order_ids.append(order.order_id)
             legs.append({"opt_type": leg["opt_type"], "strike": float(leg["strike"]),
-                         "qty": qty, "entry_pts": fill, "entry_iv": leg.get("iv")})
+                         "qty": qty, "entry_pts": fill, "entry_iv": leg.get("iv"),
+                         "security_id": order.security_id})
             credit += fill
+        margin = self._margin_for(legs[0].get("security_id", ""), "SELL",
+                                  int(legs[0]["qty"]), float(legs[0]["entry_pts"]))
         book = {"family": dec.proposal.family.value,
                 "expiry": tick.expiry.isoformat(),
                 "entry_ts": tick.ts.isoformat(), "legs": legs,
                 "credit_pts": credit, "lots": min(l["qty"] for l in legs),
-                "journal_id": jid, "paper": True}
+                "journal_id": jid, "paper": self.mode == "paper",
+                "mode": self.mode, "product_type": self.product_type,
+                "entry_charges_rs": round(entry_charges, 2),
+                "margin": margin, "order_ids": order_ids}
         self.book.open_trade = book
         self.book.entered_today = tick.ts.date().isoformat()
         self.book.save()

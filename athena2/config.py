@@ -16,11 +16,12 @@ class CostModel:
     Values are labeled defaults reflecting the NSE/Dhan schedule circa 2026;
     every number is overridable and should be refreshed from broker statements.
     """
-    brokerage_per_order_rs: float = 20.0          # flat per order (Dhan)
-    stt_sell_premium_pct: float = 0.0625          # STT % of premium on sell (options)
+    brokerage_per_order_rs: float = 20.0          # flat per executed order (Dhan)
+    stt_sell_premium_pct: float = 0.1             # STT % of premium, SELL side (options)
     exchange_txn_pct: float = 0.03503             # NSE txn charge % of premium
-    gst_pct: float = 18.0                         # GST on (brokerage+txn)
-    sebi_fee_pct: float = 0.0001                  # SEBI fee % of premium
+    gst_pct: float = 18.0                         # GST on (brokerage+txn+sebi+ipft)
+    sebi_fee_pct: float = 0.0001                  # SEBI turnover fee % of premium
+    ipft_pct: float = 0.0000001                   # IPFT contribution % of premium
     stamp_buy_pct: float = 0.003                  # stamp duty % of premium (buy side)
     slippage_pts_flat: float = 0.5                # research default per side (index pts)
     spread_bps: float = 2.0                       # default spread proxy (bps of last)
@@ -38,9 +39,10 @@ class CostModel:
         txn = premium_pts * self.exchange_txn_pct / 100.0 * units
         stt = premium_pts * self.stt_sell_premium_pct / 100.0 * units if is_sell else 0.0
         sebi = premium_pts * self.sebi_fee_pct / 100.0 * units
+        ipft = premium_pts * getattr(self, "ipft_pct", 0.0) / 100.0 * units
         stamp = premium_pts * self.stamp_buy_pct / 100.0 * units if is_buy else 0.0
-        gst = (brk + txn) * self.gst_pct / 100.0
-        return brk + txn + stt + sebi + stamp + gst
+        gst = (brk + txn + sebi + ipft) * self.gst_pct / 100.0
+        return brk + txn + stt + sebi + ipft + stamp + gst
 
     def charges_rs_on_premium(self, premium: float, is_buy: bool,
                               is_sell: bool, n_orders: int = 1) -> float:

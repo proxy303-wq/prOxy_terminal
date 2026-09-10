@@ -239,7 +239,7 @@ def cmd_run(cfg, args):
                              taker_fee=float(cfg.costs_config.get("taker_fee_rate", 0.0005)),
                              slippage_bps=float(cfg.costs_config.get("slippage_bps", 2.0)))
     from .notify.telegram import from_config as notifier_from_config
-    notifier = notifier_from_config(cfg)
+    notifier = notifier_from_config(cfg, env_path=getattr(args, "env", None))
     if not args.no_notify:
         notifier.enabled = False if getattr(args, "no_notify", False) else notifier.enabled
     controller = TradingController(cfg, svc, portfolio, broker, svc.products,
@@ -325,7 +325,7 @@ def cmd_halt(cfg, args):
     print("kill switch tripped:", json.dumps(payload))
     try:
         from .notify.telegram import from_config as _nf
-        _nf(cfg).halt(args.reason or "manual halt", by="cli")
+        _nf(cfg, env_path=getattr(args, "env", None)).halt(args.reason or "manual halt", by="cli")
     except Exception:
         pass
     print("sentinel:", guard.halt_path if not args.symbol else guard._halt_file(args.symbol))
@@ -340,7 +340,7 @@ def cmd_resume(cfg, args):
     if cleared:
         try:
             from .notify.telegram import from_config as _nf
-            _nf(cfg).resumed(by="cli")
+            _nf(cfg, env_path=getattr(args, "env", None)).resumed(by="cli")
         except Exception:
             pass
 
@@ -348,7 +348,7 @@ def cmd_resume(cfg, args):
 def cmd_notify_test(cfg, args):
     """Send a test Telegram message and report whether notifications work."""
     from .notify.telegram import from_config as notifier_from_config
-    n = notifier_from_config(cfg, enabled=True)
+    n = notifier_from_config(cfg, enabled=True, env_path=getattr(args, "env", None))
     print("token configured :", bool(n.token))
     print("chat configured  :", bool(n.chat_id))
     if not n.enabled:

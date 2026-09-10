@@ -123,14 +123,41 @@ def _num(x):
     return "%.6g" % x
 
 
-def from_config(cfg, enabled=None):
-    """Build a notifier from [notify] config + environment."""
+def _credentials_from_files(env_path=None, extra_candidates=None):
+    """Resolve TELEGRAM_* from os.environ, else from the usual .env files.
+
+    The systemd unit already exports these (EnvironmentFile), but a CLI run does not,
+    so fall back to reading the env files directly.
+    """
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if token and chat:
+        return token, chat
+    try:
+        import os as _os
+        from ..env_loader import load_env
+        from ..config import PROJECT_ROOT, WORKSPACE_ROOT, DEFAULT_ENV_CANDIDATES
+    except Exception:
+        return token, chat
+    candidates = []
+    if env_path:
+        candidates.append(env_path if _os.path.isabs(env_path) else _os.path.join(PROJECT_ROOT, env_path))
+    candidates.extend(DEFAULT_ENV_CANDIDATES)
+    candidates.extend(extra_candidates or [])
+    env = load_env(None, candidates)
+    return (token or env.get("TELEGRAM_BOT_TOKEN", ""),
+            chat or env.get("TELEGRAM_CHAT_ID", ""))
+
+
+def from_config(cfg, enabled=None, env_path=None, extra_candidates=None):
+    """Build a notifier from [notify] config, the environment and the env files."""
     section = cfg.toml.get("notify", {}) if hasattr(cfg, "toml") else {}
     if enabled is None:
         enabled = bool(section.get("enabled", True))
     demo = getattr(cfg.secrets, "env", "").endswith("_test")
     tag = "DEMO" if demo else "LIVE"
-    n = TelegramNotifier(enabled=enabled,
+    token, chat = _credentials_from_files(env_path=env_path, extra_candidates=extra_candidates)
+    n = TelegramNotifier(token=token, chat_id=chat, enabled=enabled,
                          min_interval=float(section.get("min_interval", 1.0)))
     n.tag = tag
     return n

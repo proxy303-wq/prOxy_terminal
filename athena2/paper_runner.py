@@ -525,7 +525,7 @@ class PaperRunner:
             rg = None
             if hasattr(self, "_regime_now"):
                 rg = self._regime_now(tick)
-            elif len(self.spot_df):
+            elif len(self.spot_df) and "time" in self.spot_df.columns:
                 from .regime import assemble_regime
                 hist = self.spot_df[self.spot_df["time"] <= tick.ts]
                 if len(hist) >= 60:
@@ -533,13 +533,17 @@ class PaperRunner:
             book = self.book.open_trade
             marks = self._marks(tick) if book else {}
             unreal = None
-            if book:
+            if book and book.get("legs"):
                 total_mark = 0.0
                 for leg in book.get("legs", []):
                     key = (leg["opt_type"], float(leg["strike"]))
                     if key in marks:
                         total_mark += marks[key]
                 unreal = round((float(book.get("credit_pts", 0.0)) - total_mark)
+                               * int(book.get("lots", 1)) * self.cfg.lot_size, 2)
+            elif book:      # futures-style book: mark against the entry price
+                direction = 1.0 if str(book.get("side", "BUY")).upper() == "BUY" else -1.0
+                unreal = round(direction * (tick.spot - float(book.get("entry_pts", tick.spot)))
                                * int(book.get("lots", 1)) * self.cfg.lot_size, 2)
             self.journal._append({
                 "kind": "state", "ts": tick.ts.isoformat(), "mode": self.mode,

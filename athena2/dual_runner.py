@@ -112,7 +112,10 @@ class DualSegmentRunner(LiveRunner):
     # ------------------------------------------------------------- signals
 
     def _regime_now(self, tick: LiveTick):
-        hist = self.spot_df[self.spot_df["time"] <= tick.ts]
+        df = getattr(self, "spot_df", None)
+        if df is None or len(df) == 0 or "time" not in getattr(df, "columns", []):
+            return None          # not warmed up yet
+        hist = df[df["time"] <= tick.ts]
         if len(hist) < 60:
             return None
         return assemble_regime(hist, ts=tick.ts)
@@ -155,6 +158,8 @@ class DualSegmentRunner(LiveRunner):
     def route(self, tick: LiveTick) -> dict:
         """One tick: manage live, then route each signal to live or shadow."""
         self.sync_mode()
+        self.shadow.spot_df = self.spot_df      # so shadow journal_state has a regime
+        self._shadow_ticks = getattr(self, "_shadow_ticks", 0) + 1
         out = {"ts": tick.ts.isoformat(), "spot": tick.spot, "halted": self.halted,
                "live_segment": self.risk.live_segment, "routes": []}
         # --- management is NEVER gated by the segment lock (only new entries are) ---
@@ -193,6 +198,12 @@ class DualSegmentRunner(LiveRunner):
                     self.risk.set_live_segment(SEGMENT_FUTURES)
             elif sig:
                 self._shadow_futures(tick, sig, out, block="segment_busy")
+        # --- periodic shadow state snapshot (same cadence as the live book) ---
+        if self._shadow_ticks % 5 == 0:
+            try:
+                self.shadow.journal_state(tick, {"action": "SHADOW"})
+            except Exception:
+                pass
         # --- shadow options when futures owns the live book ---
         if self.risk.live_segment == SEGMENT_FUTURES and self.book.open_trade is None:
             sp = self.shadow.maybe_open(tick)
@@ -304,6 +315,16 @@ class DualSegmentRunner(LiveRunner):
                            "stop": stop, "lots": self.futures_lots,
                            "credit_pts": 0.0, "legs": [], "shadow": True,
                            "block_reason": block, "expiry": tick.expiry.isoformat()}
+        jid = self.shadow.journal.record_decision(
+            {"action": "ENTER", "family": "NIFTY_FUT", "side": sig["side"],
+             "reasons": ["futures regime " + str(sig.get("label")),
+                         "route SHADOW (" + str(block) + ")",
+                         "entry " + str(round(entry, 2)) + " stop " + str(round(stop, 2))],
+             "regime": {"label": sig.get("label")},
+             "ts": tick.ts.isoformat()},
+            {"spot": entry, "expiry": tick.expiry.isoformat(), "shadow": True,
+             "block_reason": block})
+        self.fut_shadow["journal_id"] = jid
         self.shadow.book.open_trade = self.fut_shadow
         self.shadow.book.save()
         out["routes"].append({"segment": SEGMENT_FUTURES, "action": "SHADOW_OPEN",
@@ -344,6 +365,7 @@ class DualSegmentRunner(LiveRunner):
         self.shadow.book.closed.append(rec)
         self.shadow.book.open_trade = None
         self.shadow.book.save()
+        self.shadow.journal.log_outcome(f.get("journal_id", ""), rec)
         out["routes"].append({"segment": SEGMENT_FUTURES, "action": "SHADOW_CLOSE",
                               "reason": reason, "pnl_rs": round(pnl, 2)})
         self._emit(EventType.POSITION_CLOSE,

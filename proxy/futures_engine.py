@@ -9,9 +9,15 @@ INDEX POINTS.  This module runs that profile on a live/paper session:
                 enforced inside generate_signal)
   * instrument : the NIFTY index future.  BUY signal -> LONG future,
                 SELL -> SHORT future (LONG_ONLY=False).  Fills proxy the
-                index LTP for PAPER (basis ~0); friction = FUT_SLIPPAGE_PTS
-                (1.0 index pts RT default - Monday's real spread capture
-                replaces it) + brokerage/order.
+                index LTP for PAPER (basis ~0); friction = the MEASURED
+                half-hour full-spread crossing from the latest
+                reports/futures_spread_<date>.json capture
+                (proxy.futures_spread) for taker fills + brokerage/order.
+                The flat FUT_SLIPPAGE_PTS 1.0pt is only the fallback when no
+                usable capture exists.  Fresh entries are skipped in windows
+                whose measured spread exceeds FUT_MAX_WINDOW_SPREAD_PTS;
+                resting/limit (bracket) executions are priced as maker fills
+                (FUT_MAKER_SLIPPAGE_PTS, 0 = you earn the crossing).
   * exits      : the VALIDATED semantics - lock arm/floor/trail in index
                 points (proxy.exits.check_exits, the exact function the
                 A/B numbers came from), V4 delayed reverse (1 bar), unarmed
@@ -41,6 +47,7 @@ from zoneinfo import ZoneInfo
 from .config import (FORCE_EXIT_TIME, NO_NEW_ENTRY_AFTER, TRADE_START)
 from .data import load_csv
 from .exits import check_exits
+from .futures_spread import half_hour_key, load_spread_model
 from .indicators import calculate_indicators
 from .risk import apply_daily_pnl, check_trade_allowed, current_equity, risk_budget
 from .scoring import generate_signal
@@ -147,6 +154,13 @@ class FuturesEngine:
         self._fut_symbol = getattr(self.cfg, "FUTURES_TRADING_SYMBOL", None)
         self._bracket_id = None
         self._resolve_contract()
+        # measured-spread execution-cost model (FUT_SPREAD_*): per-window
+        # taker crossing replaces the flat FUT_SLIPPAGE_PTS knob whenever a
+        # usable reports/futures_spread_<date>.json capture exists.
+        self._spread = None
+        self._spread_gate_skips = 0
+        self._atr_gate_skips = 0
+        self._load_spread_model()
 
     def _resolve_contract(self):
         if self._fut_sid and self._fut_symbol:
@@ -155,6 +169,30 @@ class FuturesEngine:
             getattr(self.cfg, "FUT_SYMBOL", "NIFTY"))
         self._fut_sid = self._fut_sid or sid
         self._fut_symbol = self._fut_symbol or sym
+
+    def _load_spread_model(self):
+        if not bool(getattr(self.cfg, "FUT_SPREAD_USE_MEASURED", True)):
+            return
+        cfg = self.cfg
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        report_dir = getattr(cfg, "REPORT_DIR", None) or os.path.join(root, "reports")
+        if not os.path.isdir(str(report_dir)):
+            report_dir = os.path.join(root, "reports")
+        self._spread = load_spread_model(cfg, report_dir=report_dir)
+        if self._spread is not None:
+            cap = float(getattr(cfg, "FUT_MAX_WINDOW_SPREAD_PTS", 0.0) or 0.0)
+            self.log(
+                f"MEASURED SPREAD model: {self._spread.describe(None)} | "
+                f"taker friction charged per half-hour window; maker "
+                f"(bracket/limit) slip "
+                f"{float(getattr(cfg, 'FUT_MAKER_SLIPPAGE_PTS', 0.0) or 0.0):g}pt"
+                + (f"; entry gate cap {cap:g}pt RT" if cap > 0 else ""), "INFO")
+        else:
+            self.log(
+                "no usable futures spread capture - taker friction falls "
+                f"back to FUT_SLIPPAGE_PTS "
+                f"{float(getattr(cfg, 'FUT_SLIPPAGE_PTS', 1.0) or 0.0):g}pt flat",
+                "INFO")
 
     # ---------------------------------------------------------- db / log
 
@@ -244,8 +282,44 @@ class FuturesEngine:
 
     # ------------------------------------------------------- position mgmt
 
-    def _friction_per_trade(self, qty):
-        slip = float(getattr(self.cfg, "FUT_SLIPPAGE_PTS", 1.0) or 0.0)
+    def _position_maker(self, t):
+        """True when the position is run as a RESTING maker (live bracket:
+        entry + target/SL legs at the broker).  Maker fills EARN the crossing
+        instead of paying it -> friction charges FUT_MAKER_SLIPPAGE_PTS."""
+        return bool(
+            getattr(self.broker, "live", False)
+            and bool(getattr(self.cfg, "BRACKET_LIVE_ENABLED", False))
+            and bool(t and t.get("bracket_id")))
+
+    def _slip_pts_rt(self, t=None):
+        """Round-trip crossing (index pts) this trade pays.  Maker/resting:
+        FUT_MAKER_SLIPPAGE_PTS (0).  Taker: the measured half-hour spread at
+        the position's ENTRY window (falling back to the capture's day
+        median, then the flat FUT_SLIPPAGE_PTS knob) so the cost matches the
+        window the signal actually traded in."""
+        if self._position_maker(t):
+            return float(getattr(self.cfg, "FUT_MAKER_SLIPPAGE_PTS", 0.0) or 0.0)
+        when = None
+        if t is not None:
+            when = t.get("entry_time") or None
+        return self._crossing_pts(when)
+
+    def _crossing_pts(self, when=None):
+        """Best measured full round-trip crossing (index pts) for 'when' (a
+        bar time / entry window): captured window -> day median -> flat knob.
+        Maker/resting status is NOT considered here (that lives in
+        _slip_pts_rt); this is the raw taker crossing cost."""
+        if self._spread is not None:
+            return self._spread.rt_crossing_pts(
+                when, fallback=float(getattr(self.cfg, "FUT_SLIPPAGE_PTS", 1.0) or 0.0))
+        return float(getattr(self.cfg, "FUT_SLIPPAGE_PTS", 1.0) or 0.0)
+
+    def _friction_per_trade(self, qty, t=None):
+        """Round-trip costs for one trade: crossing (measured per-window
+        taker, or maker when the position runs as a resting bracket) +
+        brokerage on both sides.  't' is the position dict, supplying the
+        entry window and bracket/maker status."""
+        slip = self._slip_pts_rt(t)
         fee = float(getattr(self.cfg, "FUT_BROKERAGE_PER_ORDER", 30.0) or 0.0)
         return qty * slip + 2 * fee
 
@@ -296,11 +370,65 @@ class FuturesEngine:
             "entry_time": None,
             "reverse_pending_at": None,
             "unrealized_pnl": 0.0,
+            "atr5": float(getattr(signal, "atr", 0.0) or 0.0),
         }
 
     def _halts_ok(self):
         return not (self.state.get("trading_halted_day")
                     or self.state.get("trading_halted_month"))
+
+    def _spread_entry_gate(self, bar):
+        """Fresh-entry liquidity gate (mirrors engine.py's chain-entry check
+        for options): a 1pt-lock taker scalp cannot pay a 5-8pt crossing, so
+        skip entries when the measured spread of the CURRENT window exceeds
+        FUT_MAX_WINDOW_SPREAD_PTS.  No-op when no capture is loaded or the
+        cap is <= 0 (maker/resting entries are governed by broker-side
+        pricing and are not gated here).  Returns (ok, reason)."""
+        cap = float(getattr(self.cfg, "FUT_MAX_WINDOW_SPREAD_PTS", 0.0) or 0.0)
+        if self._spread is None or cap <= 0:
+            return True, ""
+        when = bar["time"]
+        rt = self._spread.rt_crossing_pts(when, fallback=0.0)
+        if rt <= 0:
+            return True, ""
+        if rt <= cap:
+            return True, ""
+        win = self._spread.window_rt_pts(when)
+        key = half_hour_key(when)
+        how = f"{key // 60:02d}:{key % 60:02d} window {rt:g}pt" if win else f"day median {rt:g}pt"
+        return False, f"{how} RT spread > cap {cap:g}pt [{self._spread.source}]"
+
+    def _atr_entry_gate(self, bar, signal):
+        """ATR regime + expected-move-vs-cost gate (FutureQuant idea, applied
+        with the engine's 5m ATR): the scalp's expected one-bar move (ATR,
+        index pts) must be inside the tradable band AND clear the total
+        per-unit friction of THIS window (measured spread + 2x brokerage
+        spread over the quantity).  A dead market can never pay the spread;
+        a frothing one is unreadable.  No-op when the gate is off or ATR is
+        unavailable (never block on missing data).  Returns (ok, reason)."""
+        if not bool(getattr(self.cfg, "FUT_ATR_GATE_ENABLED", True)):
+            return True, ""
+        atr = getattr(signal, "atr", None) or 0.0
+        if atr <= 0:
+            return True, ""
+        atr = float(atr)
+        atr_min = float(getattr(self.cfg, "FUT_MIN_ATR_PTS", 0.0) or 0.0)
+        atr_max = float(getattr(self.cfg, "FUT_MAX_ATR_PTS", 0.0) or 0.0)
+        if atr_max > 0 and atr > atr_max:
+            return False, f"ATR {atr:.1f}pt > max {atr_max:g}pt (chaotic regime)"
+        # per-unit friction THIS BAR's window: spread crossing + 2x brokerage
+        slip = self._crossing_pts(bar["time"])
+        qty = float(getattr(self.cfg, "LOT_SIZE", 65.0)) * max(1, int(getattr(self.cfg, "DEFAULT_LOTS", 1) or 1))
+        fee = float(getattr(self.cfg, "FUT_BROKERAGE_PER_ORDER", 30.0) or 0.0)
+        friction_pts = slip + (2.0 * fee) / qty
+        mult = float(getattr(self.cfg, "FUT_MIN_MOVE_TO_COST", 0.0) or 0.0)
+        need = friction_pts * mult if mult > 0 else 0.0
+        if need > 0 and atr < need:
+            return False, (f"ATR {atr:.1f}pt < {need:.1f}pt needed vs {slip:.2f}pt "
+                           f"slip + costs (move can't clear the spread)")
+        if atr_min > 0 and atr < atr_min:
+            return False, f"ATR {atr:.1f}pt < min {atr_min:g}pt (dead market)"
+        return True, ""
 
     def _check_exits(self, bar, signal):
         """Protective level exits (check_exits = the A/B's exit function),
@@ -353,7 +481,8 @@ class FuturesEngine:
         sign = 1.0 if t["direction"] == "LONG" else -1.0
         qty = int(t["quantity"] or 0)
         gross = (float(exit_price) - float(t["entry_premium"])) * qty * sign
-        friction = self._friction_per_trade(qty)
+        friction = self._friction_per_trade(qty, t)
+        slip_pts = self._slip_pts_rt(t)
         pnl = gross - friction
         t["exit_level"] = round(float(exit_price), 2)
         t["exit_premium"] = round(float(exit_price), 2)
@@ -367,7 +496,7 @@ class FuturesEngine:
         self.log(
             f"EXIT {t['instrument']} {t['direction']} {t['lots']}L "
             f"@ {t['exit_level']:.2f} | {exit_reason} | P&L {pnl:+,.2f} INR "
-            f"(friction {friction:,.0f})", "TRADE")
+            f"(friction {friction:,.0f}, slip {slip_pts:g}pt)", "TRADE")
         rec = dict(t)
         self.active = None
         if "STOP_LOSS_HIT" in str(exit_reason)                 and int(getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0) or 0):
@@ -470,10 +599,25 @@ class FuturesEngine:
                 if not _gate.allowed:
                     self.log(f"GATE  paper-live-like: {_gate.reason}", "INFO")
                     return events
+            # measured-spread liquidity gate: skip taker entries when the
+            # current window's crossing is too wide for the scalp to pay.
+            _ok, _why = self._spread_entry_gate(bar)
+            if not _ok:
+                self._spread_gate_skips += 1
+                self.log(f"SPREAD GATE skip entry: {_why}", "GATE")
+                return events
+            _ok, _why = self._atr_entry_gate(bar, signal)
+            if not _ok:
+                self._atr_gate_skips += 1
+                self.log(f"ATR GATE skip entry: {_why}", "GATE")
+                return events
             plan = self._plan(signal, spot)
             if plan is None:
                 return events
             plan["entry_time"] = bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"])
+            # honest per-trade cost snapshot (entry window + model source)
+            plan["slip_pts"] = self._slip_pts_rt(plan)
+            plan["slip_src"] = self._spread.source if self._spread is not None else "flat"
             if self._live_enter(plan):
                 events["entered"] = dict(plan)
                 self.active = plan
@@ -481,7 +625,9 @@ class FuturesEngine:
                     f"ENTRY {plan['instrument']} {plan['direction']} {plan['lots']}L "
                     f"@{plan['entry_premium']:.2f} (risk ₹{plan['risk_rs']:,.0f}, "
                     f"stop {plan['stop_premium']:.2f} / tgt {plan['target_premium']:.2f}) "
-                    f"conf={plan['confidence']:.0f}% {plan['setup_type']} {plan['trend']}",
+                    f"conf={plan['confidence']:.0f}% {plan['setup_type']} {plan['trend']} "
+                    f"| slip {plan['slip_pts']:g}pt {plan['slip_src']} "
+                    f"atr {plan['atr5']:.1f}pt",
                     "TRADE")
         return events
 
@@ -604,6 +750,11 @@ class FuturesEngine:
             "last_ltp": self.last_ltp,
             "trade_date": str(self.trade_date) if self.trade_date else None,
             "bars_processed": self.bars_processed,
+            "spread_source": self._spread.source if self._spread is not None else None,
+            "spread_day_median_rt_pts": round(self._spread.day_median_rt, 2)
+                                       if self._spread is not None else None,
+            "spread_gate_skips": self._spread_gate_skips,
+            "atr_gate_skips": self._atr_gate_skips,
             "futures_mode": None,  # filled by the caller (mode.get_mode('futures'))
         }
 

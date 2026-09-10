@@ -36,6 +36,13 @@ MENU_KEYBOARD = [
     ["🚀 BTST Picks", "🎛 Mode"],
     ["📉 Futures", "📗 FINNIFTY"],
     ["🧩 Opt-Sell", "❓ Help"],
+    ["🧠 Meta", "📡 Digest"],
+]
+
+META_KEYBOARD = [
+    ["🧠 Daily Digest", "🕵️ Review Last"],
+    ["📋 Forecast Audit", "📚 Assumption Ledger"],
+    ["🔙 Main Menu"],
 ]
 
 MODE_KEYBOARD = [
@@ -67,6 +74,7 @@ COMMANDS = [
     {"command": "futures", "description": "Futures engine status / mode"},
     {"command": "finnifty", "description": "FINNIFTY engine status / mode"},
     {"command": "optsell", "description": "Opt-Sell engine status / mode"},
+    {"command": "meta", "description": "Metacognition: digest / audit / review / ledger"},
     {"command": "help", "description": "Show this menu"},
 ]
 
@@ -213,6 +221,25 @@ class TelegramMenu:
                 _send(chat_id, "❌ Cancelled - opt-sell mode unchanged.", MENU_KEYBOARD)
             return
 
+        # META - athena metacognition commands (optional 2nd token = symbol:
+        # /digest BANKNIFTY, /review FIN).  Stateless: each call re-reads the
+        # journal + measured files.  Falls back gracefully when the athena
+        # layer is not deployed on this host.
+        meta_parts = text.lower().split()
+        meta_cmd = meta_parts[0].lstrip("/") if meta_parts else ""
+        meta_symbol = meta_parts[1] if len(meta_parts) > 1 else None
+        meta_route = {
+            "meta": self._meta_sub, "mind": self._meta_sub,
+            "cognition": self._meta_sub,
+            "digest": self._meta_digest,
+            "audit": self._meta_audit,
+            "review": self._meta_review, "review-last": self._meta_review,
+            "ledger": self._meta_ledger, "assumptions": self._meta_ledger,
+        }
+        if meta_cmd in meta_route:
+            meta_route[meta_cmd](chat_id, meta_symbol)
+            return
+
         dispatch = {
             "start": self._help, "help": self._help, "menu": self._help,
             "balance": self._balance,
@@ -253,6 +280,12 @@ class TelegramMenu:
             "🧩 opt-sell": self._opt,
             "🟢 go live optsell": self._opt_ask_live,
             "⚪ paper optsell": self._opt_paper,
+            "🧠 meta": self._meta_sub,
+            "📡 digest": self._meta_digest,
+            "🧠 daily digest": self._meta_digest,
+            "🕵️ review last": self._meta_review,
+            "📋 forecast audit": self._meta_audit,
+            "📚 assumption ledger": self._meta_ledger,
             "🔙 main menu": self._help,
         }
         handler = btn.get(text.lower())
@@ -261,6 +294,72 @@ class TelegramMenu:
             return
         _send(chat_id,
               "Unknown command. Use the menu buttons or /help.", MENU_KEYBOARD)
+
+    # ----------------------------------------------------------
+    # META: athena metacognition (digest / audit / review / ledger)
+    # ----------------------------------------------------------
+
+    def _meta_tg(self):
+        """Lazy handle to the metacognition telegram bridge.  None when the
+        athena layer is not deployed on this host (menu still works)."""
+        try:
+            from athena import meta_tg
+            return meta_tg
+        except Exception:
+            return None
+
+    def _meta_symbol(self, symbol):
+        mt = self._meta_tg()
+        sym = (symbol or "NIFTY").upper()
+        if mt is None:
+            return sym
+        return mt.normalize_symbol(sym)
+
+    def _meta_reply(self, chat_id, fn):
+        mt = self._meta_tg()
+        if mt is None:
+            _send(chat_id,
+                  "⚠️ Metacognition layer not deployed on this host - sync the "
+                  "repo (athena/meta_tg.py) to use /digest /audit /review "
+                  "/ledger.", MENU_KEYBOARD)
+            return
+        try:
+            text = fn(mt)
+        except Exception as exc:
+            text = f"⚠️ meta error: {exc}"
+        _send(chat_id, text, META_KEYBOARD)
+
+    def _meta_sub(self, chat_id, symbol=None):
+        s = self._meta_symbol(symbol)
+        _send(chat_id,
+              f"🧠 <b>Metacognition - {s}</b>\n\n"
+              "The engine watching its own mind:\n"
+              "🧠 <b>Daily Digest</b> - today's reflection (journal mix, "
+              "self-review, watchdog flags, open questions)\n"
+              "📋 <b>Forecast Audit</b> - did claimed p_path mean what it "
+              "said? (needs realized outcomes)\n"
+              "🕵️ <b>Review Last</b> - adversarial counter-case on the most "
+              "recent EXECUTE\n"
+              "📚 <b>Assumption Ledger</b> - standing claims, evidence status, "
+              "staleness\n\n"
+              "Commands: /meta /digest /audit /review /ledger\n"
+              "Append a symbol for others: /digest BANKNIFTY, /audit FIN.",
+              META_KEYBOARD)
+
+    def _meta_digest(self, chat_id, symbol=None):
+        s = self._meta_symbol(symbol)
+        self._meta_reply(chat_id, lambda mt: mt.format_digest_text(s))
+
+    def _meta_audit(self, chat_id, symbol=None):
+        s = self._meta_symbol(symbol)
+        self._meta_reply(chat_id, lambda mt: mt.format_audit_text(s))
+
+    def _meta_review(self, chat_id, symbol=None):
+        s = self._meta_symbol(symbol)
+        self._meta_reply(chat_id, lambda mt: mt.format_review_text(s))
+
+    def _meta_ledger(self, chat_id, symbol=None):
+        self._meta_reply(chat_id, lambda mt: mt.format_ledger_text())
 
     # ----------------------------------------------------------
     # info builders
@@ -276,9 +375,11 @@ class TelegramMenu:
               "🎛 <b>Mode</b> - NIFTY PAPER / LIVE (LIVE needs a confirm step)\n"
               "📉 <b>Futures</b> - futures engine status / mode\n"
               "📗 <b>FINNIFTY</b> - FINNIFTY engine status / mode\n"
-              "🧩 <b>Opt-Sell</b> - options-selling engine status / paper-live\n\n"
+              "🧩 <b>Opt-Sell</b> - options-selling engine status / paper-live\n"
+              "🧠 <b>Meta</b> - engine self-reflection: digest / audit / review "
+              "/ ledger (append a symbol: /digest BANKNIFTY)\n\n"
               "Commands: /balance /prices /sentiment /report /mode /futures "
-              "/finnifty /optsell",
+              "/finnifty /optsell /meta",
               MENU_KEYBOARD)
 
     def _balance(self, chat_id):

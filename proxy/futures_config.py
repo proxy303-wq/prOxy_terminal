@@ -17,8 +17,11 @@ pattern as proxy/dual.py), re-based for the instrument = the index future:
   * one tradable -> ONE_TRADE_PER_STRIKE_DAY off (re-entry after exit;
     a live position-once/cooldown rule is a TODO before real fills)
   * lot 65 (REAL from the scrip master 06-Sep; NOT the 75 §18 assumed)
-  * costs: FUT_SLIPPAGE_PTS (1.0 default; Monday's measured spread capture
-    reports/futures_spread_<date>.json replaces this) + brokerage per order
+  * costs: the engine now charges the MEASURED per-window spread from the
+    latest reports/futures_spread_<date>.json capture (proxy.futures_spread;
+    day median 3.9pt RT on 2026-09-08, ~1.95-7.9pt by half-hour) as taker
+    friction + brokerage.  FUT_SLIPPAGE_PTS (1.0) is only the FALLBACK when
+    no usable capture exists / FUT_SPREAD_USE_MEASURED=0.
   * sizing: 0.5% risk of the allocated capital, DEFAULT_LOTS capped at 2
     (margin ~2L/lot: even 2 lots ~4L is the whole account - start 1)
 
@@ -74,9 +77,33 @@ def futures_config():
     c.ONE_TRADE_PER_STRIKE_DAY = False     # single tradable
     c.MAX_POSITIONS = 1
     c.LOSS_COOLDOWN_BARS = 6
-    # ---- futures friction (measured spread replaces the default Monday) ----
-    c.FUT_SLIPPAGE_PTS = 1.0               # index pts round trip per unit
+    # ---- futures friction: measured per-window spread (taker) ----
+    # The flat 1.0pt fiction is gone for the ENGINE: FuturesEngine loads the
+    # newest reports/futures_spread_<date>.json (proxy.futures_spread) and
+    # charges the half-hour median full-spread as round-trip crossing, so a
+    # 1pt-lock scalp stops pretending it can pay a 4-8pt cross as a taker.
+    # FUT_SPREAD_FILE pins one capture (default None = newest by date; env
+    # $FUT_SPREAD_FILE overrides).  FUT_MAX_WINDOW_SPREAD_PTS gates fresh
+    # entries out of wide windows.  Resting/limit (bracket) executions are
+    # MAKER fills: they earn the crossing, so they charge FUT_MAKER_SLIPPAGE_PTS.
+    c.FUT_SPREAD_USE_MEASURED = True       # engine charges measured spread over the flat knob
+    c.FUT_SPREAD_FILE = None               # explicit capture path (None = newest usable)
+    c.FUT_MAKER_SLIPPAGE_PTS = 0.0         # resting/limit (bracket) fills, index pts RT
+    c.FUT_MAX_WINDOW_SPREAD_PTS = 4.0      # skip taker entries when window RT spread > cap
+    c.FUT_SLIPPAGE_PTS = 1.0               # FALLBACK index pts RT when no capture (engine)
     c.FUT_BROKERAGE_PER_ORDER = 30.0       # INR per order (Dhan futures)
+    # ---- ATR regime + move-vs-cost entry gate (FutureQuant Ch.4.3 idea) ----
+    # NIFTY index 5m ATR (measured over data/NIFTY_5m.csv 2024-08..2026-09):
+    # median ~17-21 index pts, p10 ~13, p90 ~35.  A fixed 5pt stop / 1pt lock
+    # is a ~0.25-0.3xATR scalp, so when ATR collapses the expected move cannot
+    # clear the measured spread + brokerage, and when it explodes the regime
+    # is unreadable.  The gate skips BOTH: no entry unless ATR is inside the
+    # band AND the expected one-bar move (ATR) clears the total per-unit
+    # friction (window spread + 2x brokerage/qty) by FUT_MIN_MOVE_TO_COST.
+    c.FUT_ATR_GATE_ENABLED = True
+    c.FUT_MIN_ATR_PTS = 7.0                # skip dead/ultra-quiet markets
+    c.FUT_MAX_ATR_PTS = 45.0               # skip frothing/erratic regimes
+    c.FUT_MIN_MOVE_TO_COST = 2.0           # ATR must clear per-unit friction by this mult
     c.TRANSACTION_COST_PCT = 0.0           # % of notional N/A for futures
     c.BT_FIXED_FEE_PER_SIDE = 0.0
     # ---- sizing (USER STANDARD 06-Sep: "whatever possible from margin",

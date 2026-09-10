@@ -82,7 +82,8 @@ def load_option_expiry(expiry: date, root: Optional[str] = None) -> pd.DataFrame
                             "close", "iv", "oi", "volume", "spot") if c in df.columns]
         frames.append(df[keep])
     if not frames:
-        raise FileNotFoundError("no option history for expiry " + str(expiry) + " in " + root)
+        raise FileNotFoundError("no option history for expiry " + str(expiry)
+                                + " in " + str(root or "data/options/history"))
     out = pd.concat(frames, ignore_index=True)
     out["time"] = pd.to_datetime(out["time"])
     # stored iv column is PERCENT (e.g. 9.37 = 9.37%); normalize to decimal

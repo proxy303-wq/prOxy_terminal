@@ -25,6 +25,9 @@ def _engine(tmp_db, cfg_tweaks=None):
     from proxy.futures_engine import FuturesEngine
     cfg = futures_config()
     cfg.DB_PATH = tmp_db
+    cfg.FUT_SPREAD_USE_MEASURED = False   # deterministic flat-friction tests;
+    # the measured spread model is exercised by TestFuturesSpreadModel
+    cfg.FUT_ATR_GATE_ENABLED = False      # ATR gates exercised by TestFuturesAtrGate
     for k, v in (cfg_tweaks or {}).items():
         setattr(cfg, k, v)
     return FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
@@ -266,6 +269,268 @@ class TestFuturesMode(unittest.TestCase):
         # complex - just assert the absent-file default through get_mode
         self.assertEqual(get_mode("futures"), "paper")
 
+
+
+
+
+class TestFuturesSpreadModel(unittest.TestCase):
+    """Measured-spread cost model (proxy/futures_spread.py) wired into the
+    engine: per-window taker friction, wide-window entry gate, maker
+    (bracket/limit) friction, and the gross - friction identity under a
+    controlled capture file."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.df5 = load_csv(NIFTY_5M)
+        cls.df1 = load_csv(NIFTY_1M)
+
+    CAPTURE = {
+        "instrument": "NIFTY-Sep2026-FUT", "security_id": 68407,
+        "expiry": "2026-09-29", "lot_size": 65.0, "day": "2026-09-08",
+        "n_ticks": 1675, "n_valid_spreads": 1675,
+        "spread_pts": {"median": 3.9, "mean": 4.38, "p25": 2.0, "p75": 6.5,
+                       "p99": 11.6, "max": 12.9},
+        "half_hour_median_spread_pts": {"0570": 4.0, "0600": 2.0},
+        "one_side_crossing_pts_median": 1.95,
+        "round_trip_crossing_pts_median": 3.9,
+    }
+
+    def _capture_file(self):
+        import json
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        with open(self._tmp.name, "w", encoding="utf-8") as fh:
+            json.dump(self.CAPTURE, fh)
+        self.addCleanup(lambda: os.path.exists(self._tmp.name) and os.remove(self._tmp.name))
+        return self._tmp.name
+
+    def _cfg(self, path=None, cap=4.0):
+        from proxy.futures_config import futures_config
+        cfg = futures_config()
+        if path is not None:
+            cfg.FUT_SPREAD_FILE = path
+        cfg.FUT_SPREAD_USE_MEASURED = True
+        cfg.FUT_MAX_WINDOW_SPREAD_PTS = cap
+        return cfg
+
+    def test_window_lookup_and_fallback(self):
+        import datetime as _dt
+        from proxy.futures_spread import SpreadModel, half_hour_key, load_spread_model
+        path = self._capture_file()
+        model = load_spread_model(self._cfg(path))
+        self.assertIsNotNone(model)
+        self.assertEqual(model.source, os.path.basename(path))
+        self.assertEqual(model.day_median_rt, 3.9)
+        # 09:35 -> the 09:30 window (key 570), 10:05 -> 10:00 (key 600)
+        self.assertEqual(half_hour_key(_dt.datetime(2026, 9, 8, 9, 35)), 570)
+        self.assertEqual(half_hour_key(_dt.datetime(2026, 9, 8, 10, 5)), 600)
+        self.assertEqual(model.rt_crossing_pts(_dt.datetime(2026, 9, 8, 9, 35)), 4.0)
+        self.assertEqual(model.rt_crossing_pts(_dt.datetime(2026, 9, 8, 10, 5)), 2.0)
+        # uncaptured window -> whole-day median, then caller fallback
+        self.assertEqual(model.rt_crossing_pts(_dt.datetime(2026, 9, 8, 13, 5)), 3.9)
+        empty = SpreadModel({"round_trip_crossing_pts_median": None,
+                             "half_hour_median_spread_pts": {}})
+        self.assertFalse(empty.usable)
+        self.assertEqual(empty.rt_crossing_pts(_dt.datetime(2026, 9, 8, 9, 35),
+                                               fallback=1.0), 1.0)
+
+    def test_unusable_capture_skipped(self):
+        import json
+        from proxy.futures_spread import load_spread_model
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        self._tmp.close()
+        with open(self._tmp.name, "w", encoding="utf-8") as fh:
+            json.dump({"n_ticks": 0, "round_trip_crossing_pts_median": None,
+                       "half_hour_median_spread_pts": {}}, fh)
+        self.addCleanup(lambda: os.path.exists(self._tmp.name) and os.remove(self._tmp.name))
+        self.assertIsNone(load_spread_model(self._cfg(self._tmp.name)))
+
+    def test_engine_taker_friction_uses_entry_window(self):
+        import datetime as _dt
+        from proxy.futures_engine import FuturesEngine
+        path = self._capture_file()
+        cfg = self._cfg(path)
+        tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        tmp_db.close()
+        self.addCleanup(lambda: os.path.exists(tmp_db.name) and os.remove(tmp_db.name))
+        cfg.DB_PATH = tmp_db.name
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
+        self.assertIsNotNone(eng._spread)
+        plan = _plan_dict("LONG", 25000.0)
+        plan["entry_time"] = "2026-01-08T09:35:00"   # window 09:30 -> 4.0pt
+        self.assertEqual(eng._friction_per_trade(65, plan), round(65 * 4.0 + 2 * 30.0, 2))
+        plan["entry_time"] = "2026-01-08T10:05:00"   # window 10:00 -> 2.0pt
+        self.assertEqual(eng._friction_per_trade(65, plan), round(65 * 2.0 + 2 * 30.0, 2))
+        plan["entry_time"] = "2026-01-08T13:05:00"   # uncaptured -> day median 3.9
+        self.assertEqual(eng._friction_per_trade(65, plan), round(65 * 3.9 + 2 * 30.0, 2))
+        snap = eng.snapshot()
+        self.assertEqual(snap["spread_source"], os.path.basename(path))
+        self.assertEqual(snap["spread_day_median_rt_pts"], 3.9)
+
+    def test_maker_bracket_friction_is_free_crossing(self):
+        from proxy.futures_engine import FuturesEngine
+        br = FakeLiveBroker()
+        path = self._capture_file()
+        cfg = self._cfg(path)
+        cfg.FUT_MAKER_SLIPPAGE_PTS = 0.0
+        cfg.BRACKET_LIVE_ENABLED = True
+        cfg.BRACKET_ENTRY_STYLE = "limit"
+        tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        tmp_db.close()
+        self.addCleanup(lambda: os.path.exists(tmp_db.name) and os.remove(tmp_db.name))
+        cfg.DB_PATH = tmp_db.name
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None, broker=br)
+        eng._fut_sid = 68407
+        eng._fut_symbol = "NIFTY-Sep2026-FUT"
+        plan = _plan_dict("LONG", 25000.0)
+        plan["entry_time"] = "2026-01-08T09:35:00"
+        self.assertTrue(eng._live_enter(plan))
+        self.assertEqual(plan.get("bracket_id"), "BK-1")
+        # resting bracket legs earn the crossing: slip = FUT_MAKER_SLIPPAGE_PTS
+        self.assertEqual(eng._slip_pts_rt(plan), 0.0)
+        self.assertEqual(eng._friction_per_trade(65, plan), 2 * 30.0)
+
+    def test_spread_gate_skips_wide_window(self):
+        import datetime as _dt
+        from proxy.futures_engine import FuturesEngine
+        path = self._capture_file()
+        cfg = self._cfg(path, cap=3.0)     # block windows above 3.0pt RT
+        tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        tmp_db.close()
+        self.addCleanup(lambda: os.path.exists(tmp_db.name) and os.remove(tmp_db.name))
+        cfg.DB_PATH = tmp_db.name
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
+        ok, _why = eng._spread_entry_gate({"time": _dt.datetime(2026, 1, 8, 9, 35)})
+        self.assertFalse(ok)                     # 4.0 > 3.0
+        self.assertIn("SPREAD", _why.upper())
+        ok, _why = eng._spread_entry_gate({"time": _dt.datetime(2026, 1, 8, 10, 5)})
+        self.assertTrue(ok)                      # 2.0 <= 3.0
+        # no model -> gate is a no-op
+        cfg2 = self._cfg(None, cap=3.0)
+        cfg2.FUT_SPREAD_USE_MEASURED = False
+        cfg2.DB_PATH = tmp_db.name
+        eng2 = FuturesEngine(cfg2, notify=lambda msg, level="INFO": None)
+        self.assertIsNone(eng2._spread)
+        self.assertTrue(eng2._spread_entry_gate({"time": _dt.datetime(2026, 1, 8, 9, 35)})[0])
+
+    def test_measured_replay_pnl_identity(self):
+        """Replay under the measured model: every recorded trade still obeys
+        pnl == gross - friction, with friction = measured window crossing."""
+        import sqlite3 as _sq
+        from proxy.futures_engine import FuturesEngine
+        path = self._capture_file()
+        cfg = self._cfg(path)                  # default cap 4.0 (window 4.0 passes)
+        tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        tmp_db.close()
+        self.addCleanup(lambda: os.path.exists(tmp_db.name) and os.remove(tmp_db.name))
+        cfg.DB_PATH = tmp_db.name
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
+        _replay_days(eng, self.df5, self.df1)
+        conn = _sq.connect(tmp_db.name)
+        rows = conn.execute(
+            "SELECT direction, lots, qty, entry_level, exit_level, exit_reason, pnl, friction "
+            "FROM futures_trades").fetchall()
+        conn.close()
+        self.assertGreater(len(rows), 0, "expected trades under the measured model")
+        for direction, lots, qty, entry, exit_, reason, pnl, friction in rows:
+            sign = 1.0 if direction == "LONG" else -1.0
+            expected = (float(exit_) - float(entry)) * int(qty) * sign - float(friction)
+            self.assertAlmostEqual(float(pnl), round(expected, 2), places=1,
+                                   msg="pnl must equal gross - measured friction")
+        self.assertGreaterEqual(eng.snapshot()["spread_gate_skips"], 0)
+
+
+
+class TestFuturesAtrGate(unittest.TestCase):
+    """ATR regime + expected-move-vs-cost entry gate (proxy/futures_engine.py
+    _atr_entry_gate): dead markets and frothing regimes are skipped, and the
+    expected one-bar move (ATR) must clear this window's friction."""
+
+    def _eng(self, measured_path=None, atr_min=7.0, atr_max=45.0,
+             move_to_cost=2.0, slip_flat=1.0):
+        from proxy.futures_config import futures_config
+        from proxy.futures_engine import FuturesEngine
+        cfg = futures_config()
+        tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        tmp.close()
+        self.addCleanup(lambda: os.path.exists(tmp.name) and os.remove(tmp.name))
+        cfg.DB_PATH = tmp.name
+        if measured_path is not None:
+            cfg.FUT_SPREAD_FILE = measured_path
+            cfg.FUT_SPREAD_USE_MEASURED = True
+        else:
+            cfg.FUT_SPREAD_USE_MEASURED = False
+            cfg.FUT_SLIPPAGE_PTS = slip_flat
+        cfg.FUT_ATR_GATE_ENABLED = True
+        cfg.FUT_MIN_ATR_PTS = atr_min
+        cfg.FUT_MAX_ATR_PTS = atr_max
+        cfg.FUT_MIN_MOVE_TO_COST = move_to_cost
+        return FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
+
+    @staticmethod
+    def _signal(atr):
+        from proxy.scoring import Signal
+        return Signal(direction="BUY", confidence=80.0, atr=atr)
+
+    def _bar(self, hour=9, minute=35, day=(2026, 1, 8)):
+        import datetime as _dt
+        return {"time": _dt.datetime(day[0], day[1], day[2], hour, minute)}
+
+    def test_disabled_and_missing_atr_allow(self):
+        from proxy.futures_config import futures_config
+        from proxy.futures_engine import FuturesEngine
+        from proxy.scoring import Signal
+        cfg = futures_config()
+        cfg.FUT_ATR_GATE_ENABLED = False
+        cfg.FUT_SPREAD_USE_MEASURED = False
+        tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+        tmp.close()
+        self.addCleanup(lambda: os.path.exists(tmp.name) and os.remove(tmp.name))
+        cfg.DB_PATH = tmp.name
+        eng = FuturesEngine(cfg, notify=lambda msg, level="INFO": None)
+        self.assertTrue(eng._atr_entry_gate(self._bar(), self._signal(20.0))[0])
+        self.assertTrue(eng._atr_entry_gate(self._bar(), Signal(direction="BUY"))[0])
+
+    def test_regime_band_blocks_dead_and_chaotic(self):
+        eng = self._eng(atr_min=7.0, atr_max=45.0)   # flat slip 1.0, mult 2.0
+        ok, why = eng._atr_entry_gate(self._bar(), self._signal(5.0))
+        self.assertFalse(ok); self.assertIn("dead", why)
+        ok, why = eng._atr_entry_gate(self._bar(), self._signal(60.0))
+        self.assertFalse(ok); self.assertIn("chaotic", why)
+        ok, _ = eng._atr_entry_gate(self._bar(), self._signal(20.0))
+        self.assertTrue(ok)
+
+    def test_move_must_clear_friction(self):
+        # window 09:30 has measured 4.0pt; per-unit friction ~ 4.0 + 60/65
+        eng = self._eng(measured_path=self._capture_9x(), atr_min=0.0, atr_max=0.0,
+                        move_to_cost=5.0)
+        ok, why = eng._atr_entry_gate(self._bar(9, 35), self._signal(20.0))
+        self.assertFalse(ok)                       # need ~24.6pt, ATR 20
+        self.assertIn("spread", why)
+        ok, _ = eng._atr_entry_gate(self._bar(9, 35), self._signal(30.0))
+        self.assertTrue(ok)
+
+    def _capture_9x(self):
+        import json
+        cap = {"instrument": "NIFTY-Sep2026-FUT", "security_id": 68407,
+               "expiry": "2026-09-29", "lot_size": 65.0, "day": "2026-09-08",
+               "n_ticks": 1675, "n_valid_spreads": 1675,
+               "spread_pts": {"median": 3.9},
+               "half_hour_median_spread_pts": {"0570": 4.0},
+               "round_trip_crossing_pts_median": 3.9}
+        tmp = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        tmp.close()
+        with open(tmp.name, "w", encoding="utf-8") as fh:
+            json.dump(cap, fh)
+        self.addCleanup(lambda: os.path.exists(tmp.name) and os.remove(tmp.name))
+        return tmp.name
+
+    def test_gate_skips_counted_in_snapshot(self):
+        eng = self._eng(atr_min=7.0, atr_max=45.0)
+        ok, _ = eng._atr_entry_gate(self._bar(), self._signal(5.0))
+        self.assertFalse(ok)
+        self.assertEqual(eng._atr_gate_skips, 0)   # counter bumps in process_bar
+        self.assertIn("atr_gate_skips", eng.snapshot())
 
 if __name__ == "__main__":
     unittest.main()

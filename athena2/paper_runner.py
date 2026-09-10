@@ -233,6 +233,7 @@ class PaperRunner:
         self.feed = feed
         self.mode = mode
         self.halted = False
+        self.snapshot_every_polls = 5      # journal a state row every ~5 polls
         self.product_type = product_type
         self.broker_client = broker_client   # read-only margin/order status when live
         self.dhan = charges_from_config(self.cfg)
@@ -517,6 +518,43 @@ class PaperRunner:
                                              "lots": book["lots"]})
         return book
 
+    def journal_state(self, tick: LiveTick, result: Optional[dict] = None) -> None:
+        """Periodic snapshot: regime + open book + marks, so the whole holding
+        period is captured for training, not just the moments before an entry."""
+        try:
+            rg = None
+            if hasattr(self, "_regime_now"):
+                rg = self._regime_now(tick)
+            elif len(self.spot_df):
+                from .regime import assemble_regime
+                hist = self.spot_df[self.spot_df["time"] <= tick.ts]
+                if len(hist) >= 60:
+                    rg = assemble_regime(hist, ts=tick.ts)
+            book = self.book.open_trade
+            marks = self._marks(tick) if book else {}
+            unreal = None
+            if book:
+                total_mark = 0.0
+                for leg in book.get("legs", []):
+                    key = (leg["opt_type"], float(leg["strike"]))
+                    if key in marks:
+                        total_mark += marks[key]
+                unreal = round((float(book.get("credit_pts", 0.0)) - total_mark)
+                               * int(book.get("lots", 1)) * self.cfg.lot_size, 2)
+            self.journal._append({
+                "kind": "state", "ts": tick.ts.isoformat(), "mode": self.mode,
+                "halted": bool(self.halted), "spot": tick.spot,
+                "regime": (rg.get("label") if isinstance(rg, dict) else
+                           (rg.label.value if rg is not None and hasattr(rg, "label") else None)),
+                "open_book": (book or {}).get("family"),
+                "lots": (book or {}).get("lots"),
+                "credit_pts": (book or {}).get("credit_pts"),
+                "unrealized_rs": unreal,
+                "action": (result or {}).get("action"),
+            })
+        except Exception:
+            pass
+
     def step(self, tick: LiveTick) -> dict:
         """One poll: manage first, then consider opening."""
         out = {"ts": tick.ts.isoformat(), "spot": tick.spot, "action": "HOLD"}
@@ -551,6 +589,8 @@ class PaperRunner:
                     print("no tick (market closed or feed unavailable)")
             else:
                 res = self.step(tick)
+                if polls % self.snapshot_every_polls == 0:
+                    self.journal_state(tick, res)
                 if verbose:
                     print(json.dumps(res))
             polls += 1

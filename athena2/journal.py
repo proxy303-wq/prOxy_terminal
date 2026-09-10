@@ -13,8 +13,9 @@ from typing import Any, Dict, List, Optional
 
 
 def _now_iso() -> str:
-    from datetime import datetime, timezone
-    return datetime.now(timezone.utc).isoformat()
+    """IST wall-clock (matches every other Athena timestamp)."""
+    from .clock import now_ist
+    return now_ist().isoformat()
 
 
 class AthenaJournal2:

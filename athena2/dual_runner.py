@@ -131,12 +131,24 @@ class DualSegmentRunner(LiveRunner):
         return None
 
     def _atr_pts(self, hist_len: int = 0) -> float:
-        df = self.spot_df.tail(75 * 15)
+        """Average DAILY true range over the last 14 sessions (index points).
+
+        Built from the session high/low plus the overnight gap, so a futures
+        stop is a sane multiple of a daily range (~250-400 pts on NIFTY), not
+        the sum of intraday 5-minute ranges.
+        """
+        df = self.spot_df.tail(75 * 20)
         if df.empty:
             return 0.0
-        tr = (df["high"] - df["low"]).abs()
-        daily = tr.groupby(df["time"].dt.date).sum()
-        return float(daily.tail(14).mean()) if len(daily) else 0.0
+        g = df.groupby(df["time"].dt.date)
+        daily = g.agg(high=("high", "max"), low=("low", "min"),
+                      close=("close", "last"))
+        prev_close = daily["close"].shift(1)
+        tr = (daily["high"] - daily["low"]).abs()
+        tr = tr.combine((daily["high"] - prev_close).abs(), max)
+        tr = tr.combine((daily["low"] - prev_close).abs(), max)
+        return float(tr.tail(14).mean()) if len(tr.dropna()) else 0.0
+
 
     # ------------------------------------------------------------- routing
 
@@ -145,15 +157,16 @@ class DualSegmentRunner(LiveRunner):
         self.sync_mode()
         out = {"ts": tick.ts.isoformat(), "spot": tick.spot, "halted": self.halted,
                "live_segment": self.risk.live_segment, "routes": []}
-        # --- manage the live book first ---
-        if self.risk.live_segment == SEGMENT_FUTURES and self.fut_live:
-            self._manage_live_futures(tick, out)
-        elif self.book.open_trade is not None:
+        # --- management is NEVER gated by the segment lock (only new entries are) ---
+        if self.book.open_trade is not None:
             closed = self.manage(tick)
             if closed is not None:
                 out["routes"].append({"segment": SEGMENT_OPTIONS, "action": "LIVE_CLOSE",
                                       "reason": closed["exit_reason"],
                                       "pnl_rs": closed["pnl_rs"]})
+        if self.fut_live:
+            self._manage_live_futures(tick, out)
+        self._manage_shadow_futures(tick, out)
         if self.fut_live is None and self.book.open_trade is None:
             self.risk.set_live_segment(None)
         out["live_segment"] = self.risk.live_segment
@@ -171,7 +184,10 @@ class DualSegmentRunner(LiveRunner):
         # --- futures signal ---
         if self.fut_live is None:
             sig = self._futures_signal(tick)
-            if sig and self.risk.live_segment in (None, SEGMENT_FUTURES):
+            if sig and (self.dry_run or self.mode != "live"):
+                self._shadow_futures(tick, sig, out,
+                                     block="dry_run" if self.dry_run else "paper_mode")
+            elif sig and self.risk.live_segment in (None, SEGMENT_FUTURES):
                 opened = self._open_live_futures(tick, sig, out)
                 if opened:
                     self.risk.set_live_segment(SEGMENT_FUTURES)
@@ -301,6 +317,39 @@ class DualSegmentRunner(LiveRunner):
             if adopted:
                 info['reconcile'] = self.reconcile()
         return info
+
+    def _manage_shadow_futures(self, tick: LiveTick, out: dict) -> None:
+        """Close a shadow futures position on stop or regime flip (persisted)."""
+        f = self.fut_shadow
+        if not f:
+            return
+        rg = self._regime_now(tick)
+        reason = ""
+        if f["side"] == "BUY" and tick.spot <= f["stop"]:
+            reason = "stop_atr"
+        elif f["side"] == "SELL" and tick.spot >= f["stop"]:
+            reason = "stop_atr"
+        elif rg is not None and rg.label in NO_TRADE_LABELS:
+            reason = "regime_" + rg.label.value
+        elif rg is not None and ((rg.label == MarketRegime.CONTROLLED_BEAR and f["side"] == "BUY")
+                                 or (rg.label == MarketRegime.CONTROLLED_BULL and f["side"] == "SELL")):
+            reason = "regime_flip"
+        if not reason:
+            return
+        pnl = ((tick.spot - f["entry_pts"]) if f["side"] == "BUY"
+               else (f["entry_pts"] - tick.spot)) * f["lots"] * self.cfg.lot_size
+        rec = dict(f)
+        rec.update({"exit_ts": tick.ts.isoformat(), "exit_reason": reason,
+                    "pnl_rs": round(pnl, 2), "costs_rs": 0.0})
+        self.shadow.book.closed.append(rec)
+        self.shadow.book.open_trade = None
+        self.shadow.book.save()
+        out["routes"].append({"segment": SEGMENT_FUTURES, "action": "SHADOW_CLOSE",
+                              "reason": reason, "pnl_rs": round(pnl, 2)})
+        self._emit(EventType.POSITION_CLOSE,
+                   {"route": "SHADOW", "segment": SEGMENT_FUTURES,
+                    "reason": reason, "pnl_rs": round(pnl, 2)}, "info")
+        self.fut_shadow = None
 
     def step(self, tick: LiveTick) -> dict:
         return self.route(tick)

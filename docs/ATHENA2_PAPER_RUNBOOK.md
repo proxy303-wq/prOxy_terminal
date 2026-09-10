@@ -72,3 +72,44 @@ Rehearsal reference (2026-08-25..28, stored chains, EXPLORATORY band 0.30-0.65,
 tail 10%): 308 decisions, 2 paper trades, both closed at target_50pct
 (+Rs 1,265 and +Rs 5,706).  Production bands would have produced NO TRADE on
 that stored data - the chains do not reach 0.12-0.30 delta.
+## Full-chain capture (the data unlock)
+
+Stored history covers ATM+/-3 strikes only, so the production delta bands
+(put 0.12-0.30, call 0.08-0.25) cannot be tested.  Capture the FULL live chain
+(~85-90 strikes) every 5 minutes; files land in data/options/chain/.
+
+    # one snapshot now (safe, read-only)
+    python -m athena2.capture --once --expiries 3
+
+    # full session: 5-min snapshots of the next 3 expiries, market hours only
+    python -m athena2.capture --interval 300 --expiries 3 --telegram
+
+    # VPS equivalent (background, logs)
+    nohup /opt/proxy/venv/bin/python -m athena2.capture --interval 300 --expiries 3 \
+        > reports/athena2_capture.log 2>&1 &
+
+Storage: data/options/chain/chain_<date>.jsonl, one JSON line per (tick, expiry):
+{ts, underlying, expiry, spot, rows:[[strike, CE|PE, ltp, oi, volume, iv, bid, ask, security_id]]}
+Load it back engine-ready with athena2.capture.load_day(date) (keyed by expiry).
+Verified capture: 2026-09-10 -> 2 expiries, 172/167 rows, strikes 21900-26200.
+
+## End-of-day review
+
+    python -m athena2.paper_review --date today
+    python -m athena2.paper_review --date 2026-09-10 --telegram
+
+Reads reports/athena2_paper_journal.jsonl + athena2_paper_state.json and writes
+reports/athena2_paper_review_<date>.md: decisions by action, regimes seen, why
+NO TRADE fired (reason histogram), closed trades with P&L/costs, open book, events.
+
+## Tomorrow (paper test day)
+
+    09:10  refresh token (already automated): python tools/push_token_vps.py
+    09:15  start capture:  python -m athena2.capture --interval 300 --expiries 3
+    09:20  start paper:    python -m athena2.paper_runner --poll 60 --max-polls 400
+    15:45  review:         python -m athena2.paper_review --date today --telegram
+
+Expect NO TRADE most of the day.  With the LIVE chain the engine can now reach
+the real delta bands, so entries become possible (regime + IV-RV edge + risk
+approval permitting).  Everything is logged; nothing can place an order.
+

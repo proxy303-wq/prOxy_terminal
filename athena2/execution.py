@@ -163,32 +163,12 @@ class ExistingDhanAdapter(BrokerAdapter):
     # -- repo-local credential injection -----------------------------------
 
     def _load_repo_creds(self) -> str:
-        """Load DHAN_*/TELEGRAM_*/DELTA_* from the local env file into os.environ
+        r"""Load DHAN_*/TELEGRAM_*/DELTA_* from the local env file into os.environ
         so the PRESERVED proxy code finds them (its default path is
         C:\Athena_X\.env which does not exist on this host).  Secrets are read
         from disk at runtime, never embedded here; existing env vars win."""
-        import os as _os
-        found = ''
-        for cand in self._creds_candidates:
-            p = cand if _os.path.isabs(cand) else _os.path.join(_os.getcwd(), cand)
-            if _os.path.exists(p):
-                found = p
-                break
-        if not found:
-            return ''
-        with open(found, 'r', encoding='utf-8-sig') as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith('#') or '=' not in line:
-                    continue
-                key, val = line.split('=', 1)
-                key = key.strip()
-                val = val.strip().strip(chr(34)).strip(chr(39)).strip()
-                if key.startswith(('DHAN_', 'TELEGRAM_', 'DELTA_')) and not _os.environ.get(key):
-                    _os.environ[key] = val
-        if not _os.environ.get('ATHENA_ENV_FILE'):
-            _os.environ['ATHENA_ENV_FILE'] = found
-        return found
+        from .env import load_creds_env
+        return load_creds_env(repo_files=list(self._creds_candidates))
     def connect(self) -> None:
         loaded = self._load_repo_creds()
         try:

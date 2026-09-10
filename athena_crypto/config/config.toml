@@ -110,10 +110,18 @@ mode = "advisory"
 # Optional OpenAI-compatible commentary layer (disabled unless set):
 #   ATHENA_LLM_ENDPOINT / ATHENA_LLM_API_KEY / ATHENA_LLM_MODEL
 
+# ---------------------------------------------------------------- notifications
+# Telegram alerts reuse the terminal's existing bot (TELEGRAM_BOT_TOKEN /
+# TELEGRAM_CHAT_ID from the service environment). Fail-soft: a notification
+# failure never affects trading. Events: start, entry, exit, halt/resume,
+# guard denials. Disable with `run --no-notify` or enabled = false.
+[notify]
+enabled = true
+min_interval = 1.0
+
 [logging]
 level = "INFO"
 file = "data/athena.log"
-
 
 
 

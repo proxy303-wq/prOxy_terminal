@@ -22,10 +22,24 @@ from ..safety.guard import OrderGuard
 log = logging.getLogger("athena.controller")
 
 
+def _trade_r(trade):
+    """R-multiple of a closed trade (net PnL / planned risk), for notifications."""
+    try:
+        risk = (abs(float(trade["entry_price"]) - float(trade["stop_price"]))
+                * float(trade.get("meta", {}).get("contract_value", 1.0) or 1.0)
+                * abs(float(trade.get("size", 0.0))))
+        if risk <= 0:
+            return None
+        return float(trade.get("net_pnl", 0.0)) / risk
+    except Exception:
+        return None
+
+
 class TradingController:
     def __init__(self, config, market: "MarketDataService", portfolio,
                  broker, product_map: dict, journal: TradeJournal,
-                 equity_provider=None, risk_overrides: Optional[dict] = None):
+                 equity_provider=None, risk_overrides: Optional[dict] = None,
+                 notifier=None):
         self.cfg = config
         self.market = market
         self.portfolio = portfolio
@@ -40,6 +54,7 @@ class TradingController:
         # fail-closed pre-trade gate (kill switch, daily budgets, audit)
         self.guard = OrderGuard(risk_overrides or config.risk_config)
         self.plane = AgentPlane(config.toml.get("agent_plane", {}), journal=journal)
+        self.notifier = notifier
         self.peak_equity = None
         self.halted = False
 
@@ -88,6 +103,11 @@ class TradingController:
             self.journal.log_exit_check(symbol, bar.time, trade.get("exit_reason", "closed"))
             self.risk.release(symbol)
             log.info("%s position closed: %s", symbol, trade.get("exit_reason"))
+            if self.notifier is not None:
+                self.notifier.exit(trade.get("symbol"), trade.get("direction"),
+                                   trade.get("entry_price"), trade.get("exit_price"),
+                                   trade.get("exit_reason"), _trade_r(trade),
+                                   trade.get("net_pnl"))
 
         if self.portfolio.has_position(symbol):
             return  # one open position per symbol
@@ -155,9 +175,16 @@ class TradingController:
                     if fill.get("protective") is not None:
                         # live mode: exchange-side protective orders now hold the risk
                         log.info("%s live protective orders: %s", symbol, fill.get("protective"))
+                    if self.notifier is not None:
+                        self.notifier.entry(plan.symbol, plan.direction, fill.get("size") or plan.size,
+                                            fill.get("price") or ref, plan.stop_price, plan.target_price,
+                                            plan.notional_usd,
+                                            getattr(self.notifier, "tag", ""))
                 elif fill.get("denied"):
                     self.journal.log_intent(plan, regime, mstate, decision="REJECT",
                                             note="guard: " + str(fill.get("denied")))
+                    if self.notifier is not None:
+                        self.notifier.denied(symbol, fill.get("denied"), fill.get("reason", ""))
         self.journal.log_decision_cycle(symbol, mstate.get("time"), self._summ(mstate, regime),
                                         signals, fills, [])
 

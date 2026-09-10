@@ -238,13 +238,25 @@ def cmd_run(cfg, args):
         broker = PaperBroker(portfolio,
                              taker_fee=float(cfg.costs_config.get("taker_fee_rate", 0.0005)),
                              slippage_bps=float(cfg.costs_config.get("slippage_bps", 2.0)))
+    from .notify.telegram import from_config as notifier_from_config
+    notifier = notifier_from_config(cfg)
+    if not args.no_notify:
+        notifier.enabled = False if getattr(args, "no_notify", False) else notifier.enabled
     controller = TradingController(cfg, svc, portfolio, broker, svc.products,
-                                   journal, equity_provider=lambda: portfolio.equity())
+                                   journal, equity_provider=lambda: portfolio.equity(),
+                                   notifier=notifier)
     controller.load_strategies()
 
     print("== ATHENA CRYPTO %s run (paper=%s live=%s) ==" %
           (tf, not live, live))
     print("symbols:", cfg.symbols, "| start equity:", round(start_equity, 2))
+    print("telegram notifications:", "ON" if notifier.enabled else "off")
+    if notifier.enabled:
+        try:
+            notifier.startup(cfg.secrets.venue.name, "live" if live else "paper",
+                             portfolio.equity(), cfg.symbols, tf)
+        except Exception as exc:
+            print("startup notification failed:", exc)
     cycles = 0
     try:
         if args.once:
@@ -311,6 +323,11 @@ def cmd_halt(cfg, args):
     guard = OrderGuard(cfg.risk_config)
     payload = guard.trip_halt(by="cli", reason=args.reason or "manual halt", symbol=args.symbol)
     print("kill switch tripped:", json.dumps(payload))
+    try:
+        from .notify.telegram import from_config as _nf
+        _nf(cfg).halt(args.reason or "manual halt", by="cli")
+    except Exception:
+        pass
     print("sentinel:", guard.halt_path if not args.symbol else guard._halt_file(args.symbol))
 
 
@@ -320,6 +337,27 @@ def cmd_resume(cfg, args):
     guard = OrderGuard(cfg.risk_config)
     cleared = guard.clear_halt(symbol=args.symbol)
     print("kill switch cleared" if cleared else "no halt sentinel present")
+    if cleared:
+        try:
+            from .notify.telegram import from_config as _nf
+            _nf(cfg).resumed(by="cli")
+        except Exception:
+            pass
+
+
+def cmd_notify_test(cfg, args):
+    """Send a test Telegram message and report whether notifications work."""
+    from .notify.telegram import from_config as notifier_from_config
+    n = notifier_from_config(cfg, enabled=True)
+    print("token configured :", bool(n.token))
+    print("chat configured  :", bool(n.chat_id))
+    if not n.enabled:
+        print("notifications DISABLED - set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID")
+        return
+    ok = n.send("\U0001F9EA ATHENA CRYPTO notification test\n"
+                "venue: %s\nmode: %s"
+                % (cfg.secrets.venue.name, cfg.toml.get("execution", {}).get("mode", "paper")))
+    print("test message sent:", ok, "| errors:", n.errors)
 
 
 def cmd_guard_status(cfg, args):
@@ -359,6 +397,7 @@ def build_parser():
 
     r = sub.add_parser("run", help="run the bot")
     r.add_argument("--timeframe", default=None)
+    r.add_argument("--no-notify", action="store_true", help="disable Telegram notifications")
     r.add_argument("--live", action="store_true", help="place real orders (requires whitelisted IP)")
     r.add_argument("--once", action="store_true", help="stop after first decision cycle")
     r.add_argument("--exit-when-flat", action="store_true", help="live: stop after positions close")
@@ -377,6 +416,9 @@ def build_parser():
     rs = sub.add_parser("resume", help="clear the kill switch")
     rs.add_argument("--symbol", default=None)
     rs.set_defaults(func=cmd_resume)
+
+    nt = sub.add_parser("notify-test", help="send a test Telegram notification")
+    nt.set_defaults(func=cmd_notify_test)
 
     gs = sub.add_parser("guard-status", help="show kill switch / guard state")
     gs.set_defaults(func=cmd_guard_status)

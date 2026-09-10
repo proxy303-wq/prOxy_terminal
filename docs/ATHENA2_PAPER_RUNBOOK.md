@@ -150,4 +150,33 @@ Live safety behaviour:
 
 Progression: paper (days) -> live --dry-run -> live 1 lot with the reconcile gate ->
 scale only after the journal shows the expected edge and cost profile.
+## Paper-phase policy (operator decision 2026-09-10)
+
+* capital Rs 7,00,000 per book; risk/idea 6%; **tail-loss cap 12% for PAPER**
+  (`--tail-pct 12`, the paper runner default) - live will run lower (4-8%).
+* margin utilisation cap **75%** with MEASURED margins: futures ~Rs 2.0L/lot,
+  short option ~Rs 1.3L/lot. Capacity: options up to 4 lots, futures up to 2 lots.
+* **one live segment at a time** (`segments.single_live_segment`): whoever opens
+  first owns the live book; the other segment's signals are shadow-traded into
+  reports/athena2_shadow_state.json + athena2_shadow_journal.jsonl (training data).
+* testing window: through next week, then re-evaluate tail cap and lot sizes.
+
+### Legacy engines on the VPS
+
+* **FUTURES worker DISABLED 2026-09-10**: the supervised
+  `railway_worker.py --variant futures` loop in /opt/proxy/start.sh is commented
+  out (lines 35-42) and its processes are gone.  Original file backed up at
+  /opt/proxy/start.sh.bak-20260910 - re-enable by removing the leading # from that
+  block and restarting proxy-terminal.
+* OPTSELL worker (legacy options engine) is crash-looping in PAPER (exits code 1 in
+  run_optsell_day; supervisor restarts every 30s).  No order risk, but noisy -
+  disable or fix it before the Athena paper session if you want clean logs.
+* NIFTY/FINNIFTY railway_worker loops remain; reports/mode.json = paper.
+
+### Paper commands for the test window
+
+    python -m athena2.paper_runner --poll 60 --max-polls 400        # tail 12% default
+    python -m athena2.dual_runner --dry-run --poll 60 --tail-pct 12 # one-segment routing
+    python -m athena2.paper_review --date today --telegram          # EOD report
+
 

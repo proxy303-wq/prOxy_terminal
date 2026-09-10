@@ -210,8 +210,18 @@ class PremiumEngine:
             row = snap.row(opt_type, k)
             if row is None or row.iv is None or row.iv <= 0:
                 continue
-            if row.oi < sc.min_oi_contracts:
-                continue
+            # liquidity gate: prefer open interest, fall back to volume when the
+            # feed reports no OI (historical/fetched option bars often carry OI 0)
+            oi = float(row.oi or 0.0)
+            vol = float(row.volume or 0.0)
+            if oi > 0:
+                if oi < sc.min_oi_contracts:
+                    continue
+            elif vol > 0:
+                if vol < sc.min_volume_contracts:
+                    continue
+            else:
+                continue      # no liquidity information at all
             d = abs(_row_delta(snap, k, opt_type, self.cfg, row.iv))
             lo, hi = contract.strike_delta_min, contract.strike_delta_max
             if lo <= d <= hi:

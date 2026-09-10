@@ -32,9 +32,16 @@ def _normalize_ts(series: pd.Series) -> pd.Series:
     return ts
 
 
-def read_ohlc(path: str, time_col: str = "date") -> pd.DataFrame:
-    """Read an OHLC(V) csv into a tz-naive frame with a time column."""
+def read_ohlc(path: str, time_col: str = None) -> pd.DataFrame:
+    """Read an OHLC(V) csv into a tz-naive frame with a time column.
+
+    The timestamp column is auto-detected (date / time / timestamp / datetime)
+    so both the stored repo files and freshly fetched captures load the same way.
+    """
     df = pd.read_csv(path)
+    if time_col is None:
+        time_col = next((c for c in ("date", "time", "timestamp", "datetime")
+                         if c in df.columns), df.columns[0])
     df[time_col] = _normalize_ts(df[time_col])
     df = df.dropna(subset=[time_col]).sort_values(time_col)
     df = df.rename(columns={time_col: "time"})

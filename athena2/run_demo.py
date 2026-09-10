@@ -46,9 +46,15 @@ def main(argv=None) -> int:
     ap.add_argument("--entry-window", default="09:30,14:30",
                     help="entry window start,end (default 09:30,14:30)")
     ap.add_argument("--risk-pct", type=float, default=6.0)
+    ap.add_argument("--capital", type=float, default=None,
+                    help="capital assigned to this book (default: config 700000)")
     ap.add_argument("--tail-pct", type=float, default=None,
                     help="override tail-loss cap %% (EXPLORATORY only; production stays 4%%)")
     ap.add_argument("--data-root", default="data/options/history")
+    ap.add_argument("--spot-file", default=None,
+                    help="spot CSV (default data/NIFTY_5m.csv)")
+    ap.add_argument("--expiry-semantics", choices=["anchor", "real"], default="anchor",
+                    help="anchor: filename token is a series anchor (next token = expiry); real: filename token IS the expiry")
     ap.add_argument("--out", default=None)
     ap.add_argument("--band-lo", type=float, default=None,
                     help="exploratory |delta| band floor (data-limited chains are ATM+/-3)")
@@ -57,6 +63,8 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg = Athena2Config()
+    if args.capital is not None:
+        cfg.risk.capital_rs = float(args.capital)
     cfg.risk.risk_per_trade_pct = args.risk_pct
     if args.tail_pct is not None:
         cfg.risk.tail_loss_cap_pct = args.tail_pct
@@ -71,24 +79,33 @@ def main(argv=None) -> int:
               + " - stored chains are ATM+/-3 only; results are NOT the contract")
 
     print("loading spot history ...")
-    spot_df = load_spot()
+    spot_df = load_spot(args.spot_file) if args.spot_file else load_spot()
     from datetime import timedelta
     # Stored files opt_13_<token>_*.csv hold ~one month of bars for a series;
     # the series expiry is the NEXT token (abutting coverage).  Chain frames are
     # keyed by their effective expiry so dte is correct.
     tokens = available_expiries(args.data_root)
-    eff = [(tokens[i + 1] if i + 1 < len(tokens) else tokens[i] + timedelta(days=28))
-           for i in range(len(tokens))]
+    if args.expiry_semantics == "real":
+        eff = list(tokens)
+    else:
+        eff = [(tokens[i + 1] if i + 1 < len(tokens) else tokens[i] + timedelta(days=28))
+               for i in range(len(tokens))]
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
     chains = {}
     for i, t in enumerate(tokens):
         e = eff[i]
         # keep when the series life overlaps the requested window
-        if e < start - timedelta(days=50) or t > end + timedelta(days=1):
-            continue
+        if args.expiry_semantics == "real":
+            # token IS the expiry: life is [expiry-45d, expiry]
+            if e < start or (e - timedelta(days=45)) > end:
+                continue
+        else:
+            # anchor semantics: token is the series start, expiry is the next token
+            if e < start - timedelta(days=50) or t > end + timedelta(days=1):
+                continue
         try:
-            chains[e] = load_option_expiry(t)
+            chains[e] = load_option_expiry(t, args.data_root)
         except FileNotFoundError:
             continue
     print("series/effective expiries in play: "

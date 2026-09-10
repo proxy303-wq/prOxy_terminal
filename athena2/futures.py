@@ -236,3 +236,40 @@ class RegimeFuturesBacktest:
               "exit_px": round(px, 2), "lots": self.risk_lots,
               "pnl_rs": round(net, 2), "costs_rs": round(costs, 2)}
         return net, costs, tr
+
+def main(argv=None) -> int:
+    import json
+    ap = argparse.ArgumentParser(description="Athena 2.0 regime-futures walk-forward")
+    ap.add_argument("--file", default="data/futures/NIFTY_2026-09-29_5m.csv")
+    ap.add_argument("--start", default=None)
+    ap.add_argument("--end", default=None)
+    ap.add_argument("--capital", type=float, default=None)
+    ap.add_argument("--lots", type=int, default=1)
+    ap.add_argument("--stop-atr", type=float, default=2.5)
+    ap.add_argument("--out", default=None)
+    args = ap.parse_args(argv)
+    cfg = Athena2Config()
+    if args.capital is not None:
+        cfg.risk.capital_rs = float(args.capital)
+    df = read_ohlc(args.file)
+    bt = RegimeFuturesBacktest(df,
+                               start=date.fromisoformat(args.start) if args.start else None,
+                               end=date.fromisoformat(args.end) if args.end else None,
+                               cfg=cfg, stop_atr_mult=args.stop_atr, risk_lots=args.lots)
+    res = bt.run()
+    st = res.stats()
+    print(json.dumps(st, indent=1))
+    for t in res.trades:
+        print("  " + t["side"] + " " + t["entry_day"] + " -> " + t["exit_day"]
+              + " " + t["exit_reason"] + " pnl " + str(t["pnl_rs"]))
+    if args.out:
+        import os as _os
+        _os.makedirs(_os.path.dirname(_os.path.abspath(args.out)) or ".", exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            json.dump(res.to_dict(), fh, indent=2, default=str)
+        print("wrote " + args.out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

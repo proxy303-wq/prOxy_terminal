@@ -94,7 +94,8 @@ class StrategyConfig:
     min_ivrv_spread: float = 0.0           # min IV - forecast RV edge (decimal)
     min_expected_move_buffer_pct: float = 1.15   # strike OTM vs expected move buffer
     max_liquidity_spread_bps: float = 8.0
-    min_oi_contracts: float = 10000.0
+    min_oi_contracts: float = 10000.0     # used when OI is available
+    min_volume_contracts: float = 5000.0  # fallback liquidity floor when OI is absent/zero
     max_daily_premium_rs: float = 0.0      # 0 => derived from risk config
 
 

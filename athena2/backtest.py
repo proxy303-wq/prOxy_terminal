@@ -258,11 +258,19 @@ class ShortPremiumBacktest:
                                 rd = risk.decide_entry(regime, spot, p.greeks, p.legs)
                                 if rd.action in (RiskAction.APPROVE, RiskAction.MODIFY):
                                     lots = rd.modified_lots if rd.action == RiskAction.MODIFY else None
-                                    if lots is None or lots > 0:
+                                    if lots is not None and lots <= 0:
+                                        day_notes.append("risk " + rd.action.value + " size 0: " + rd.reason)
+                                    else:
                                         book = self._open_book(p, snap, expiry, ts, lots)
                                         if book is not None:
                                             entered_today = True
                                             day_notes.append("OPEN " + p.family.value)
+                                        else:
+                                            day_notes.append("candidate unfillable at proxy fill")
+                                else:
+                                    day_notes.append("risk " + rd.action.value + ": " + rd.reason)
+                            else:
+                                day_notes.extend(_nr[:1])
             res.daily.append({"date": day.isoformat(),
                               "equity_rs": round(equity, 2),
                               "day_pnl_rs": round(day_realized, 2),

@@ -163,6 +163,7 @@ with st.sidebar:
             "Dashboard",
             "Portfolio",
             "Trading",
+            "Crypto",
             "Futures",
             "FINNIFTY",
             "Commodities",
@@ -716,6 +717,18 @@ elif page == "Trading":
             width="stretch",
             hide_index=True,
         )
+
+# ------------------------------------------------------------
+# Crypto (ATHENA CRYPTO - Delta Exchange, separate engine)
+# Action view only: equity, open positions, latest decision,
+# recent fills and the kill switch. Research output is not shown.
+# ------------------------------------------------------------
+
+elif page == "Crypto":
+    from proxy.crypto_data import render_crypto_page
+
+    render_crypto_page()
+
 
 # ------------------------------------------------------------
 # Futures (NIFTY index futures - separate engine, own DB/mode)

@@ -1,0 +1,30 @@
+# ATHENA CRYPTO - Delta Exchange India DEMO (testnet) trader.
+#
+# Places REAL orders against the demo matching engine (fake money) so the full
+# live path is exercised: signing, order placement, protective stop/target orders,
+# fill handling and exchange reconciliation.
+#
+# Requires /opt/proxy/athena_crypto/.env.demo holding DEMO-account API keys
+# (see .env.demo.example - production keys do NOT work on the demo environment).
+#
+# Start with:  systemctl enable --now athena-crypto-demo
+# Stop paper first so the two campaigns do not share state:
+#              systemctl disable --now athena-crypto
+[Unit]
+Description=ATHENA CRYPTO demo trader (Delta Exchange India testnet)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxy/athena_crypto
+EnvironmentFile=/opt/proxy/athena_crypto/.env.demo
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/proxy/venv/bin/python -m athena_crypto.cli --env .env.demo run --live --timeframe 4h --interval 60
+Restart=always
+RestartSec=30
+StandardOutput=append:/opt/proxy/athena_crypto/logs/demo.log
+StandardError=append:/opt/proxy/athena_crypto/logs/demo.err.log
+
+[Install]
+WantedBy=multi-user.target

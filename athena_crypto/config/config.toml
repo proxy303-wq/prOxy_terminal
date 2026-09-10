@@ -1,0 +1,120 @@
+# ATHENA CRYPTO configuration
+# Venues: map by env key name (see athena_crypto/exchange/venue.py)
+[venue]
+# DELTA_ENV environment variable overrides this (india_prod default)
+env = "india_prod"
+
+[markets]
+# Primary decision timeframe and instruments (Delta India REST symbols).
+# 4h is the validated default: at 15m the gross edge (+0.07R/trade) is smaller than
+# the cost drag (-0.07R/trade). See research/validation.py evidence in README section 13.
+timeframe = "4h"
+symbols = ["BTCUSD", "ETHUSD", "SOLUSD"]
+
+[account]
+# Paper account starting equity, expressed in settlement currency (USD for India linear perps)
+# Rs 200,000 at fx 88 INR/USD (Delta India BTCUSD is USD-margined).
+# Change fx -> update this number: paper_equity = 200000 / fx
+paper_equity = 2272.73
+# Live mode is ONLY activated with --live; these are hard caps even then
+live_max_equity_use = 1.0
+leverage = 3
+
+[costs]
+# Taker 0.05% + 2bps slippage each way. Cost drag measures ~0.05-0.08R per trade,
+# so trade frequency is a first-class risk parameter, not a detail.
+taker_fee_rate = 0.0005
+maker_fee_rate = 0.0002
+slippage_bps = 2.0
+# Perpetual funding charged per 8h on held notional (0.01% = typical neutral rate).
+# Multi-day holds make this material: ~0.09R per 10-day trade.
+funding_rate_8h = 0.0001
+
+[features]
+ema_fast = 10
+ema_slow = 20
+atr_period = 14
+vol_lookback = 20
+swing_lookback = 8
+structure_pivot_window = 5
+range_frac = 0.15
+
+[regime]
+trend_ma = 50
+vol_up_pct = 70.0
+vol_down_pct = 30.0
+
+[risk]
+per_trade_risk_frac = 0.01
+daily_loss_limit_frac = 0.03
+drawdown_limit_frac = 0.06
+max_open_positions = 2
+max_net_notional = 20000.0
+min_stop_distance_pct = 0.0015
+max_spread_bps = 20.0
+allow_short = true
+max_leverage = 5
+# Fail-closed pre-trade gate (safety/guard.py). 0 = unlimited.
+max_orders_per_day = 12
+
+[execution]
+# paper | live (paper unless --live is passed on the CLI)
+mode = "paper"
+order_timeout_sec = 15.0
+cancel_replace_max = 3
+reconnect_max_attempts = 20
+
+[backtest]
+fee_model = "taker"
+warmup_bars = 80
+max_hold_bars = 96
+lookback = 500
+
+# ---------------------------------------------------------------- strategies
+# Only strategies that survived the IS/OOS validation gates are enabled.
+# Evidence (3 symbols, 70/30 IS/OOS, 2026-09-10):
+#   trend_pullback  4h: IS/OOS positive on 2 independent datasets (180d and 365d);
+#                    targets 1.0-2.5R, stops 0.25-1.0 ATR and holds 24-96 bars all survive OOS
+#   breakout_retest 4h: IS +0.10R  OOS -0.08R  -> unproven, parameter-sensitive
+#   sweep_reversal  all TFs: -0.7R to -1.5R with 9-21% win rate -> retired
+#   range_mean_reversion all TFs negative -> retired
+
+[strategies.trend_pullback]
+enabled = true
+target_r = 1.5
+stop_atr_mult = 0.25
+
+[strategies.breakout_retest]
+enabled = false   # unproven OOS; enable only for research runs
+target_r = 2.5
+min_volume_ratio = 1.15
+
+[strategies.sweep_reversal]
+enabled = false   # retired: systematic loser (see docstring evidence)
+stop_atr_mult = 0.4
+target_r = 3.0
+
+[strategies.range_mean_reversion]
+enabled = false   # retired: negative expectancy at every timeframe tested
+stop_atr_mult = 0.5
+
+# ---------------------------------------------------------------- agent plane
+# Research/decision plane (TradingAgents-style topology, advisory only).
+#   mode = advisory       -> records opinions/proposal/committee in the journal
+#   mode = veto_risk_only -> may additionally BLOCK a signal (can only reduce risk)
+# It can never create, size or send an order: execution stays behind risk.py
+# and safety/guard.py.
+[agent_plane]
+enabled = false
+mode = "advisory"
+# Optional OpenAI-compatible commentary layer (disabled unless set):
+#   ATHENA_LLM_ENDPOINT / ATHENA_LLM_API_KEY / ATHENA_LLM_MODEL
+
+[logging]
+level = "INFO"
+file = "data/athena.log"
+
+
+
+
+

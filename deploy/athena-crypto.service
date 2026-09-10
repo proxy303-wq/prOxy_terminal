@@ -1,0 +1,26 @@
+# ATHENA CRYPTO - Delta Exchange India paper trader (BTCUSD/ETHUSD/SOLUSD, 4h bars)
+# Runs as its own service so it never restarts the dashboard/NIFTY engines.
+# PAPER ONLY: --live is intentionally NOT passed; the fail-closed OrderGuard still
+# enforces kill switch, daily order budget and loss/drawdown limits.
+# Kill switch: /opt/proxy/athena_crypto/data/live/HALT  or  python -m athena_crypto.cli halt
+#
+# install:  cp deploy/athena-crypto.service /etc/systemd/system/ \
+#           && systemctl daemon-reload && systemctl enable --now athena-crypto
+[Unit]
+Description=ATHENA CRYPTO paper trader (Delta Exchange India)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxy/athena_crypto
+EnvironmentFile=/opt/proxy/athena_crypto/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/proxy/venv/bin/python -m athena_crypto.cli run --timeframe 4h --interval 60
+Restart=always
+RestartSec=30
+StandardOutput=append:/opt/proxy/athena_crypto/logs/worker.log
+StandardError=append:/opt/proxy/athena_crypto/logs/worker.err.log
+
+[Install]
+WantedBy=multi-user.target

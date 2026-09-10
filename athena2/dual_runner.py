@@ -142,7 +142,8 @@ class DualSegmentRunner(LiveRunner):
 
     def route(self, tick: LiveTick) -> dict:
         """One tick: manage live, then route each signal to live or shadow."""
-        out = {"ts": tick.ts.isoformat(), "spot": tick.spot,
+        self.sync_mode()
+        out = {"ts": tick.ts.isoformat(), "spot": tick.spot, "halted": self.halted,
                "live_segment": self.risk.live_segment, "routes": []}
         # --- manage the live book first ---
         if self.risk.live_segment == SEGMENT_FUTURES and self.fut_live:

@@ -219,6 +219,51 @@ class LiveRunner(PaperRunner):
             return self._place_live(opt_type, strike, side, qty, limit_price, tick, tag)
         return super()._place_order(opt_type, strike, side, qty, limit_price, tick, tag)
 
+    def sync_mode(self) -> dict:
+        """Honour the Telegram mode file: PAPER <-> LIVE and the halt flag.
+
+        Going live requires a connected adapter and a reconciled book; if either
+        is missing the runner STAYS in paper and says why over Telegram.
+        """
+        from .mode import read_mode
+        m = read_mode()
+        self.halted = bool(m.get("halted"))
+        want = str(m.get("mode") or "paper").lower()
+        if want == self.mode:
+            return m
+        if want == "live" and not self.dry_run:
+            if self.adapter is None:
+                try:
+                    from .execution import ExistingDhanAdapter
+                    self.adapter = ExistingDhanAdapter()
+                except Exception as exc:
+                    self._emit(EventType.SYSTEM_STARTUP,
+                               {"mode_switch": "live refused",
+                                "reason": "no adapter: " + str(exc)[:100]}, "critical")
+                    return m
+            try:
+                self.adapter.connect()
+                self.broker_client = getattr(self.adapter, "_broker", None)
+            except Exception as exc:
+                self._emit(EventType.SYSTEM_STARTUP,
+                           {"mode_switch": "live refused",
+                            "reason": "broker connect failed: " + str(exc)[:100]},
+                           "critical")
+                return m
+            diff = self.reconcile()
+            mismatched = bool(diff.get("missing_in_broker") or diff.get("missing_in_ledger")
+                              or diff.get("qty_mismatch"))
+            if mismatched and self.require_reconciled:
+                self._emit(EventType.SYSTEM_STARTUP,
+                           {"mode_switch": "live refused",
+                            "reason": "position mismatch vs broker"}, "critical")
+                return m
+        self.mode = "paper" if want == "paper" else "live"
+        self._emit(EventType.SYSTEM_STARTUP,
+                   {"mode_switch": self.mode, "halted": self.halted,
+                    "by": m.get("updated_by")}, "warning")
+        return m
+
     # ------------------------------------------------------------- safety
 
     def emergency_stop(self, reason: str) -> None:

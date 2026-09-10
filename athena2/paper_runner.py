@@ -230,6 +230,7 @@ class PaperRunner:
         self.cfg = cfg or Athena2Config()
         self.feed = feed
         self.mode = mode
+        self.halted = False
         self.product_type = product_type
         self.broker_client = broker_client   # read-only margin/order status when live
         self.dhan = charges_from_config(self.cfg)
@@ -237,10 +238,8 @@ class PaperRunner:
         self.book = book or PaperBook()
         self.journal = journal or AthenaJournal2(JOURNAL_PATH)
         self.hub = EventHub()
-        self.relay = TelegramRelay(notify=notify_text) if notify_text else None
-        if self.relay is not None:
-            self.relay.connect()
-            self.hub.subscribe(self.relay.on_event)
+        # trade notifications are formatted like the NIFTY engine's pushes
+        self.tg_send = notify_text
         self.engine = Athena2Engine(self.cfg)
         self.risk = self.engine.risk
         self.entry_window = entry_window
@@ -252,7 +251,24 @@ class PaperRunner:
     # ------------------------------------------------------------- helpers
 
     def _emit(self, etype: EventType, payload: dict, severity: str = "info") -> None:
-        self.hub.publish(AthenaEvent(etype, payload, severity))
+        ev = dict(payload or {})
+        ev.setdefault("mode", self.mode)
+        self.hub.publish(AthenaEvent(etype, ev, severity))
+        if self.tg_send:
+            try:
+                from .telegram_bot import format_trade_event
+                body = dict(ev)
+                body["type"] = etype.value
+                self.tg_send(format_trade_event(body))
+            except Exception:
+                pass
+
+    def sync_mode(self) -> dict:
+        """Read the Telegram-controlled mode file (paper runner honours halt)."""
+        from .mode import read_mode
+        m = read_mode()
+        self.halted = bool(m.get("halted"))
+        return m
 
     def _in_window(self, ts) -> bool:
         lo = dtime.fromisoformat(self.entry_window[0])
@@ -432,6 +448,8 @@ class PaperRunner:
         return rec
 
     def maybe_open(self, tick: LiveTick) -> Optional[dict]:
+        if self.halted:
+            return None
         if self.book.open_trade is not None:
             return None
         if self.book.entered_today == tick.ts.date().isoformat():
@@ -524,6 +542,7 @@ class PaperRunner:
         self._emit(EventType.SYSTEM_STARTUP, {"mode": "paper", "spot_bars": n})
         polls = 0
         while True:
+            self.sync_mode()
             tick = self.feed.tick()
             if tick is None:
                 if verbose:

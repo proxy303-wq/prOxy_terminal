@@ -1,0 +1,29 @@
+# ATHENA 2.0 Telegram control surface (status / P&L / halt / resume / GO LIVE).
+#
+# This bot used to be started by hand with nohup and no supervision, so applying a
+# code change meant hunting the PID and restarting it manually - which is exactly
+# how the halt/resume fix on 2026-09-11 had to be deployed. As a unit it restarts
+# on crash, survives a reboot, and picks up new code with one command:
+#
+#     systemctl restart athena2-telegram
+#
+# install:  cp deploy/athena2-telegram.service /etc/systemd/system/ \
+#           && systemctl daemon-reload && systemctl enable --now athena2-telegram
+[Unit]
+Description=ATHENA 2.0 Telegram control bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/proxy
+EnvironmentFile=/opt/proxy/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/proxy/venv/bin/python -u -m athena2.telegram_bot
+Restart=always
+RestartSec=15
+StandardOutput=append:/opt/proxy/reports/athena2_telegram.log
+StandardError=append:/opt/proxy/reports/athena2_telegram.err.log
+
+[Install]
+WantedBy=multi-user.target

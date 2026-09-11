@@ -18,6 +18,12 @@ jobs:
           host: 103.86.177.195
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          fingerprint: SHA256:TRE/hIUwQNvoMdlVhxEH6TyVsl3NJlpoXP99uXWSAQA
+          # The pin that used to be here was the ED25519 host key, but the action's
+          # SSH client negotiates a different host-key algorithm, so every run since
+          # 2026-09-10 died with "host key fingerprint mismatch" - the deploys
+          # stopped silently and the VPS drifted a day behind. debug is on for one
+          # run to read back the fingerprint that is actually negotiated, then this
+          # is re-pinned to exactly that value.
+          debug: true
           script: |
             bash /opt/proxy/deploy/deploy.sh

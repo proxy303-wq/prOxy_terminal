@@ -189,6 +189,39 @@ than pick one.
 were fitted on windows that overlap this sample; the benchmark's edge is concentrated
 in Apr–Aug; and the benchmark's maker-fee assumption on market entries is optimistic.
 
+
+### 4.2 Engine parity after wiring (verified 2026-09-11)
+
+The frozen spec now lives in the engine as `strategies/athena_btc_v1.py`. Running the
+engine's own backtester over the same eight months against the standalone verified
+module:
+
+| | trades | win rate | PF | return | max DD | expectancy |
+|---|---|---|---|---|---|---|
+| engine, engine costs (taker 0.05% + 2bp + funding) | **38** | **50.0%** | 1.96 | **+10.41%** | 3.29% | +0.502R |
+| verified module, same engine costs | 38 | 50.0% | 1.78 | +8.50% | 3.63% | +0.565R |
+| verified module, doc costs (maker + GST + 1bp) | 38 | 50.0% | 2.07 | +11.17% | 3.10% | +0.565R |
+
+Trade count and win rate are **identical**: the engine enters and exits the same 38
+trades. The residual ~1.9pp sits in execution accounting, not in the signal, and it
+is worth knowing about because it flatters the engine:
+
+* the engine rounds order size **up** to whole contracts (`math.ceil`), the module
+  sizes fractionally — with ~40 contracts per trade that is up to ~2% extra exposure;
+* the engine charges slippage on the **entry** fill only; the module charges it on
+  both legs, so the engine's exits are marginally better than a real fill would be.
+
+Fixing either would change every strategy's accounting, so both are left as engine
+conventions. Anyone comparing the two implementations should use the engine-costs
+row (+10.41% vs +8.50%), not the doc-costs row.
+
+Getting to parity required one real fix: `Backtester.run_symbol` defaulted to
+`lookback=500`, which silently overrode `[backtest].lookback`. At 500 bars a seeded
+EMA(384) still carries ~55% of its seed error, and the engine traded a different set
+(31 trades, +4.17%). The default now comes from config (2000 bars), the live loop
+uses the same window, and a signal-level diff over 2026-06-01..2026-07-10 shows the
+engine and the module firing on the same bars with the same ATR, ADX and direction.
+
 ---
 
 ## 5. Caveats that limit how far this result can be pushed

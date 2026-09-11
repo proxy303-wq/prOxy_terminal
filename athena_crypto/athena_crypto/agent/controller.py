@@ -14,7 +14,7 @@ from typing import Dict, List, Optional
 from ..data.market_data import is_closed_candle
 from ..journal.journal import TradeJournal
 from ..market_state import build as build_state
-from ..regime import classify as classify_regime
+from ..regime import classify as classify_regime, is_safety_veto
 from ..risk import RiskEngine
 from ..agent_plane.plane import AgentPlane
 from ..safety.guard import OrderGuard
@@ -88,12 +88,17 @@ class TradingController:
         bar = candles[-1]
         exit_fill = self.broker.manage_exits(symbol, bar)
         if not exit_fill:
-            # time-stop: bound how long a position may stay open
+            # time-stop: bound how long a position may stay open. A strategy whose
+            # signal carries max_hold_bars overrides the default for its own
+            # positions (0 = no time stop, which the frozen ATHENA-BTC-V1.0 spec
+            # requires; its average hold is ~100 bars).
             pos = self.portfolio.get(symbol)
-            max_hold = int(self.cfg.toml.get("backtest", {}).get("max_hold_bars", 96))
+            default_hold = int(self.cfg.toml.get("backtest", {}).get("max_hold_bars", 96))
+            max_hold = int(pos.meta.get("max_hold_bars", default_hold)) if pos is not None else default_hold
             from ..data.market_data import TF_SECONDS
             step = TF_SECONDS.get(self.market.timeframe, 900)
-            if pos is not None and not pos.is_flat and pos.meta.get("bar_time"):
+            if (pos is not None and not pos.is_flat and max_hold > 0
+                    and pos.meta.get("bar_time")):
                 held = bar.time - int(pos.meta["bar_time"])
                 if held >= max_hold * step:
                     exit_fill = self.broker.close_position(symbol, bar.close, reason="time_stop")
@@ -120,21 +125,32 @@ class TradingController:
 
         regime = classify_regime(mstate, vol_up_pct=self.cfg.risk_config.get("vol_up_pct", 70.0) / 100.0,
                                  vol_down_pct=self.cfg.risk_config.get("vol_down_pct", 30.0) / 100.0)
-        if not regime.get("tradeable"):
-            self.journal.log_decision_cycle(symbol, mstate.get("time"),
-                                            self._summ(mstate, regime), [], [])
-            return
+        regime_veto = not regime.get("tradeable", False)
+        # A bad-feed veto (stale ticker, too little history, wide spread) stops
+        # everything. A "no clear regime" label veto may be ignored by a strategy
+        # that carries its own filter (the frozen ATHENA-BTC-V1.0 trend system).
+        safety_veto = is_safety_veto(regime)
 
         # 3) strategies
         signals = []
         for strat in self.strategies:
+            if hasattr(strat, "allows") and not strat.allows(symbol):
+                continue
             try:
                 sig = strat.evaluate(mstate, regime)
             except Exception as exc:
                 log.warning("strategy %s error: %s", strat.name, exc)
                 continue
-            if sig is not None:
-                signals.append(sig)
+            if sig is None:
+                continue
+            if regime_veto and (safety_veto or not (sig.meta or {}).get("ignore_regime_veto")):
+                continue
+            signals.append(sig)
+
+        if regime_veto and not signals:
+            self.journal.log_decision_cycle(symbol, mstate.get("time"),
+                                            self._summ(mstate, regime), [], [])
+            return
 
         # 4) risk veto
         plan = None
@@ -159,6 +175,9 @@ class TradingController:
             if product is not None:
                 plan.meta["contract_value"] = product.contract_value
             plan.meta["bar_time"] = mstate.get("time")
+            for key in ("max_hold_bars", "risk_frac", "spec"):
+                if key in (sig.meta or {}):
+                    plan.meta[key] = sig.meta[key]
             self.journal.log_intent(plan, regime, mstate, decision="APPROVE")
             ref = mstate.get("price") or (ticker.mark_price if ticker else None)
             if ref:

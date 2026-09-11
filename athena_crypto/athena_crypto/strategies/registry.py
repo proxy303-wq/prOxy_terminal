@@ -1,4 +1,5 @@
 """Strategy registry."""
+from .athena_btc_v1 import AthenaBtcV1
 from .breakout_retest import BreakoutRetest
 from .orb_sniper import OrbSniper
 from .range_mean_reversion import RangeMeanReversion
@@ -6,6 +7,7 @@ from .sweep_reversal import SweepReversal
 from .trend_pullback import TrendPullback
 
 _STRATEGIES = {
+    "athena_btc_v1": AthenaBtcV1,
     "trend_pullback": TrendPullback,
     "breakout_retest": BreakoutRetest,
     "sweep_reversal": SweepReversal,

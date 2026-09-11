@@ -20,7 +20,7 @@ Type=simple
 WorkingDirectory=/opt/proxy/athena_crypto
 EnvironmentFile=/opt/proxy/athena_crypto/.env.demo
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/proxy/venv/bin/python -m athena_crypto.cli --env .env.demo run --live --timeframe 4h --interval 60
+ExecStart=/opt/proxy/venv/bin/python -m athena_crypto.cli --env .env.demo run --live --timeframe 5m --interval 60
 Restart=always
 RestartSec=30
 StandardOutput=append:/opt/proxy/athena_crypto/logs/demo.log

@@ -1,4 +1,12 @@
-# ATHENA CRYPTO - Delta Exchange India paper trader (BTCUSD/ETHUSD/SOLUSD, 4h bars)
+# ATHENA CRYPTO - Delta Exchange India paper trader (BTCUSD, 5m bars)
+#
+# 2026-09-11: BTC now runs the verified ATHENA-BTC-V1.0 spec (EMA192/384 + ADX>=38 +
+# ATR%>=0.10, 3ATR/7ATR, 0.5% risk) over 5m bars - see
+# athena_crypto/docs/BTC_V1_FROZEN_VERIFICATION.md. The old 4h trend_pullback is
+# retired for BTC. The timeframe is pinned here on purpose so a config change alone
+# cannot silently move a live strategy onto the wrong bars; if you change it, change
+# it in athena_crypto/config/config.toml too.
+#
 # Runs as its own service so it never restarts the dashboard/NIFTY engines.
 # PAPER ONLY: --live is intentionally NOT passed; the fail-closed OrderGuard still
 # enforces kill switch, daily order budget and loss/drawdown limits.
@@ -16,7 +24,7 @@ Type=simple
 WorkingDirectory=/opt/proxy/athena_crypto
 EnvironmentFile=/opt/proxy/athena_crypto/.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/proxy/venv/bin/python -m athena_crypto.cli run --timeframe 4h --interval 60
+ExecStart=/opt/proxy/venv/bin/python -m athena_crypto.cli run --timeframe 5m --interval 60
 Restart=always
 RestartSec=30
 StandardOutput=append:/opt/proxy/athena_crypto/logs/worker.log

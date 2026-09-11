@@ -31,7 +31,8 @@ CONFIRM_WINDOW_S = 120
 MAIN_KEYBOARD = [
     ["📊 Status", "📈 P&L Today"],
     ["🎛 Mode", "📗 Report"],
-    ["⏹ Halt", "❓ Help"],
+    ["⏹ Halt", "▶️ Resume"],
+    ["❓ Help"],
 ]
 MODE_KEYBOARD = [
     ["🟢 GO LIVE", "⚪ PAPER"],
@@ -43,6 +44,7 @@ COMMANDS = [
     {"command": "pnl", "description": "Today's P&L and closed trades"},
     {"command": "mode", "description": "Show or switch PAPER / LIVE"},
     {"command": "report", "description": "Full day review"},
+    {"command": "resume", "description": "Clear HALT and allow entries again"},
     {"command": "help", "description": "Menu"},
 ]
 
@@ -221,7 +223,13 @@ class AthenaTelegramBot:
             write_mode(read_mode(self.mode_path).get("mode", "paper"),
                        updated_by="telegram", halted=True, note="halted from Telegram",
                        path=self.mode_path)
-            return "HALTED: no new entries until you tap PAPER or /resume"
+            return "HALTED: no new entries until you tap ▶️ Resume, PAPER or /resume"
+        if t == "▶️ Resume" or low.startswith("/resume"):
+            cur = read_mode(self.mode_path)
+            write_mode(cur.get("mode", "paper"), updated_by="telegram", halted=False,
+                       note="halt cleared from Telegram", path=self.mode_path)
+            return ("RESUMED: " + str(cur.get("mode", "paper")).upper()
+                    + " entries allowed again")
         if t == "⚪ PAPER" or low.startswith("/paper"):
             write_mode("paper", updated_by="telegram", halted=False, path=self.mode_path)
             return "mode switched to PAPER"

@@ -6,15 +6,15 @@ env = "india_prod"
 
 [markets]
 # Primary decision timeframe and instruments (Delta India REST symbols).
-# 4h is the validated default: at 15m the gross edge (+0.07R/trade) is smaller than
-# the cost drag (-0.07R/trade). See research/validation.py evidence in README section 13.
-timeframe = "4h"
-# BTC, ETH and gold traded DIRECTLY as perpetuals (no options, no tokenised wrappers).
-# XAU exposure on Delta India is XAUTUSD (Tether Gold, ~5x PAXGUSD volume) or PAXGUSD.
-# Measured on our only validated strategy (trend_pullback 4h): BTC +0.167R, ETH -0.075R,
-# XAUT -0.317R (12 trades, negative even before costs). Gold is therefore carried in the
-# DEMO campaign for forward evidence, not yet approved for production capital.
-symbols = ["BTCUSD", "ETHUSD", "XAUTUSD"]
+#
+# 2026-09-11: BTC moved to the verified ATHENA-BTC-V1.0 spec, which is a NATIVE 5m
+# system (docs/BTC_V1_FROZEN_VERIFICATION.md). That is why the timeframe is now 5m
+# and why BTC is the only live symbol: the OLD trend_pullback research below showed
+# ETH -0.075R and XAUT -0.317R (negative even before costs), so neither is approved
+# for capital. Re-enable them only with a per-symbol timeframe (the engine still has
+# one timeframe per process) plus new evidence.
+timeframe = "5m"
+symbols = ["BTCUSD"]
 
 [account]
 # Paper account starting equity, expressed in settlement currency (USD for India linear perps)
@@ -39,6 +39,13 @@ funding_rate_8h = 0.0001
 ema_fast = 10
 ema_slow = 20
 atr_period = 14
+# Long-horizon block for the frozen ATHENA-BTC-V1.0 spec (market_state "trend").
+# These are FROZEN constants of an externally validated strategy: change them only
+# as a versioned variant with a new backtest, never to chase a better number.
+trend_ema_fast = 192
+trend_ema_slow = 384
+trend_adx_period = 14
+trend_atr_period = 14
 vol_lookback = 20
 swing_lookback = 8
 structure_pivot_window = 5
@@ -73,7 +80,11 @@ reconnect_max_attempts = 20
 fee_model = "taker"
 warmup_bars = 80
 max_hold_bars = 96
-lookback = 500
+# Rolling context handed to market_state per bar. It must comfortably exceed the
+# frozen spec's EMA(384): at 500 bars the seeded EMA still remembers its starting
+# window, and the engine produced 31 trades / +4.17% where the verified module
+# produced 38 / +8.50%. 2000 bars decays that seed effect to ~2e-4.
+lookback = 2000
 
 # ---------------------------------------------------------------- strategies
 # Only strategies that survived the IS/OOS validation gates are enabled.
@@ -85,9 +96,32 @@ lookback = 500
 #   range_mean_reversion all TFs negative -> retired
 
 [strategies.trend_pullback]
-enabled = true
+# RETIRED for BTC on 2026-09-11. Over the same eight months (Jan-Aug 2026) that
+# ATHENA-BTC-V1.0 returned +11.17%, this strategy returned +2.16% on BTC 4h while
+# its 1h/15m/5m variants lost 13%/27%/76%. Kept in the tree, disabled, as the
+# comparison baseline; re-enable only for research runs or another symbol.
+enabled = false
 target_r = 1.5
 stop_atr_mult = 0.25
+
+[strategies.athena_btc_v1]
+# ATHENA-BTC-V1.0 - the externally frozen BTC spec, verified over 8 months of 5m
+# data: 38 trades, +11.17%, 3.10% max drawdown, +0.565R/trade, 98.6% Monte Carlo.
+# Walk-forward proved that re-selecting these parameters destroys the edge
+# (+0.2% vs +12.2%), so do NOT tune them - make a versioned variant instead.
+enabled = true
+symbols = ["BTCUSD"]        # the spec is BTC-only
+ema_fast = 192              # read from [features].trend_ema_fast
+ema_slow = 384
+adx_min = 38.0
+atr_pct_min = 0.10          # percent of price
+stop_atr = 3.0
+target_atr = 7.0
+risk_frac = 0.005           # 0.5% of equity per trade; the risk engine clamps it
+max_hold_bars = 0           # 0 = no time stop (the spec holds until SL/TP)
+bypass_no_regime_veto = true  # ADX is the spec's own regime filter; safety vetoes still apply
+allow_long = true
+allow_short = true
 
 [strategies.breakout_retest]
 enabled = false   # unproven OOS; enable only for research runs

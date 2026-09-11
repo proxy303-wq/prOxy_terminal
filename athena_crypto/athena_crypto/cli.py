@@ -257,13 +257,18 @@ def cmd_run(cfg, args):
                              portfolio.equity(), cfg.symbols, tf)
         except Exception as exc:
             print("startup notification failed:", exc)
+    # Rolling context handed to the controller. It must match the backtester's
+    # [backtest].lookback, otherwise a seeded EMA(384) carries a different initial
+    # condition live than it did in the backtest and crossovers land on other bars.
+    history_limit = int(cfg.toml.get("backtest", {}).get("lookback", 500)) or 1000
+    history_limit = max(history_limit, 1000)
     cycles = 0
     try:
         if args.once:
             # one deterministic sweep over the latest closed bars
             svc.refresh_tickers()
             for sym in cfg.symbols:
-                hist = svc.history(sym, limit=1000)
+                hist = svc.history(sym, limit=history_limit)
                 if len(hist) < 20:
                     print("  skip %s (only %d bars cached)" % (sym, len(hist)))
                     continue
@@ -278,7 +283,7 @@ def cmd_run(cfg, args):
         while True:
             newly = svc.poll_closed()
             for sym, candles_new in newly.items():
-                hist = svc.history(sym, limit=1000)
+                hist = svc.history(sym, limit=history_limit)
                 if len(hist) < 20:
                     continue
                 ticker = svc.latest_tickers.get(sym)

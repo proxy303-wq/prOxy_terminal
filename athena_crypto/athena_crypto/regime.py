@@ -8,6 +8,20 @@ The risk engine remains the absolute authority - this module only informs it.
 REGIMES = ("trend_up", "trend_down", "range", "breakout", "vol_expansion",
            "crowded_long", "crowded_short", "abnormal")
 
+# Vetoes that protect against broken data or a broken feed. They are never
+# bypassable by a strategy. Anything else (notably "no clear regime") is a
+# judgement call that a self-contained strategy with its own filters - such as
+# the frozen ATHENA-BTC-V1.0 trend system - may declare itself independent of.
+SAFETY_VETO_REASONS = ("insufficient history", "stale ticker", "too wide")
+
+
+def is_safety_veto(regime):
+    """True when the veto exists to protect against bad data, not bad setups."""
+    if not regime or regime.get("tradeable", False):
+        return False
+    reasons = " | ".join(str(r) for r in (regime.get("reasons") or []))
+    return any(marker in reasons for marker in SAFETY_VETO_REASONS)
+
 
 def classify(mstate, vol_up_pct=0.7, vol_down_pct=0.3):
     """mstate: dict produced by market_state.build(). Returns regime dict."""

@@ -23,11 +23,20 @@ currently fail private calls with `ip_not_whitelisted_for_api_key` - whitelist t
 in your Delta (India) account API-key settings first; the bot verifies at startup and exits with
 instructions if not done.
 
+**What actually runs now (2026-09-11):** `BTCUSD` on **5m**, trading the frozen
+ATHENA-BTC-V1.0 spec (`strategies/athena_btc_v1.py`, see section 14). The old 4h
+`trend_pullback` is retired for BTC - over the same eight months it returned +2.16%
+against the frozen spec's +11.17%, and its 1h/15m/5m variants lost 13%/27%/76%.
+ETH/XAUT are out of `markets.symbols` until they have their own evidence and the
+engine has per-symbol timeframes. Live mode is still refused until the Delta key's
+IP is whitelisted.
+
 Environment verified live on 2026-09-10:
 
 - venue: https://api.india.delta.exchange (the keys belong to the India venue)
 - instruments: BTCUSD (id 27, cv 0.001), ETHUSD (id 3136, cv 0.01), SOLUSD (id 14823, cv 1.0)
-- default decision timeframe: 15m; decisions run on closed candles only (no look-ahead)
+- default decision timeframe: 5m for BTC (the frozen spec's native timeframe); decisions
+  run on closed candles only (no look-ahead)
 - public WebSocket feed (public-socket.india.delta.exchange) validated: candlestick_15m, trades, ob_l2, ticker, mark_price
 
 ---
@@ -407,6 +416,64 @@ the 0.05% taker fee, then paper -> shadow -> limited live.
     python -m athena_crypto.research.validation --timeframe 4h --grid hold    --set core2
 
 Results are written to data/research/*.json.
+
+---
+
+## 14. External frozen benchmark: ATHENA-BTC-V1.0 (verified 2026-09-11)
+
+A second, externally-authored specification was tested against this engine on eight
+months of native 5m BTCUSDT history (Jan-Aug 2026, 69,984 bars, no gaps) with 1-minute
+files for execution resolution: `Athena_BTC_Strategy_Master_Document.docx` -
+EMA(192)/EMA(384) crossover filtered by ADX(14) >= 38 and ATR(14)/price >= 0.10%,
+3xATR stop / 7xATR target, 0.5% risk per trade, 10x notional cap, maker + GST + 1bp
+slippage. Over the eight months it returns **+11.17% on 38 trades, 50.0% win rate,
+PF 2.07, 3.10% max drawdown, +0.565R per trade** - six of eight months positive, no
+month worse than -0.48%, while buy & hold lost 10.4%.
+
+**This engine does not implement that specification.** There is no EMA(192/384), no ADX
+gate and no 3ATR/7ATR geometry anywhere in `athena_crypto`; the shipped BTC strategy is
+`trend_pullback` on 4h. On the same window and capital the two behave very differently:
+
+| system (May-Aug window, same capital) | trades | win rate | PF | net | max DD |
+| --- | --- | --- | --- | --- | --- |
+| shipped `trend_pullback` 4h | 8 | 37.5% | 0.63 | -1.12% | 2.93% |
+| shipped `trend_pullback` 5m | 456 | 41.7% | 0.68 | -53.63% | 57.05% |
+| ATHENA-BTC-V1.0 (doc costs) | 16 | 68.8% | 4.39 | +9.73% | 1.60% |
+| ATHENA-BTC-V1.0 (engine costs: taker + 2bp + funding) | 16 | 68.8% | 3.67 | +8.38% | 1.70% |
+
+What the verification establishes:
+
+* the frozen spec's headline claims reproduce independently - return, drawdown,
+  trade-order risk (98.6% Monte Carlo on the extended sample), parameter perturbation
+  (175/175 profitable), both-direction contribution - but with **16 trades instead of
+  the documented 23** on the original window;
+* **the ADX and ATR gates are the edge, not decoration**: removing both leaves +0.05%
+  over 150 trades at PF 1.00;
+* **freezing beats selecting**: five walk-forward designs that chose parameters on 2-4
+  month windows returned +0.2% to +2.4% out of sample against +12.2% for the frozen
+  constants (in-sample expectancy had r ~ +0.2 predictive power);
+* the benchmark uses spot klines while the document specifies perp, and 38 trades is a
+  bigger sample, not a sufficient one.
+
+**It is now wired into the engine** as `strategies/athena_btc_v1.py` (enabled for
+BTCUSD, 5m). The engine reproduces the verified rules: EMA192/384 crossover on
+completed bars, Wilder ADX(14) >= 38, Wilder ATR(14)/price >= 0.10%, 3ATR stop /
+7ATR target, 0.5% risk per trade declared through `Signal.meta["risk_frac"]` (the
+risk engine can only ever reduce risk, never increase it), and no time stop -
+`Signal.meta["max_hold_bars"] = 0` because the spec's average hold (~100 bars)
+exceeds the engine default of 96. The spec's own ADX gate is its regime filter, so
+the signal sets `ignore_regime_veto`, which bypasses only the "no clear regime"
+label veto - stale-ticker, insufficient-history and wide-spread vetoes still stop
+everything. Risk sizing, hard limits, the kill switch and the order guard remain
+untouched.
+
+Full method, caveats and re-tests: `docs/BTC_V1_FROZEN_VERIFICATION.md`.
+Reproduce with:
+
+    python -m athena_crypto.research.btc_v1_frozen --data-dir <dir> --sweep --perturb --monte-carlo --intrabar-compare
+    python -m athena_crypto.research.btc_v1_walkforward --data-dir <dir> --train-months 3 --test-months 1 --diagnose
+    python -m athena_crypto.research.btc_v1_engine_compare --data-dir <dir>
+    python -m pytest tests/test_btc_v1_frozen.py -q
 
 ---
 

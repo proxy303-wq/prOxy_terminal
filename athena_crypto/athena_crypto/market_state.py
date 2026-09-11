@@ -60,6 +60,44 @@ def _session_block(candles, session_start_hour=0, or_minutes=15):
     }
 
 
+def _trend_block(candles, closes, price, cfg, n, i):
+    """Long-horizon trend/volatility snapshot for the frozen ATHENA-BTC-V1.0 spec.
+
+    Separate from the short EMA(10/20) pair used by the discretionary strategies:
+    the frozen system is defined on EMA(192)/EMA(384) with Wilder ADX(14) and
+    Wilder ATR(14), and needs the PREVIOUS bar's EMAs to detect the crossover
+    without look-ahead. Lengths come from the [features] table so a future
+    versioned variant only changes configuration.
+    """
+    fast_len = int(cfg.get("trend_ema_fast", 192))
+    slow_len = int(cfg.get("trend_ema_slow", 384))
+    adx_len = int(cfg.get("trend_adx_period", 14))
+    atr_len = int(cfg.get("trend_atr_period", 14))
+    if n < slow_len + 1 or slow_len <= fast_len:
+        return {"ready": False, "ema_fast_len": fast_len, "ema_slow_len": slow_len,
+                "bars": n, "bars_needed": slow_len + 1}
+    ema_f = _ind.ema_seeded(closes, fast_len)
+    ema_s = _ind.ema_seeded(closes, slow_len)
+    atr_w = _ind.wilder_atr(candles, atr_len)
+    adx_w = _ind.adx(candles, adx_len)
+    atr_now = atr_w[i]
+    return {
+        "ready": True,
+        "ema_fast": ema_f[i],
+        "ema_slow": ema_s[i],
+        "ema_fast_prev": ema_f[i - 1] if i >= 1 else None,
+        "ema_slow_prev": ema_s[i - 1] if i >= 1 else None,
+        "adx": adx_w[i],
+        "atr": atr_now,
+        "atr_pct": (atr_now / price * 100.0) if (atr_now and price) else None,
+        "ema_fast_len": fast_len,
+        "ema_slow_len": slow_len,
+        "adx_period": adx_len,
+        "atr_period": atr_len,
+        "bars": n,
+    }
+
+
 def build(symbol, candles, ticker=None, book=None, trades=None,
           cfg=None, funding_history=None):
     """Build a full state snapshot at the last closed candle.
@@ -100,6 +138,8 @@ def build(symbol, candles, ticker=None, book=None, trades=None,
     if ticker is not None and last is not None:
         ticker_age = max(0, int(last.time * 1_000_000) - ticker.timestamp) if ticker.timestamp else None
 
+    trend = _trend_block(candles, closes, price, cfg, n, i)
+
     return {
         "symbol": symbol,
         "time": last.time if last else None,
@@ -108,6 +148,7 @@ def build(symbol, candles, ticker=None, book=None, trades=None,
         "candle_count": n,
         "ema": {"fast": ema_fast[i], "slow": ema_slow[i]},
         "atr": atr_vals[i],
+        "trend": trend,
         "structure": structure,
         "price_action": {
             "ema_fan": fan,

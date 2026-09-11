@@ -13,7 +13,7 @@ from ..execution.brokers import PaperBroker
 from ..execution.portfolio import Portfolio
 from ..journal.journal import TradeJournal
 from ..market_state import build as build_state
-from ..regime import classify as classify_regime
+from ..regime import classify as classify_regime, is_safety_veto
 from ..risk import RiskEngine
 
 log = logging.getLogger("athena.backtest")
@@ -30,7 +30,7 @@ class Backtester:
         self.progress = progress or (lambda *a, **k: None)
 
     def run_symbol(self, candles, symbol, features_cfg=None, risk_cfg=None,
-                   costs_cfg=None, start_equity=1000.0, lookback=500, funding_rate_8h=None,
+                   costs_cfg=None, start_equity=1000.0, lookback=None, funding_rate_8h=None,
                    force_notional_multiple=None):
         features_cfg = features_cfg or self.cfg.toml.get("features", {})
         risk_cfg = risk_cfg or self.cfg.risk_config
@@ -41,8 +41,13 @@ class Backtester:
 
         warmup = int(self.cfg.toml.get("backtest", {}).get("warmup_bars", 80))
         max_hold_bars = int(self.cfg.toml.get("backtest", {}).get("max_hold_bars", 96))
+        # Rolling context per bar. It MUST come from config: a 500-bar window is
+        # not enough for the frozen spec's seeded EMA(384) (55% of the seed error
+        # still survives after 116 bars), and the engine then signals on different
+        # bars than the verified module. Defaulting to the config value keeps the
+        # backtester, the live loop and the reference implementation on one window.
         if lookback is None:
-            lookback = int(self.cfg.toml.get("backtest", {}).get("lookback", 500)) or 0
+            lookback = int(self.cfg.toml.get("backtest", {}).get("lookback", 2000)) or 0
         if funding_rate_8h is None:
             funding_rate_8h = float(costs_cfg.get("funding_rate_8h", 0.0) or 0.0)
         # forced exposure mode: size the position at equity x multiple regardless of
@@ -81,11 +86,15 @@ class Backtester:
                 dt = candles[i].time - candles[i - 1].time if i > 0 else 14400
                 notional = abs(pos_f.size) * pos_f.contract_value * pos_f.entry_price
                 portfolio.charge_funding(symbol, notional * funding_rate_8h * (dt / 28800.0))
-            # time-stop: bound how long a single position may stay open
+            # time-stop: bound how long a single position may stay open. A strategy
+            # whose signal declares max_hold_bars overrides the default for its own
+            # positions (0 = no time stop, as the frozen ATHENA-BTC-V1.0 requires).
             pos0 = portfolio.get(symbol)
             if pos0 is not None and not pos0.is_flat:
                 opened_idx = pos0.meta.get("bar_idx")
-                if opened_idx is not None and i - opened_idx >= max_hold_bars:
+                hold_limit = int(pos0.meta.get("max_hold_bars", max_hold_bars))
+                if (hold_limit > 0 and opened_idx is not None
+                        and i - opened_idx >= hold_limit):
                     ts_fill = broker.close_position(symbol, candles[i].close, reason="time_stop")
                     if ts_fill:
                         ts_fill["exit_bar_idx"] = i
@@ -120,22 +129,29 @@ class Backtester:
             regime = classify_regime(mstate,
                                      vol_up_pct=float(risk_cfg.get("vol_up_pct", 70.0)) / 100.0,
                                      vol_down_pct=float(risk_cfg.get("vol_down_pct", 30.0)) / 100.0)
-            if not regime.get("tradeable"):
-                equity_curve.append(portfolio.equity({symbol: candles[i].close}))
-                continue
+            regime_veto = not regime.get("tradeable", False)
+            safety_veto = is_safety_veto(regime)
             product = self.product_map.get(symbol)
             plan = None
             for strat in self.strategies:
+                if hasattr(strat, "allows") and not strat.allows(symbol):
+                    continue
                 try:
                     sig = strat.evaluate(mstate, regime)
                 except Exception:
                     continue
                 if sig is None:
                     continue
+                if regime_veto and (safety_veto
+                                    or not (sig.meta or {}).get("ignore_regime_veto")):
+                    continue
                 if product is not None:
                     plan = risk.evaluate(product, sig, mstate)
                 if plan is not None:
                     break
+            if plan is None and regime_veto:
+                equity_curve.append(portfolio.equity({symbol: candles[i].close}))
+                continue
             if plan is not None and force_notional_multiple and product is not None:
                 # override the risk-based size with the forced exposure
                 equity_now = portfolio.equity({symbol: candles[i].close})

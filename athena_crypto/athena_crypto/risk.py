@@ -72,9 +72,15 @@ class RiskEngine:
     def _max_leverage(self):
         return float(self.cfg.get("max_leverage", self.account_cfg.get("leverage", 5)) or 5)
 
-    def size_for_risk(self, product, entry_price, stop_price, direction):
-        """Contracts from risk budget = equity * per_trade_risk_frac / (cv * stop_distance)."""
-        risk_frac = float(self.cfg.get("per_trade_risk_frac", 0.01))
+    def size_for_risk(self, product, entry_price, stop_price, direction, risk_frac=None):
+        """Contracts from risk budget = equity * risk_frac / (cv * stop_distance).
+
+        `risk_frac` lets a strategy declare its own budget (the frozen
+        ATHENA-BTC-V1.0 spec risks 0.5% per trade). It can only ever LOWER the
+        configured `per_trade_risk_frac`: no strategy may size itself up.
+        """
+        configured = float(self.cfg.get("per_trade_risk_frac", 0.01))
+        risk_frac = configured if risk_frac is None else min(float(risk_frac), configured)
         risk_usd = self.equity() * risk_frac
         dist = abs(entry_price - stop_price)
         if product.contract_value <= 0 or dist <= 0:
@@ -108,7 +114,8 @@ class RiskEngine:
             return self._reject(symbol, "max_open_positions reached")
 
         side = "buy" if signal.direction == "long" else "sell"
-        qty, risk_usd = self.size_for_risk(product, entry, stop, signal.direction)
+        qty, risk_usd = self.size_for_risk(product, entry, stop, signal.direction,
+                                           risk_frac=(signal.meta or {}).get("risk_frac"))
         if qty <= 0:
             return self._reject(symbol, "computed qty <= 0")
 

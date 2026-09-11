@@ -65,6 +65,25 @@ def test_halt_and_resume(tmp_path):
     assert is_halted(b.mode_path) is False
 
 
+def test_resume_button_clears_halt_and_keeps_mode(tmp_path):
+    b = _bot(tmp_path)
+    assert "LIVE" in b.handle("12345", "/live confirm").upper()
+    assert "HALTED" in b.handle("12345", "⏹ Halt").upper()
+    assert is_halted(b.mode_path) is True
+    out = b.handle("12345", "▶️ Resume")
+    assert "RESUMED" in out.upper()
+    assert is_halted(b.mode_path) is False
+    assert is_live(b.mode_path) is True          # resume must not downgrade to paper
+
+
+def test_resume_command_clears_halt(tmp_path):
+    b = _bot(tmp_path)
+    b.handle("12345", "⏹ Halt")
+    assert is_halted(b.mode_path) is True
+    assert "RESUMED" in b.handle("12345", "/resume").upper()
+    assert is_halted(b.mode_path) is False
+
+
 def test_owner_chat_only(tmp_path):
     b = _bot(tmp_path)
     assert b.handle("99999", "📊 Status") == "unauthorised"

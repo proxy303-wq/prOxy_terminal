@@ -18,11 +18,13 @@ jobs:
           host: 103.86.177.195
           username: root
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          # Pin the host key. The value that used to be here was the server's ED25519
-          # key, but the action's SSH client negotiates RSA first, so every run since
-          # 2026-09-10 failed with "host key fingerprint mismatch" - deploys stopped
-          # silently and the VPS drifted a day behind (2026-09-11). Verify with:
-          #   ssh-keyscan -t rsa 103.86.177.195 | ssh-keygen -lf -
+          # Pin the host key. Until 2026-09-11 this held the server's ED25519 key,
+          # but the action's SSH client negotiates ECDSA, so EVERY run since the pin
+          # was added failed with "host key fingerprint mismatch": deploys stopped
+          # silently and the VPS drifted a day behind (it was updated by hand).
+          # ED25519 and RSA were both tried and both failed; this ECDSA value is
+          # verified working. If the host is ever rebuilt, re-derive it with:
+          #   ssh-keyscan -t ecdsa 103.86.177.195 2>/dev/null | ssh-keygen -lf -
           fingerprint: SHA256:py7d/FELAVSwqMfmqmDrzyep5ScJGLrgqeprPu2BY28
           script: |
             bash /opt/proxy/deploy/deploy.sh

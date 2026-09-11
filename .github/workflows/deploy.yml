@@ -23,6 +23,6 @@ jobs:
           # 2026-09-10 failed with "host key fingerprint mismatch" - deploys stopped
           # silently and the VPS drifted a day behind (2026-09-11). Verify with:
           #   ssh-keyscan -t rsa 103.86.177.195 | ssh-keygen -lf -
-          fingerprint: SHA256:oAKE6Ckuoxhp4MknmJydbAcvrJayr8Mj/zKFBUmc9vA
+          fingerprint: SHA256:py7d/FELAVSwqMfmqmDrzyep5ScJGLrgqeprPu2BY28
           script: |
             bash /opt/proxy/deploy/deploy.sh

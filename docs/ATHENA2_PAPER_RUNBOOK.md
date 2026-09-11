@@ -179,4 +179,42 @@ scale only after the journal shows the expected edge and cost profile.
     python -m athena2.dual_runner --dry-run --poll 60 --tail-pct 12 # one-segment routing
     python -m athena2.paper_review --date today --telegram          # EOD report
 
+### Telegram control bot (systemd unit, 2026-09-11)
+
+The bot that serves the HALT / RESUME / GO LIVE menu used to run as a bare
+`nohup` process with no supervision (parent pid 1), so applying a code change
+meant hunting the PID by hand. It is now a unit:
+
+    systemctl status athena2-telegram          # active + enabled
+    systemctl restart athena2-telegram         # picks up new athena2 code
+    tail -f /opt/proxy/reports/athena2_telegram.log
+
+Installed from `deploy/athena2-telegram.service`. If you ever restart it by hand
+again, kill the old process first - two instances polling the same bot token
+fight over getUpdates.
+
+**Halt is entry-only.** Neither HALT nor RESUME flattens an open position: HALT
+stops new entries (`paper_runner`/`live_runner` check the flag before acting) and
+RESUME clears it while PRESERVING the current mode, so a halted LIVE runner
+resumes LIVE instead of being silently downgraded to paper.
+
+### Deploying to the VPS
+
+Push to `main` and GitHub Actions runs `bash /opt/proxy/deploy/deploy.sh` over
+SSH (git pull, then `systemctl restart proxy-terminal`). Two things broke this
+silently for a day (2026-09-10 -> 11) and are worth remembering:
+
+* the repo had **no `DEPLOY_SSH_KEY` secret**, so the SSH step had nothing to
+  authenticate with;
+* the workflow's `fingerprint` pin held the server's **ED25519** host key while
+  the action's SSH client negotiates **ECDSA**, so every run died with
+  `host key fingerprint mismatch` - deploys stopped and the box was updated by
+  hand. The pin now holds the ECDSA value; re-derive it after a host rebuild with
+  `ssh-keyscan -t ecdsa <ip> 2>/dev/null | ssh-keygen -lf -`.
+
+The crypto engine is NOT restarted by that script - it has its own units
+(`athena-crypto`, `athena-crypto-demo`); restart them explicitly after a pull
+that changes `athena_crypto/`.
+
+
 

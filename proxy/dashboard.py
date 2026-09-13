@@ -47,6 +47,85 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     monthly_pnl = state.get("realized_pnl_month", 0.0)
     monthly_progress = (monthly_pnl / monthly_target * 100.0) if monthly_target else 0.0
 
+    # ---------------- OPTION SELLING (locked spec) ----------------
+    # The locked configuration is imported, never re-typed: proxy/optsell_locked_spec.py
+    # is the single source of truth.  Live state comes from reports/optsell_state.json,
+    # which proxy.options_selling_worker writes.
+    import json as _json
+    try:
+        from .optsell_locked_spec import (
+            LOCKED_DATE, UNDERLYING, SHORT_OFFSET, WING_OFFSET, WING_WIDTH_POINTS,
+            ENTRY_HM, EXPIRY_WEEKDAY, GATE_VRP, CREDIT_FLOOR_POINTS, NEVER,
+            MARGIN_PER_LOT_INR, LOT_SIZE, NET_PER_LOT_YEAR_INR, REALISED_DD_PER_LOT_INR,
+            THEORETICAL_MAX_LOSS_PER_LOT_INR, WIN_RATE, PROFIT_FACTOR, TRADES,
+            TRADES_PER_YEAR, AVG_CREDIT_POINTS, NEVER as _NEVER,
+            lots_for, expected_annual, NOT_PROVEN,
+        )
+        _spec_ok = True
+    except Exception as _exc:                       # never break the dashboard
+        _spec_ok = False
+        _spec_err = str(_exc)
+    _os_state = {}
+    try:
+        _p = os.path.join(REPORT_DIR, "optsell_state.json")
+        if os.path.exists(_p):
+            with open(_p, encoding="utf-8") as _fh:
+                _os_state = _json.load(_fh)
+    except Exception:
+        _os_state = {}
+    try:
+        from . import mode as _mode_mod
+        _os_mode = _mode_mod.get_mode("optsell").upper()
+    except Exception:
+        _os_mode = "PAPER"
+    try:
+        from .options_selling_config import options_selling_config as _osc
+        _os_cfg = _osc()
+        _os_live_allowed = bool(getattr(_os_cfg, "OS_LIVE_ALLOWED", False))
+        _os_allow_env = os.environ.get("OPTSELL_ALLOW_LIVE", "") == "1"
+    except Exception:
+        _os_live_allowed, _os_allow_env = False, False
+    _os_active = _os_state.get("active") or {}
+    _os_cap = float(_os_state.get("capital") or capital)
+    if _spec_ok:
+        _os_lots = lots_for(_os_cap)
+        _os_rows = "".join(
+            "<tr><td>Rs %s</td><td>%.1f</td><td>Rs %s</td><td>Rs %s</td><td class=\"pos\">Rs %s</td></tr>"
+            % (format(c, ","), lots_for(c), format(int(lots_for(c) * MARGIN_PER_LOT_INR), ","),
+               format(int(lots_for(c) * THEORETICAL_MAX_LOSS_PER_LOT_INR), ","),
+               format(int(expected_annual(c)), ","))
+            for c in (500000, 1000000, 2000000, 5000000))
+        _os_spec_html = (
+            "<b>%s</b> &nbsp; SELL ATM&#8722;%d / BUY ATM&#8722;%d &nbsp; (width %d pts)<br>"
+            "entry <b>%s ON expiry morning</b> (%s) &middot; hold to cash settlement (NSE 15:00-15:30 average)<br>"
+            "gate VRP &gt; <b>%.4f</b> &middot; credit floor %d pts<br>"
+            "never: %s"
+            % (UNDERLYING, SHORT_OFFSET, WING_OFFSET, WING_WIDTH_POINTS, ENTRY_HM,
+               EXPIRY_WEEKDAY, GATE_VRP, CREDIT_FLOOR_POINTS, ", ".join(NEVER)))
+        _os_edge_html = (
+            "%d trades over 4.99 years (%.1f/yr) &middot; win <b>%.1f%%</b> &middot; PF <b>%.2f</b><br>"
+            "net <b>Rs %s</b>/lot/yr &middot; avg credit %.1f pts<br>"
+            "drawdown Rs %s/lot <i>realised</i> &middot; Rs %s/lot <i>theoretical max</i><br>"
+            "margin Rs %s/lot &middot; lot size %d"
+            % (TRADES, TRADES_PER_YEAR, 100 * WIN_RATE, PROFIT_FACTOR,
+               format(NET_PER_LOT_YEAR_INR, ","), AVG_CREDIT_POINTS,
+               format(REALISED_DD_PER_LOT_INR, ","), format(THEORETICAL_MAX_LOSS_PER_LOT_INR, ","),
+               format(MARGIN_PER_LOT_INR, ","), LOT_SIZE))
+        _os_notproven_html = "".join("<li>%s</li>" % html.escape(x) for x in NOT_PROVEN)
+    else:
+        _os_rows = ""
+        _os_lots = 0.0
+        _os_spec_html = "<span class=\"neg\">locked spec failed to import: %s</span>" % html.escape(_spec_err)
+        _os_edge_html = ""
+        _os_notproven_html = ""
+    if _os_active:
+        _os_active_txt = "%s &middot; %s lots &middot; expiry %s &middot; credit Rs %s" % (
+            html.escape(str(_os_active.get("family"))), _os_active.get("lots"),
+            html.escape(str(_os_active.get("expiry"))),
+            format(float(_os_active.get("credit_inr") or 0), ",.0f"))
+    else:
+        _os_active_txt = "flat &mdash; no open structure"
+
     # backtest panel values
     if backtest_report:
         bt_trades = backtest_report.get("trades", 0)
@@ -207,6 +286,7 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
   <button class="tab" data-tab="backtest">Backtest</button>
   <button class="tab" data-tab="sweep">Stop-Loss Sweep</button>
   <button class="tab" data-tab="trades">Trades</button>
+  <button class="tab" data-tab="optsell">Option Selling</button>
   <button class="tab" data-tab="system">System</button>
 </nav>
 
@@ -239,6 +319,53 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
         Avg hold <b>{pfolio.get('avg_hold_minutes', '-')}m</b> &nbsp;·&nbsp; W/L <b>{state.get('wins', 0)}/{state.get('losses', 0)}</b>
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ============ Option Selling (LOCKED SPEC) ============ -->
+<section id="tab-optsell" class="tabpanel">
+  <div class="kpis">
+    {_kpi("MODE", _os_mode, "reports/mode_optsell.json (absent = PAPER)", 'var(--green)' if _os_mode == "LIVE" else 'var(--yellow)')}
+    {_kpi("LIVE GATE", "OPEN" if (_os_live_allowed and _os_allow_env) else "CLOSED", "OS_LIVE_ALLOWED + OPTSELL_ALLOW_LIVE", 'var(--red)' if (_os_live_allowed and _os_allow_env) else 'var(--cyan)')}
+    {_kpi("NET / LOT / YR", f"Rs {NET_PER_LOT_YEAR_INR:,}" if _spec_ok else "-", f"{TRADES} trades, 4.99 yrs" if _spec_ok else "", 'var(--green)')}
+    {_kpi("LOTS @ CAPITAL", f"{_os_lots:.1f}", f"Rs {_os_cap:,.0f} on the theory basis", 'var(--purple, #a78bfa)')}
+    {_kpi("TODAY", f"{float(_os_state.get('realized_pnl_today') or 0):+,.0f}", f"{int(_os_state.get('trades_today') or 0)} trades", 'var(--yellow)')}
+    {_kpi("NET TOTAL", f"{float(_os_state.get('realized_pnl_total') or 0):+,.0f}", "paper P&L to date", 'var(--green)' if float(_os_state.get('realized_pnl_total') or 0) >= 0 else 'var(--red)')}
+  </div>
+
+  <div class="panel" style="margin-top:14px">
+    <h2>Locked configuration &mdash; {LOCKED_DATE if _spec_ok else "unavailable"}</h2>
+    <div class="small" style="line-height:1.9">{_os_spec_html}</div>
+  </div>
+
+  <div class="cols">
+    <div class="panel">
+      <h2>Active structure</h2>
+      <div class="small" style="line-height:1.9">{_os_active_txt}</div>
+    </div>
+    <div class="panel">
+      <h2>Measured edge (per lot, 65 units)</h2>
+      <div class="small" style="line-height:1.9">{_os_edge_html}</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Sizing &mdash; off the THEORETICAL max loss, not the realised drawdown</h2>
+    <table>
+      <tr><th>Capital</th><th>Lots</th><th>Margin used</th><th>Drawdown budget</th><th>Expected / yr</th></tr>
+      {_os_rows}
+    </table>
+    <div class="small muted" style="margin-top:8px">
+      No trade in the sample has ever hit full max loss &mdash; worst was 197 pts against a
+      370-pt maximum. Sizing off the realised drawdown would give 15.5 lots on Rs 10L and
+      double the position; that is the number you graduate to after a live record, not the
+      number you start with.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>What is NOT proven</h2>
+    <ul class="small" style="line-height:1.9">{_os_notproven_html}</ul>
   </div>
 </section>
 

@@ -19,6 +19,21 @@ data/*.csv
 # downloadable Dhan option-chain history (regenerate: python -m mlab.options_hist)
 data/options/
 
+# rollingoption history pulled years at a time -- 1.7 GB, fully regenerable:
+#   python tools/fetch_index_history.py --underlying NIFTY  --from 2021-09-01
+#   python tools/fetch_index_history.py --underlying SENSEX --from 2023-01-01
+# NOTE: tools/dhan_bulk_history.py used to write a permanent ".csv.empty" sentinel on
+# a TRANSIENT empty response, silently discarding 522 of 9,760 NIFTY series (5.3%).
+# That is fixed (verified_empty + retry). Recover old sentinels with:
+#   python tools/recover_empty_series.py
+data/dhan_hist_long/
+data/dhan_sensex_long/
+data/dhan_finnifty_long/
+data/dhan_history/
+data/futures/
+data/athena.log
+*.csv.empty
+
 # Dhan scrip master (24 MB, regenerable: proxy.commodity_data.download_mcx_master)
 data/scrip_master/
 

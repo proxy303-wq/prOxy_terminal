@@ -34,7 +34,7 @@ from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 
 from proxy.athena_env import load_athena_env
-from proxy.scheduler import is_trading_day, now_ist
+from proxy.scheduler import is_trading_day, holiday_name, next_market_open, now_ist
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -638,16 +638,14 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
 
 
 def seconds_until_next_open():
+    # Delegates to the scheduler so weekends AND NSE holidays are skipped
+    # (this used to repeat the weekday-only rule and would count down to a
+    # holiday's 09:15 as if the market were about to open).
     now = now_ist()
-    for offset in range(8):
-        d = now.date() + timedelta(days=offset)
-        if d.weekday() >= 5:
-            continue
-        open_dt = datetime.combine(d, dt_time(9, 15), tzinfo=IST)
-        delta = (open_dt - now).total_seconds()
-        if delta > 0:
-            return delta
-    return 3600.0
+    nxt = next_market_open(now)
+    if nxt is None:
+        return 3600.0
+    return max((nxt - now).total_seconds(), 0.0)
 
 
 def ensure_token(notifier):
@@ -939,8 +937,13 @@ def main(variant=None):
                 now_min = int(now.strftime("%H%M"))
                 if wait > 3600 * 2 and (now_min % 30 == 0):
                     hours = wait / 3600
+                    # Name the reason we are idle: a closed market is a
+                    # holiday (or a weekend), never a silently skipped session.
+                    _hol = holiday_name(now)
+                    _why = (f"market holiday: {_hol}" if _hol
+                            else f"last run: {last_run or 'none'}")
                     notifier.log(
-                        f"Idle - next market open in {hours:.1f}h (last run: {last_run or 'none'})",
+                        f"Idle - next market open in {hours:.1f}h ({_why})",
                         "INFO",
                     )
                 time.sleep(SLEEP_SECONDS)

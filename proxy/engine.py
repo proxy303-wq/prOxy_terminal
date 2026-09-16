@@ -900,8 +900,19 @@ class PaperEngine:
         """
         delay = int(getattr(self.cfg, "REVERSE_EXIT_DELAY_BARS", 0) or 0)
         held = int(t.get("bars_held") or 0)
+        # A flip is judged against the position's EXPOSURE, never its order
+        # side.  A bought PUT (direction LONG, option_type PE) is BEARISH, so a
+        # SELL signal AGREES with it; comparing the signal to t["direction"]
+        # treated every bought put as if it were a long call, so each long put
+        # "reversed" on the very signal that opened it.
+        # 2026-09-16 09:50: exit a PE at market (-7,745 INR) and re-buy a PE on
+        # the same bar, off the same bearish signal.  All 9 REVERSE_SIGNAL exits
+        # in the trade DB are PEs (-30,196 INR).
+        _ot = str(t.get("option_type") or "CE").upper()
+        _is_long = (t["direction"] == "LONG")
+        _exposure_bull = (_is_long == (_ot == "CE"))
         flip = (signal is not None and signal.direction not in (None, "WAIT")
-                and (signal.direction == "BUY") != (t["direction"] == "LONG")
+                and (signal.direction == "BUY") != _exposure_bull
                 and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT)
         if delay <= 0:
             return (prem * slip, "REVERSE_SIGNAL") if flip else (None, None)

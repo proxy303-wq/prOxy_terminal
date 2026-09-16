@@ -34,16 +34,19 @@ from datetime import datetime, timedelta, time as dt_time
 from zoneinfo import ZoneInfo
 
 from proxy.athena_env import load_athena_env
-from proxy.scheduler import is_trading_day, now_ist
+from proxy.scheduler import is_trading_day, holiday_name, next_market_open, now_ist
 
 IST = ZoneInfo("Asia/Kolkata")
 
 SLEEP_SECONDS = 60
 NO_BAR_FALLBACK_SECONDS = 90       # no live bars -> synthetic replay
-CHAIN_REFRESH_SECONDS = 1800       # re-fetch the option chain every 30 min so
+CHAIN_REFRESH_SECONDS = 300        # re-fetch the option chain every 5 min so
                                    # strike selection / IV / expiry stay fresh
                                    # (2026-08-31: a once-per-session chain gave
-                                   # stale spot/premiums that mis-priced entries)
+                                   # stale spot/premiums that mis-priced entries;
+                                   # 2026-09-16: 30 min was still too coarse - a
+                                   # first-touch strike fell back to a chain price
+                                   # 6-13% away from the live premium)
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "reports", "worker_state.json"
 )
@@ -333,6 +336,10 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
         cfg, broker=broker, tracker=tracker, notifier=notifier,
         trade_date=trade_date, capital=capital,
     )
+    # Stamp the REAL fill moments (entry_time/exit_time are bar labels, and a
+    # bar is labelled by its start while the engine acts on its close, so the
+    # dashboard showed times one bar - 5 min - before the fills).
+    engine.set_fill_clock(now_ist)
 
     # ---- POSITION RECONCILE (live safety) ----
     # Never trade on a broker book the engine did NOT open.  A mid-session
@@ -452,7 +459,32 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                     return None
 
             engine.set_option_ltp_source(_option_ltp_source)
-            engine.set_entry_ltp_fn(lambda sid: (opt_feed.subscribe_option(sid), opt_feed.live_ltps.get(str(sid)))[1])
+
+            def _entry_ltp(sid, _wait=8.0):
+                """The traded option's LTP AT THE MOMENT OF ENTRY.
+
+                subscribe_option() only ADDS the sid to the poll set - the first
+                price arrives with the next poll (~1-2 s).  The old one-liner
+                read live_ltps in the same breath, got None on a first-touch
+                strike, and left the engine to book the plan's chain snapshot,
+                which is up to CHAIN_REFRESH_SECONDS old (2026-09-15: entries
+                recorded 6-13% under the live premium, which flattered every
+                LONG).  Wait for the poll instead, with a bounded deadline so a
+                dead feed can never hang the session.
+                """
+                opt_feed.subscribe_option(sid)
+                deadline = time.time() + _wait
+                while time.time() < deadline:
+                    v = opt_feed.live_ltps.get(str(sid))
+                    if v:
+                        return v
+                    time.sleep(0.25)
+                notifier.log(
+                    f"entry LTP for sid {sid} did not arrive within {_wait:.0f}s "
+                    f"- entry falls back to the chain price", "WARN")
+                return None
+
+            engine.set_entry_ltp_fn(_entry_ltp)
             notifier.log("LIVE real-premium exits armed - engine polls the traded option's LTP per bar", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE real-premium exits unavailable ({exc}) - exits use the delta model", "WARN")
@@ -638,16 +670,14 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
 
 
 def seconds_until_next_open():
+    # Delegates to the scheduler so weekends AND NSE holidays are skipped
+    # (this used to repeat the weekday-only rule and would count down to a
+    # holiday's 09:15 as if the market were about to open).
     now = now_ist()
-    for offset in range(8):
-        d = now.date() + timedelta(days=offset)
-        if d.weekday() >= 5:
-            continue
-        open_dt = datetime.combine(d, dt_time(9, 15), tzinfo=IST)
-        delta = (open_dt - now).total_seconds()
-        if delta > 0:
-            return delta
-    return 3600.0
+    nxt = next_market_open(now)
+    if nxt is None:
+        return 3600.0
+    return max((nxt - now).total_seconds(), 0.0)
 
 
 def ensure_token(notifier):
@@ -939,8 +969,13 @@ def main(variant=None):
                 now_min = int(now.strftime("%H%M"))
                 if wait > 3600 * 2 and (now_min % 30 == 0):
                     hours = wait / 3600
+                    # Name the reason we are idle: a closed market is a
+                    # holiday (or a weekend), never a silently skipped session.
+                    _hol = holiday_name(now)
+                    _why = (f"market holiday: {_hol}" if _hol
+                            else f"last run: {last_run or 'none'}")
                     notifier.log(
-                        f"Idle - next market open in {hours:.1f}h (last run: {last_run or 'none'})",
+                        f"Idle - next market open in {hours:.1f}h ({_why})",
                         "INFO",
                     )
                 time.sleep(SLEEP_SECONDS)

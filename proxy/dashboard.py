@@ -173,7 +173,7 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     # trade log
     trade_rows = "".join(
         f"""<tr>
-          <td>{html.escape(str(t.get('entry_time', '')))[:16]}</td>
+          <td title="signal bar {html.escape(str(t.get('entry_time', '')))[:16]}">{html.escape(str(t.get('filled_at') or t.get('entry_time', '')))[:19].replace('T', ' ')}</td>
           <td>{html.escape(str(t.get('instrument', '')))}</td>
           <td>{html.escape(str(t.get('direction', '')))}</td>
           <td>{t.get('lots', '')}</td>
@@ -448,7 +448,7 @@ def build_dashboard(snapshot, bars=None, path=DASHBOARD_HTML, title="PrOxy Tradi
     <h2>Trade log</h2>
     <div style="overflow-x:auto">
       <table>
-        <tr><th>Time</th><th>Instrument</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Setup</th><th>P&L</th></tr>
+        <tr><th>Filled (real)</th><th>Instrument</th><th>Side</th><th>Lots</th><th>Entry</th><th>Exit</th><th>Reason</th><th>Setup</th><th>P&L</th></tr>
         {trade_rows}
       </table>
     </div>

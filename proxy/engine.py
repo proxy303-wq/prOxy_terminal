@@ -36,6 +36,20 @@ from .tracker import Tracker
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def _exit_pct_label(kind, entry_premium, fill):
+    """The REAL distance of an exit from the entry, as a signed percentage.
+
+    The reasons used to carry hardcoded strings - "TARGET_HIT (+1%)" on a
+    target that was +2.8% away on 2026-09-16 - which made an honest fill look
+    wrong on the dashboard.
+    """
+    try:
+        move = (float(fill) - float(entry_premium)) / float(entry_premium) * 100.0
+    except Exception:
+        return kind
+    return "%s (%+.2f%%)" % (kind, -abs(move) if kind.startswith("STOP_LOSS") else abs(move))
+
+
 class PaperEngine:
     def __init__(self, cfg, broker=None, tracker=None, notifier=None,
                  trade_date=None, max_history=160, capital=None):
@@ -94,6 +108,13 @@ class PaperEngine:
         except Exception:
             pass
         self.cooldown_until = None    # bar time; no new entries before this
+        # wall-clock hook for the ACTUAL fill moment (set via set_fill_clock).
+        # entry_time/exit_time are BAR labels, and a bar is labelled by its
+        # start while the engine acts on its close - so in a live session the
+        # recorded times sit one bar (5 min) before the fills.  filled_at /
+        # exit_filled_at carry the real moment; backtests leave the clock
+        # unset and record nothing there.
+        self.fill_clock = None
         # REAL option chain from Dhan (optional): set via set_chain() so
         # entries use live premiums/IV instead of the model estimate
         self.chain = None
@@ -199,6 +220,19 @@ class PaperEngine:
     def set_expiries(self, expiries):
         """Real Dhan expiry list (cached fetch) for expiry-roll entries."""
         self.expiries = list(expiries or []) or None
+
+    def set_fill_clock(self, fn):
+        """Wall clock used to stamp the ACTUAL fill moment (live sessions)."""
+        self.fill_clock = fn
+
+    def _fill_now(self):
+        if self.fill_clock is None:
+            return None
+        try:
+            t = self.fill_clock()
+            return t.isoformat() if hasattr(t, "isoformat") else str(t)
+        except Exception:
+            return None
 
     def set_vix(self, vix_annual):
         """India VIX as a fraction (e.g. 11.07 -> 0.1107) - anchors stops."""
@@ -641,6 +675,9 @@ class PaperEngine:
             prem_high = float(real_bar["high"])
             prem_low = float(real_bar["low"])
             prem_now = float(real_bar["close"])
+            # intrabar OPEN: a bar that gaps through a standing level fills at
+            # the open, not at the level (see the exit rules below)
+            prem_open = float(real_bar.get("open") or prem_now)
             t["premium_source"] = "real_option_bar"
         else:
             if not getattr(self.cfg, "MODEL_PRICING_ENABLED", True):
@@ -677,6 +714,7 @@ class PaperEngine:
                 prem_high, prem_low, prem_now = prem_high * (1.0 - theta_bar), prem_low * (1.0 - theta_bar), prem_now * (1.0 - theta_bar)
             else:
                 prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
+            prem_open = prem_now      # the delta model has no intrabar open
         slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
 
         # ---- PARTIAL PROFIT (Miner Ch 7 / McMillan): book half the position
@@ -741,35 +779,43 @@ class PaperEngine:
             trail_pct = float(getattr(self.cfg, "LOCK_TRAIL_STEP_PCT", 0.002))
 
         if lock_on:
-            prior_peak = t.get("pnl_peak") or entry_premium
+            # ---- NO SAME-BAR HINDSIGHT ----------------------------------
+            # The floor STANDING during this bar comes from the peak carried in
+            # from COMPLETED bars only.  Until 2026-09-16 this block folded this
+            # bar's own high into the peak and then tested this bar's low
+            # against the resulting floor in the same pass, so the exit printed
+            # 0.2% under the best tick of the very bar being evaluated
+            # (LOCK_TRAIL_STEP_PCT) - a fill that cannot be obtained.  On
+            # 2026-09-15 that made 19 of 19 NIFTY exits book ABOVE the option's
+            # live LTP, median +2.4%, worst +11.6%.  The peak is updated at the
+            # END of this method, for the NEXT bar (see below).
+            prior_peak = float(t.get("pnl_peak") or entry_premium)
             if is_long:
-                peak = max(prior_peak, prem_now, prem_high)
-                peak_pct = (peak - entry_premium) / entry_premium
+                prior_peak_pct = (prior_peak - entry_premium) / entry_premium
             else:
-                peak = min(prior_peak, prem_now, prem_low)
-                peak_pct = (entry_premium - peak) / entry_premium
-            t["pnl_peak"] = peak
-            t["peak_pct"] = peak_pct
+                prior_peak_pct = (entry_premium - prior_peak) / entry_premium
             # armed status is from the START of this bar (conservative):
             # an unarmed trade's stop is checked first; an armed trade has a
             # standing lock-floor GTT order that fires before the stop.
             armed = bool(t.get("lock_armed", False))
-            if not armed and peak_pct >= arm_pct:
+            if not armed and prior_peak_pct >= arm_pct:
                 t["lock_armed"] = True
                 armed = True
             if armed:
                 floor = floor_pct
                 if getattr(self.cfg, "LOCK_TRAIL_ENABLED", True):
-                    floor = max(floor, peak_pct - trail_pct)
+                    floor = max(floor, prior_peak_pct - trail_pct)
                 t["lock_floor_pct"] = floor
                 if is_long:
                     floor_prem = entry_premium * (1.0 + floor)
                     if prem_low <= floor_prem:
-                        return floor_prem, "LOCK_PROFIT"
+                        # the resting order fills at the floor - or at the
+                        # bar's open when the bar gapped straight through it
+                        return min(floor_prem, prem_open), "LOCK_PROFIT"
                 else:
                     floor_prem = entry_premium * (1.0 - floor)
                     if prem_high >= floor_prem:
-                        return floor_prem, "LOCK_PROFIT"
+                        return max(floor_prem, prem_open), "LOCK_PROFIT"
                 if getattr(self.cfg, "TRAIL_SL_TO_ENTRY", True):
                     stop_p = entry_premium  # breakeven trail
 
@@ -789,14 +835,21 @@ class PaperEngine:
         no_stop = bool(getattr(self.cfg, "NO_STOP_LOSS", False))
         if is_long:
             if not no_stop and prem_low <= stop_p:
-                return stop_p, "STOP_LOSS_HIT (-0.5%)"
+                # a bar that gapped through the stop fills at its OPEN
+                _fill = min(stop_p, prem_open)
+                return _fill, _exit_pct_label("STOP_LOSS_HIT", entry_premium, _fill)
             if prem_high >= target_p:
-                return target_p, "TARGET_HIT (+1%)"
+                # a limit at the target fills at the target - or better when
+                # the bar opened above it
+                _fill = max(target_p, prem_open)
+                return _fill, _exit_pct_label("TARGET_HIT", entry_premium, _fill)
         else:
             if not no_stop and prem_high >= stop_p:
-                return stop_p, "STOP_LOSS_HIT (-0.5%)"
+                _fill = max(stop_p, prem_open)
+                return _fill, _exit_pct_label("STOP_LOSS_HIT", entry_premium, _fill)
             if prem_low <= target_p:
-                return target_p, "TARGET_HIT (+1%)"
+                _fill = min(target_p, prem_open)
+                return _fill, _exit_pct_label("TARGET_HIT", entry_premium, _fill)
 
         # time stop
         if self._bar_time(bar) >= FORCE_EXIT_TIME:
@@ -807,6 +860,19 @@ class PaperEngine:
         px, why = self._reverse_exit(t, signal, prem_now, slip)
         if px is not None:
             return px, why
+
+        # ---- carry the peak forward for the NEXT bar ---------------------
+        # This is the ONLY place this bar's extreme may enter the peak: the
+        # floor the next bar tests against is set from here, never from the bar
+        # that is still being evaluated.
+        if lock_on:
+            if is_long:
+                _peak = max(prior_peak, prem_now, prem_high)
+                t["peak_pct"] = (_peak - entry_premium) / entry_premium
+            else:
+                _peak = min(prior_peak, prem_now, prem_low)
+                t["peak_pct"] = (entry_premium - _peak) / entry_premium
+            t["pnl_peak"] = _peak
 
         return None, None
 
@@ -834,8 +900,19 @@ class PaperEngine:
         """
         delay = int(getattr(self.cfg, "REVERSE_EXIT_DELAY_BARS", 0) or 0)
         held = int(t.get("bars_held") or 0)
+        # A flip is judged against the position's EXPOSURE, never its order
+        # side.  A bought PUT (direction LONG, option_type PE) is BEARISH, so a
+        # SELL signal AGREES with it; comparing the signal to t["direction"]
+        # treated every bought put as if it were a long call, so each long put
+        # "reversed" on the very signal that opened it.
+        # 2026-09-16 09:50: exit a PE at market (-7,745 INR) and re-buy a PE on
+        # the same bar, off the same bearish signal.  All 9 REVERSE_SIGNAL exits
+        # in the trade DB are PEs (-30,196 INR).
+        _ot = str(t.get("option_type") or "CE").upper()
+        _is_long = (t["direction"] == "LONG")
+        _exposure_bull = (_is_long == (_ot == "CE"))
         flip = (signal is not None and signal.direction not in (None, "WAIT")
-                and (signal.direction == "BUY") != (t["direction"] == "LONG")
+                and (signal.direction == "BUY") != _exposure_bull
                 and signal.confidence >= self.cfg.MIN_CONFIDENCE_PCT)
         if delay <= 0:
             return (prem * slip, "REVERSE_SIGNAL") if flip else (None, None)
@@ -947,10 +1024,20 @@ class PaperEngine:
             "exit_reason": exit_reason,
             "premium_source": t.get("premium_source", "delta_model"),
             "exit_time": bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"]),
+            "exit_filled_at": self._fill_now(),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl / max(t["entry_premium"] * t["quantity"], 1e-9) * 100.0, 3),
             "paper_spread_cost": round(_paper_sp, 2) if _paper_sp else 0.0,
         }
+        # The daily P&L drives the day's loss limit and the halt that follows
+        # it, so it must be applied BEFORE the tracker persists the state
+        # (add_trade -> save_state).  Two bugs lived here: the call used to sit
+        # inside the DIE-autopsy except block (so it only ran when the autopsy
+        # raised), and once moved to top level it still ran AFTER the save, so
+        # the stored day P&L lagged one trade and the halt flag was never
+        # persisted - a mid-session restart then resurrected trading on a day
+        # that had already breached its 1% limit (2026-09-16).
+        apply_daily_pnl(self.state, self.cfg, pnl)
         self.tracker.add_trade(record, self.state, self.cfg)
 # ATHENA DIE autopsy (docs/DIE.md): keep every trade story for the learning loop
         if t.get("die_band") or t.get("die_note"):
@@ -963,7 +1050,6 @@ class PaperEngine:
                 AutopsyLog().record(rec2)
             except Exception:
                 pass
-                apply_daily_pnl(self.state, self.cfg, pnl)
         # MASTER ACCOUNT RISK GOVERNOR (item 8): report the realised P&L to
         # the shared account file and free this engine's open-risk slot.
         try:
@@ -971,9 +1057,11 @@ class PaperEngine:
             record_realized(self.cfg, pnl, release_sl_inr=t.get("sl_total"))
         except Exception:
             pass
-        # cooldown after a stop-loss: no immediate re-entry into the same chop
-
-        if "STOP_LOSS_HIT" in exit_reason and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
+        # cooldown after a LOSS - any loss, not just a stop-out.  Measured on
+        # the recorded book: the trade that follows a losing trade wins 52% of
+        # the time (against an ~85% baseline) and averages -154 INR.  2026-09-16:
+        # a -7,745 reverse exit was followed 5 minutes later by a -17,259 loss.
+        if float(pnl) < 0 and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
             bars = int(self.cfg.LOSS_COOLDOWN_BARS)
             self.cooldown_until = bar["time"] + timedelta(minutes=BAR_MINUTES * bars)
         self.active_trade = None
@@ -1523,6 +1611,9 @@ class PaperEngine:
                                 self.state["target_comeback_trades"] = int(self.state.get("target_comeback_trades", 0)) + 1
                             self.active_trade = plan
                             self.active_trade["entry_time"] = bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"])
+                            # the REAL moment of the fill (entry_time is the
+                            # signal bar's label, one bar earlier)
+                            self.active_trade["filled_at"] = self._fill_now()
                             self.active_trade["entry_premium"] = round(self.active_trade["entry_premium"], 2)
                             events["entered"] = dict(self.active_trade)
                             # strike-once bookkeeping: this strike is now used for the day

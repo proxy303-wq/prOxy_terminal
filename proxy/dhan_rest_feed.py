@@ -46,6 +46,15 @@ _API = "https://api.dhan.co/v2"
 _POLL_INTERVAL = 1.2          # seconds; Dhan REST marketfeed limit = 1 req/s
 _BAR_SECONDS = 300
 
+# Bad-tick screen for polled option prints.  A print further than JUMP_PCT from
+# the last ACCEPTED price is held back and accepted only when the next print
+# confirms it (within CONFIRM_PCT), so a genuine fast move costs exactly one
+# dropped print while an isolated freak print can no longer set a bar's high -
+# and a bar's high is an exit price (2026-09-15: a single 353.25 print on a
+# 23450 PE that was trading ~315 became the bar high and booked a +11.6% exit).
+_OPTION_JUMP_PCT = 0.05
+_OPTION_CONFIRM_PCT = 0.02
+
 
 def _post(path, payload, client_id, access_token, timeout=15):
     req = urllib.request.Request(
@@ -109,7 +118,8 @@ class DhanRestFeed:
 
     def __init__(self, client_id=None, access_token=None, security_id=NIFTY_INDEX_ID,
                  poll_interval=_POLL_INTERVAL, timeout=30, max_idle_seconds=300,
-                 notify=print, option_only=False):
+                 notify=print, option_only=False, option_jump_pct=_OPTION_JUMP_PCT,
+                 option_confirm_pct=_OPTION_CONFIRM_PCT):
         """option_only=True: poll ONLY the subscribed NSE_FNO options (no
         index defaults) and skip the request entirely while nothing is
         subscribed - the dedicated option-LTP feed used beside a WebSocket
@@ -158,6 +168,12 @@ class DhanRestFeed:
                 NIFTY_INDEX_ID, BANKNIFTY_INDEX_ID):
             self.instruments.append(("IDX_I", int(self.security_id)))
         self.live_ltps = {}           # sid (str) -> last price
+        # bad-tick screen state (see _screen_option_price)
+        self.option_jump_pct = float(option_jump_pct)
+        self.option_confirm_pct = float(option_confirm_pct)
+        self._option_last_ok = {}     # sid(str) -> last ACCEPTED price
+        self._option_prev_print = {}  # sid(str) -> last raw print, accepted or not
+        self.option_dropped_prints = {}   # sid(str) -> rejected print count
         # REAL option LTP bars (NSE_FNO): polled continuously, finalised
         # per 5-min bucket so the engine can trigger exits on the ACTUAL
         # option premium instead of the delta-premium model.
@@ -234,6 +250,39 @@ class DhanRestFeed:
             acc["low"] = min(acc["low"], price)
             acc["close"] = price
 
+    def _screen_option_price(self, sid, price):
+        """Screen one polled option LTP.  Returns the price, or None to drop it.
+
+        The REST marketfeed occasionally returns a single freak print.  A bar's
+        high/low are max()/min() over the accepted prints, so one such print
+        became the bar's high - and the bar's high IS an exit price.
+
+        Rule: accept anything within JUMP_PCT of the last accepted price.  A
+        bigger jump is held back and accepted only when the NEXT print lands
+        within CONFIRM_PCT of it (two prints agreeing = a real move).  A genuine
+        fast move therefore costs exactly one dropped print, while an isolated
+        spike never touches the bar (2026-09-15: a 353.25 print on a 23450 PE
+        trading ~315 booked a +11.6% exit that the option never offered).
+        """
+        last = self._option_last_ok.get(sid)
+        if last is None or last <= 0:
+            self._option_last_ok[sid] = price
+            self._option_prev_print[sid] = price
+            return price
+        prev = self._option_prev_print.get(sid, last)
+        self._option_prev_print[sid] = price
+        if abs(price - last) / last <= self.option_jump_pct:
+            self._option_last_ok[sid] = price
+            return price
+        if prev > 0 and abs(price - prev) / prev <= self.option_confirm_pct:
+            self._option_last_ok[sid] = price   # two prints agree: real move
+            return price
+        self.option_dropped_prints[sid] = self.option_dropped_prints.get(sid, 0) + 1
+        self.notify(
+            f"option tick dropped (sid {sid}): {price} vs last {last:.2f} "
+            f"({(price / last - 1) * 100:+.1f}%) - unconfirmed spike")
+        return None
+
     def option_bar(self, security_id, bar_time=None):
         """The most recent COMPLETED 5-min bar for a subscribed option
         (NSE_FNO security id), or None when the poller has no bar yet.
@@ -284,10 +333,21 @@ class DhanRestFeed:
                     # option_bar_history (the index tick is enqueued after
                     # this pass, so no consumer can see it before the option
                     # bar is finalised)
+                    _accepted = {}
                     for (seg, sid), price in prices.items():
                         if seg == "NSE_FNO" and price:
-                            self._accumulate_option(str(sid), float(price), now)
+                            _ok = self._screen_option_price(str(sid), float(price))
+                            if _ok is None:
+                                continue
+                            _accepted[str(sid)] = _ok
+                            self._accumulate_option(str(sid), _ok, now)
                     for (seg, sid), price in prices.items():
+                        if seg == "NSE_FNO":
+                            # never publish an unscreened option print: the
+                            # engine reads live_ltps for its ENTRY price
+                            price = _accepted.get(str(sid))
+                            if price is None:
+                                continue
                         self.live_ltps[sid] = price
                         self._ticks.put({"ltp": price, "tick_time": now, "security_id": sid})
                 else:

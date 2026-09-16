@@ -164,6 +164,11 @@ def load_trades():
         trades["entry"] = trades["entry_premium"]
     if "exit_premium" in trades.columns and "exit" not in trades.columns:
         trades["exit"] = trades["exit_premium"]
+    # real fill moments (entry_time/exit_time are bar labels, one bar earlier)
+    if "filled_at" in trades.columns and "filled" not in trades.columns:
+        trades["filled"] = trades["filled_at"]
+    if "exit_filled_at" in trades.columns and "exit_filled" not in trades.columns:
+        trades["exit_filled"] = trades["exit_filled_at"]
     if "stop_premium" in trades.columns and "stop" not in trades.columns:
         trades["stop"] = trades["stop_premium"]
     if "sl_per_lot" not in trades.columns and "stop" in trades.columns and "quantity" in trades.columns:

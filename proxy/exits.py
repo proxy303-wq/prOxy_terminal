@@ -20,6 +20,16 @@ the ambiguity window in which one bar spans both levels.
 """
 
 
+def _exit_pct_label(kind, entry_premium, fill):
+    """The REAL distance of an exit from the entry, as a signed percentage
+    (the reasons used to hardcode "+1%" / "-0.5%")."""
+    try:
+        move = (float(fill) - float(entry_premium)) / float(entry_premium) * 100.0
+    except Exception:
+        return kind
+    return "%s (%+.2f%%)" % (kind, -abs(move) if kind.startswith("STOP_LOSS") else abs(move))
+
+
 def check_exits(trade, prem_high, prem_low, prem_now, cfg):
     """
     Evaluate GTT levels for one bar.  Mutates trade (pnl_peak, lock_armed,
@@ -97,13 +107,13 @@ def check_exits(trade, prem_high, prem_low, prem_now, cfg):
 
     if is_long:
         if not no_stop and prem_low <= stop_p:
-            return stop_p, "STOP_LOSS_HIT (-0.5%)"
+            return stop_p, _exit_pct_label("STOP_LOSS_HIT", entry_premium, stop_p)
         if prem_high >= target_p:
-            return target_p, "TARGET_HIT (+1%)"
+            return target_p, _exit_pct_label("TARGET_HIT", entry_premium, target_p)
     else:
         if not no_stop and prem_high >= stop_p:
-            return stop_p, "STOP_LOSS_HIT (-0.5%)"
+            return stop_p, _exit_pct_label("STOP_LOSS_HIT", entry_premium, stop_p)
         if prem_low <= target_p:
-            return target_p, "TARGET_HIT (+1%)"
+            return target_p, _exit_pct_label("TARGET_HIT", entry_premium, target_p)
 
     return None, None

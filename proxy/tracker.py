@@ -43,7 +43,8 @@ class Tracker:
                 target_premium REAL, entry_spot REAL, entry_time TEXT,
                 exit_time TEXT, exit_reason TEXT, setup_type TEXT,
                 confidence REAL, trend TEXT, reason TEXT, pnl REAL, pnl_pct REAL,
-                premium_source TEXT
+                premium_source TEXT,
+                filled_at TEXT, exit_filled_at TEXT
             )
         """)
         conn.execute("""
@@ -63,6 +64,14 @@ class Tracker:
             conn.commit()
         except Exception:
             pass
+        # migration: real fill moments (2026-09-16) - entry_time/exit_time are
+        # bar LABELS (one bar before the fill)
+        for _col in ("filled_at", "exit_filled_at"):
+            try:
+                conn.execute("ALTER TABLE trades ADD COLUMN %s TEXT" % _col)
+                conn.commit()
+            except Exception:
+                pass
         conn.commit()
         conn.close()
 
@@ -102,8 +111,8 @@ class Tracker:
                lots, quantity, entry_premium, exit_premium, stop_premium,
                target_premium, entry_spot, entry_time, exit_time, exit_reason,
                setup_type, confidence, trend, reason, pnl, pnl_pct,
-               premium_source)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               premium_source, filled_at, exit_filled_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 datetime.now(IST).isoformat(),
                 record.get("instrument"), record.get("direction"),
@@ -117,6 +126,7 @@ class Tracker:
                 record.get("trend"), record.get("reason"),
                 record.get("pnl"), record.get("pnl_pct"),
                 record.get("premium_source", "delta_model"),
+                record.get("filled_at"), record.get("exit_filled_at"),
             ),
         )
         conn.commit()

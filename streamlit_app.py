@@ -685,6 +685,9 @@ elif page == "Trading":
             "pnl",
             "win",
             "exit_reason",
+            # the REAL fill moments; timestamp/entry_time are signal-bar labels
+            "filled",
+            "exit_filled",
         ]
         visible = [
             column

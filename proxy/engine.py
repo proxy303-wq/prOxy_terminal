@@ -36,6 +36,20 @@ from .tracker import Tracker
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def _exit_pct_label(kind, entry_premium, fill):
+    """The REAL distance of an exit from the entry, as a signed percentage.
+
+    The reasons used to carry hardcoded strings - "TARGET_HIT (+1%)" on a
+    target that was +2.8% away on 2026-09-16 - which made an honest fill look
+    wrong on the dashboard.
+    """
+    try:
+        move = (float(fill) - float(entry_premium)) / float(entry_premium) * 100.0
+    except Exception:
+        return kind
+    return "%s (%+.2f%%)" % (kind, -abs(move) if kind.startswith("STOP_LOSS") else abs(move))
+
+
 class PaperEngine:
     def __init__(self, cfg, broker=None, tracker=None, notifier=None,
                  trade_date=None, max_history=160, capital=None):
@@ -94,6 +108,13 @@ class PaperEngine:
         except Exception:
             pass
         self.cooldown_until = None    # bar time; no new entries before this
+        # wall-clock hook for the ACTUAL fill moment (set via set_fill_clock).
+        # entry_time/exit_time are BAR labels, and a bar is labelled by its
+        # start while the engine acts on its close - so in a live session the
+        # recorded times sit one bar (5 min) before the fills.  filled_at /
+        # exit_filled_at carry the real moment; backtests leave the clock
+        # unset and record nothing there.
+        self.fill_clock = None
         # REAL option chain from Dhan (optional): set via set_chain() so
         # entries use live premiums/IV instead of the model estimate
         self.chain = None
@@ -199,6 +220,19 @@ class PaperEngine:
     def set_expiries(self, expiries):
         """Real Dhan expiry list (cached fetch) for expiry-roll entries."""
         self.expiries = list(expiries or []) or None
+
+    def set_fill_clock(self, fn):
+        """Wall clock used to stamp the ACTUAL fill moment (live sessions)."""
+        self.fill_clock = fn
+
+    def _fill_now(self):
+        if self.fill_clock is None:
+            return None
+        try:
+            t = self.fill_clock()
+            return t.isoformat() if hasattr(t, "isoformat") else str(t)
+        except Exception:
+            return None
 
     def set_vix(self, vix_annual):
         """India VIX as a fraction (e.g. 11.07 -> 0.1107) - anchors stops."""
@@ -802,16 +836,20 @@ class PaperEngine:
         if is_long:
             if not no_stop and prem_low <= stop_p:
                 # a bar that gapped through the stop fills at its OPEN
-                return min(stop_p, prem_open), "STOP_LOSS_HIT (-0.5%)"
+                _fill = min(stop_p, prem_open)
+                return _fill, _exit_pct_label("STOP_LOSS_HIT", entry_premium, _fill)
             if prem_high >= target_p:
                 # a limit at the target fills at the target - or better when
                 # the bar opened above it
-                return max(target_p, prem_open), "TARGET_HIT (+1%)"
+                _fill = max(target_p, prem_open)
+                return _fill, _exit_pct_label("TARGET_HIT", entry_premium, _fill)
         else:
             if not no_stop and prem_high >= stop_p:
-                return max(stop_p, prem_open), "STOP_LOSS_HIT (-0.5%)"
+                _fill = max(stop_p, prem_open)
+                return _fill, _exit_pct_label("STOP_LOSS_HIT", entry_premium, _fill)
             if prem_low <= target_p:
-                return min(target_p, prem_open), "TARGET_HIT (+1%)"
+                _fill = min(target_p, prem_open)
+                return _fill, _exit_pct_label("TARGET_HIT", entry_premium, _fill)
 
         # time stop
         if self._bar_time(bar) >= FORCE_EXIT_TIME:
@@ -975,6 +1013,7 @@ class PaperEngine:
             "exit_reason": exit_reason,
             "premium_source": t.get("premium_source", "delta_model"),
             "exit_time": bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"]),
+            "exit_filled_at": self._fill_now(),
             "pnl": round(pnl, 2),
             "pnl_pct": round(pnl / max(t["entry_premium"] * t["quantity"], 1e-9) * 100.0, 3),
             "paper_spread_cost": round(_paper_sp, 2) if _paper_sp else 0.0,
@@ -1551,6 +1590,9 @@ class PaperEngine:
                                 self.state["target_comeback_trades"] = int(self.state.get("target_comeback_trades", 0)) + 1
                             self.active_trade = plan
                             self.active_trade["entry_time"] = bar["time"].isoformat() if hasattr(bar["time"], "isoformat") else str(bar["time"])
+                            # the REAL moment of the fill (entry_time is the
+                            # signal bar's label, one bar earlier)
+                            self.active_trade["filled_at"] = self._fill_now()
                             self.active_trade["entry_premium"] = round(self.active_trade["entry_premium"], 2)
                             events["entered"] = dict(self.active_trade)
                             # strike-once bookkeeping: this strike is now used for the day

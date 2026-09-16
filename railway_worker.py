@@ -336,6 +336,10 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
         cfg, broker=broker, tracker=tracker, notifier=notifier,
         trade_date=trade_date, capital=capital,
     )
+    # Stamp the REAL fill moments (entry_time/exit_time are bar labels, and a
+    # bar is labelled by its start while the engine acts on its close, so the
+    # dashboard showed times one bar - 5 min - before the fills).
+    engine.set_fill_clock(now_ist)
 
     # ---- POSITION RECONCILE (live safety) ----
     # Never trade on a broker book the engine did NOT open.  A mid-session

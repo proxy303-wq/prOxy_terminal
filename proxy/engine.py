@@ -1030,6 +1030,12 @@ class PaperEngine:
             "paper_spread_cost": round(_paper_sp, 2) if _paper_sp else 0.0,
         }
         self.tracker.add_trade(record, self.state, self.cfg)
+        # The daily P&L drives the day's loss limit and the halt that follows
+        # it.  This call used to sit INSIDE the DIE-autopsy except block below,
+        # so it only ran when the autopsy RAISED: on every normal close the
+        # day's realised P&L never reached the state (the box's copy has it at
+        # top level; the repo copy did not).
+        apply_daily_pnl(self.state, self.cfg, pnl)
 # ATHENA DIE autopsy (docs/DIE.md): keep every trade story for the learning loop
         if t.get("die_band") or t.get("die_note"):
             try:
@@ -1041,7 +1047,6 @@ class PaperEngine:
                 AutopsyLog().record(rec2)
             except Exception:
                 pass
-                apply_daily_pnl(self.state, self.cfg, pnl)
         # MASTER ACCOUNT RISK GOVERNOR (item 8): report the realised P&L to
         # the shared account file and free this engine's open-risk slot.
         try:
@@ -1049,9 +1054,11 @@ class PaperEngine:
             record_realized(self.cfg, pnl, release_sl_inr=t.get("sl_total"))
         except Exception:
             pass
-        # cooldown after a stop-loss: no immediate re-entry into the same chop
-
-        if "STOP_LOSS_HIT" in exit_reason and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
+        # cooldown after a LOSS - any loss, not just a stop-out.  Measured on
+        # the recorded book: the trade that follows a losing trade wins 52% of
+        # the time (against an ~85% baseline) and averages -154 INR.  2026-09-16:
+        # a -7,745 reverse exit was followed 5 minutes later by a -17,259 loss.
+        if float(pnl) < 0 and getattr(self.cfg, "LOSS_COOLDOWN_BARS", 0):
             bars = int(self.cfg.LOSS_COOLDOWN_BARS)
             self.cooldown_until = bar["time"] + timedelta(minutes=BAR_MINUTES * bars)
         self.active_trade = None

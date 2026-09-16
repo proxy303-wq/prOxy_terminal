@@ -98,22 +98,23 @@ class TestExitFillHonesty(unittest.TestCase):
         self.assertAlmostEqual(plan["pnl_peak"], 400.0, places=2)
 
     def test_peak_carries_over_and_lock_fills_at_the_floor(self):
+        # The lock is R-based (2026-09-16): on a 100 entry with R = 10 points it
+        # arms at +10%, never gives back below +10%, and trails 1R behind the
+        # peak.  Bar 1 prints a +12% peak; bar 2 dips to the +10% floor.
         plan = _plan_like(entry=100.0, stop=50.0, target=1000.0)
-        # bar 1 prints the peak (+3%) and arms the lock
-        self.assertIsNone(self._check(plan, {"open": 100.0, "high": 103.0,
-                                             "low": 100.5, "close": 102.5})[0])
-        # bar 2 dips to the standing floor: +3% peak - 1% trail = +2% = 102.0
-        price, reason = self._check(plan, {"open": 102.4, "high": 102.6,
-                                           "low": 101.5, "close": 101.8})
-        self.assertAlmostEqual(price, 102.0, places=2)
+        self.assertIsNone(self._check(plan, {"open": 100.0, "high": 112.0,
+                                             "low": 100.5, "close": 111.0})[0])
+        price, reason = self._check(plan, {"open": 111.5, "high": 113.0,
+                                           "low": 108.0, "close": 109.0})
+        self.assertAlmostEqual(price, 110.0, places=2)
         self.assertTrue(reason.startswith("LOCK_PROFIT"))
 
     def test_gap_through_the_floor_fills_at_the_open(self):
         plan = _plan_like(entry=100.0, stop=50.0, target=1000.0)
-        self._check(plan, {"open": 100.0, "high": 103.0, "low": 100.5, "close": 102.5})
+        self._check(plan, {"open": 100.0, "high": 112.0, "low": 100.5, "close": 111.0})
         price, reason = self._check(plan, {"open": 95.0, "high": 95.5,
                                            "low": 94.0, "close": 94.5})
-        self.assertAlmostEqual(price, 95.0, places=2)   # the open, not 102.0
+        self.assertAlmostEqual(price, 95.0, places=2)   # the open, not 110.0
         self.assertTrue(reason.startswith("LOCK_PROFIT"))
 
     # ---------------- realistic stop / target fills ----------------

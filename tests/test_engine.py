@@ -153,16 +153,17 @@ class TestRealPremiumExits(unittest.TestCase):
         not come from that same bar (see tests/test_exit_pricing.py).  So the
         +3pt peak is printed on bar 1 and the pullback happens on bar 2."""
         plan = _plan_like(target=1000.0)
-        # bar 1: peak +3.0pt - arms the lock for the NEXT bar, no exit here
-        price, reason = self._check(plan, real_bar={"open": 100.0, "high": 103.0,
-                                                    "low": 100.5, "close": 102.5})
+        # R-based lock: arms at +1R (10% of a 100 entry), floor +1R,
+        # trails 1R behind the peak.  Bar 1 prints a +12pt peak.
+        price, reason = self._check(plan, real_bar={"open": 100.0, "high": 112.0,
+                                                    "low": 100.5, "close": 111.0})
         self.assertIsNone(price)
-        self.assertAlmostEqual(plan["pnl_peak"], 103.0, places=2)
-        # bar 2: floor = max(+1pt, 3-1) = +2.0pt (102.0); the real low dips to
-        # 101.5 (below 102.0) -> LOCK_PROFIT at the floor
-        price, reason = self._check(plan, real_bar={"open": 102.4, "high": 102.6,
-                                                    "low": 101.5, "close": 101.8})
-        self.assertAlmostEqual(price, 102.0, places=2)
+        self.assertAlmostEqual(plan["pnl_peak"], 112.0, places=2)
+        # bar 2: floor = max(+10pt, 12-10) = +10pt (110.0); the real low dips to
+        # 108.0 -> LOCK_PROFIT at the floor
+        price, reason = self._check(plan, real_bar={"open": 111.5, "high": 113.0,
+                                                    "low": 108.0, "close": 109.0})
+        self.assertAlmostEqual(price, 110.0, places=2)
         self.assertTrue(reason.startswith("LOCK_PROFIT"))
         self.assertEqual(plan["premium_source"], "real_option_bar")
 
@@ -478,15 +479,15 @@ class TestReverseDelayPolicy(unittest.TestCase):
         plan = _plan_like(target=1000.0)
         self._check(plan=plan, signal=self.flip, real_bar=self.flat_real)  # bar 1
         plan["bars_held"] = 2
-        peak = {"open": 100.0, "high": 103.0, "low": 100.5, "close": 102.5}
+        peak = {"open": 100.0, "high": 112.0, "low": 100.5, "close": 111.0}
         px, why = self._check(plan=plan, signal=self.flip, real_bar=peak)  # bar 2
         self.assertIsNone(px, why)
         plan["bars_held"] = 3
-        dip = {"open": 102.4, "high": 102.6, "low": 101.5, "close": 101.8}
+        dip = {"open": 111.5, "high": 113.0, "low": 108.0, "close": 109.0}
         px, why = self._check(plan=plan, signal=self.flip, real_bar=dip)  # bar 3
         self.assertIsNotNone(px)
         self.assertTrue(why.startswith("LOCK_PROFIT"), why)
-        self.assertAlmostEqual(px, 102.0, places=2)
+        self.assertAlmostEqual(px, 110.0, places=2)   # +12 peak - 1R trail
 
 
 class TestOptionLTPFeed(unittest.TestCase):
@@ -571,7 +572,7 @@ class TestBuyingOnlyAndFillChecks(unittest.TestCase):
             # entry 100, stop 99.5, qty 325; the target is parked far away so
             # the bar under test is decided by the partial (and then the lock)
             plan = _plan_like(target=1000.0)
-            real_bar = {"open": 100.0, "high": 104.0, "low": 102.5, "close": 103.0}
+            real_bar = {"open": 100.0, "high": 112.0, "low": 102.5, "close": 103.0}
             self.engine.active_trade = plan
             self.engine._active_trade = plan
             _bar = {"time": datetime(2026, 8, 28, 10, 0, tzinfo=_IST),
@@ -586,9 +587,9 @@ class TestBuyingOnlyAndFillChecks(unittest.TestCase):
             # bar 2: the peak (+4%) arms the lock, the dip exits the remainder
             price, reason = self.engine._check_exits(
                 _bar, None, 24900.0,
-                real_bar={"open": 103.5, "high": 103.8, "low": 102.6, "close": 102.8})
+                real_bar={"open": 111.5, "high": 113.0, "low": 108.0, "close": 109.0})
             self.assertTrue(reason.startswith("LOCK_PROFIT"), reason)
-            self.assertAlmostEqual(price, 103.0, places=2)   # peak -1% trail
+            self.assertAlmostEqual(price, 110.0, places=2)   # peak +12 - 1R trail
         finally:
             _pcfg.PARTIAL_PROFIT_ENABLED = _old
 

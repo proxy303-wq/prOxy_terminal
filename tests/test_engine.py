@@ -146,13 +146,22 @@ class TestRealPremiumExits(unittest.TestCase):
     def test_real_option_bar_drives_lock_profit(self):
         """Once armed, a real premium dip to the locked floor exits at the
         floor (LOCK_PROFIT) - the standing GTT floor fires before the stop.
-        Points-mode lock (config default): arms at +2pts, floor at +1pt,
-        trail at peak - 1pt."""
-        plan = _plan_like()
-        # peak +3.0pts arms the lock; floor = max(+1pt, 3-1) = +2.0pts
-        # (102.0); the real low dips to 101.5 (below 102.0) -> LOCK_PROFIT
-        real_bar = {"open": 100.0, "high": 103.0, "low": 101.5, "close": 102.2}
-        price, reason = self._check(plan, real_bar=real_bar)
+        Points-mode lock (config default): arms at +1pt, floor at +1pt,
+        trail at peak - 1pt.
+
+        Arming needs a COMPLETED bar: the peak a bar's floor is built from may
+        not come from that same bar (see tests/test_exit_pricing.py).  So the
+        +3pt peak is printed on bar 1 and the pullback happens on bar 2."""
+        plan = _plan_like(target=1000.0)
+        # bar 1: peak +3.0pt - arms the lock for the NEXT bar, no exit here
+        price, reason = self._check(plan, real_bar={"open": 100.0, "high": 103.0,
+                                                    "low": 100.5, "close": 102.5})
+        self.assertIsNone(price)
+        self.assertAlmostEqual(plan["pnl_peak"], 103.0, places=2)
+        # bar 2: floor = max(+1pt, 3-1) = +2.0pt (102.0); the real low dips to
+        # 101.5 (below 102.0) -> LOCK_PROFIT at the floor
+        price, reason = self._check(plan, real_bar={"open": 102.4, "high": 102.6,
+                                                    "low": 101.5, "close": 101.8})
         self.assertAlmostEqual(price, 102.0, places=2)
         self.assertTrue(reason.startswith("LOCK_PROFIT"))
         self.assertEqual(plan["premium_source"], "real_option_bar")
@@ -458,15 +467,26 @@ class TestReverseDelayPolicy(unittest.TestCase):
 
     def test_lock_during_pending_bar_wins(self):
         """Protective levels are checked before the armed reverse: if the
-        position locks during the pending bar it exits LOCK_PROFIT, not on
-        the stale flip (the noise-recovery case the delay is for)."""
-        cfg.REVERSE_EXIT_DELAY_BARS = 1
-        self._check(signal=self.flip, real_bar=self.flat_real)   # armed
-        self.plan["bars_held"] = 2
-        spike = {"open": 101.0, "high": 103.0, "low": 101.5, "close": 102.2}
-        px, why = self._check(signal=self.flip, real_bar=spike)
+        position locks while the exit is pending it exits LOCK_PROFIT, not on
+        the stale flip (the noise-recovery case the delay is for).
+
+        The lock's floor is built from a COMPLETED bar's peak, so the peak is
+        printed on bar 2 and the dip lands on bar 3 - the note the reverse is
+        finally due (delay = 2)."""
+        cfg.REVERSE_EXIT_DELAY_BARS = 2
+        # the target is parked far away: this test is about lock vs reverse
+        plan = _plan_like(target=1000.0)
+        self._check(plan=plan, signal=self.flip, real_bar=self.flat_real)  # bar 1
+        plan["bars_held"] = 2
+        peak = {"open": 100.0, "high": 103.0, "low": 100.5, "close": 102.5}
+        px, why = self._check(plan=plan, signal=self.flip, real_bar=peak)  # bar 2
+        self.assertIsNone(px, why)
+        plan["bars_held"] = 3
+        dip = {"open": 102.4, "high": 102.6, "low": 101.5, "close": 101.8}
+        px, why = self._check(plan=plan, signal=self.flip, real_bar=dip)  # bar 3
         self.assertIsNotNone(px)
         self.assertTrue(why.startswith("LOCK_PROFIT"), why)
+        self.assertAlmostEqual(px, 102.0, places=2)
 
 
 class TestOptionLTPFeed(unittest.TestCase):
@@ -548,7 +568,9 @@ class TestBuyingOnlyAndFillChecks(unittest.TestCase):
         _old = _pcfg.PARTIAL_PROFIT_ENABLED
         _pcfg.PARTIAL_PROFIT_ENABLED = True   # default is OFF (A/B'd negative)
         try:
-            plan = _plan_like()   # entry 100, stop 99.5, target 101, qty 325
+            # entry 100, stop 99.5, qty 325; the target is parked far away so
+            # the bar under test is decided by the partial (and then the lock)
+            plan = _plan_like(target=1000.0)
             real_bar = {"open": 100.0, "high": 104.0, "low": 102.5, "close": 103.0}
             self.engine.active_trade = plan
             self.engine._active_trade = plan
@@ -560,7 +582,13 @@ class TestBuyingOnlyAndFillChecks(unittest.TestCase):
             self.assertEqual(plan["partial_qty"], 162)   # 325 * 0.5
             self.assertEqual(plan["quantity"], 163)      # remainder
             self.assertGreater(plan.get("pnl_booked", 0.0), 0.0)
-            self.assertTrue(reason.startswith("LOCK_PROFIT"))  # rest runs + locks
+            self.assertIsNone(price)                     # bar 1 only books the half
+            # bar 2: the peak (+4%) arms the lock, the dip exits the remainder
+            price, reason = self.engine._check_exits(
+                _bar, None, 24900.0,
+                real_bar={"open": 103.5, "high": 103.8, "low": 102.6, "close": 102.8})
+            self.assertTrue(reason.startswith("LOCK_PROFIT"), reason)
+            self.assertAlmostEqual(price, 103.0, places=2)   # peak -1% trail
         finally:
             _pcfg.PARTIAL_PROFIT_ENABLED = _old
 

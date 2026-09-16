@@ -641,6 +641,9 @@ class PaperEngine:
             prem_high = float(real_bar["high"])
             prem_low = float(real_bar["low"])
             prem_now = float(real_bar["close"])
+            # intrabar OPEN: a bar that gaps through a standing level fills at
+            # the open, not at the level (see the exit rules below)
+            prem_open = float(real_bar.get("open") or prem_now)
             t["premium_source"] = "real_option_bar"
         else:
             if not getattr(self.cfg, "MODEL_PRICING_ENABLED", True):
@@ -677,6 +680,7 @@ class PaperEngine:
                 prem_high, prem_low, prem_now = prem_high * (1.0 - theta_bar), prem_low * (1.0 - theta_bar), prem_now * (1.0 - theta_bar)
             else:
                 prem_high, prem_low, prem_now = prem_high * (1.0 + theta_bar), prem_low * (1.0 + theta_bar), prem_now * (1.0 + theta_bar)
+            prem_open = prem_now      # the delta model has no intrabar open
         slip = 1.0 - self.cfg.SLIPPAGE_PCT if t["direction"] == "LONG" else 1.0 + self.cfg.SLIPPAGE_PCT
 
         # ---- PARTIAL PROFIT (Miner Ch 7 / McMillan): book half the position
@@ -741,35 +745,43 @@ class PaperEngine:
             trail_pct = float(getattr(self.cfg, "LOCK_TRAIL_STEP_PCT", 0.002))
 
         if lock_on:
-            prior_peak = t.get("pnl_peak") or entry_premium
+            # ---- NO SAME-BAR HINDSIGHT ----------------------------------
+            # The floor STANDING during this bar comes from the peak carried in
+            # from COMPLETED bars only.  Until 2026-09-16 this block folded this
+            # bar's own high into the peak and then tested this bar's low
+            # against the resulting floor in the same pass, so the exit printed
+            # 0.2% under the best tick of the very bar being evaluated
+            # (LOCK_TRAIL_STEP_PCT) - a fill that cannot be obtained.  On
+            # 2026-09-15 that made 19 of 19 NIFTY exits book ABOVE the option's
+            # live LTP, median +2.4%, worst +11.6%.  The peak is updated at the
+            # END of this method, for the NEXT bar (see below).
+            prior_peak = float(t.get("pnl_peak") or entry_premium)
             if is_long:
-                peak = max(prior_peak, prem_now, prem_high)
-                peak_pct = (peak - entry_premium) / entry_premium
+                prior_peak_pct = (prior_peak - entry_premium) / entry_premium
             else:
-                peak = min(prior_peak, prem_now, prem_low)
-                peak_pct = (entry_premium - peak) / entry_premium
-            t["pnl_peak"] = peak
-            t["peak_pct"] = peak_pct
+                prior_peak_pct = (entry_premium - prior_peak) / entry_premium
             # armed status is from the START of this bar (conservative):
             # an unarmed trade's stop is checked first; an armed trade has a
             # standing lock-floor GTT order that fires before the stop.
             armed = bool(t.get("lock_armed", False))
-            if not armed and peak_pct >= arm_pct:
+            if not armed and prior_peak_pct >= arm_pct:
                 t["lock_armed"] = True
                 armed = True
             if armed:
                 floor = floor_pct
                 if getattr(self.cfg, "LOCK_TRAIL_ENABLED", True):
-                    floor = max(floor, peak_pct - trail_pct)
+                    floor = max(floor, prior_peak_pct - trail_pct)
                 t["lock_floor_pct"] = floor
                 if is_long:
                     floor_prem = entry_premium * (1.0 + floor)
                     if prem_low <= floor_prem:
-                        return floor_prem, "LOCK_PROFIT"
+                        # the resting order fills at the floor - or at the
+                        # bar's open when the bar gapped straight through it
+                        return min(floor_prem, prem_open), "LOCK_PROFIT"
                 else:
                     floor_prem = entry_premium * (1.0 - floor)
                     if prem_high >= floor_prem:
-                        return floor_prem, "LOCK_PROFIT"
+                        return max(floor_prem, prem_open), "LOCK_PROFIT"
                 if getattr(self.cfg, "TRAIL_SL_TO_ENTRY", True):
                     stop_p = entry_premium  # breakeven trail
 
@@ -789,14 +801,17 @@ class PaperEngine:
         no_stop = bool(getattr(self.cfg, "NO_STOP_LOSS", False))
         if is_long:
             if not no_stop and prem_low <= stop_p:
-                return stop_p, "STOP_LOSS_HIT (-0.5%)"
+                # a bar that gapped through the stop fills at its OPEN
+                return min(stop_p, prem_open), "STOP_LOSS_HIT (-0.5%)"
             if prem_high >= target_p:
-                return target_p, "TARGET_HIT (+1%)"
+                # a limit at the target fills at the target - or better when
+                # the bar opened above it
+                return max(target_p, prem_open), "TARGET_HIT (+1%)"
         else:
             if not no_stop and prem_high >= stop_p:
-                return stop_p, "STOP_LOSS_HIT (-0.5%)"
+                return max(stop_p, prem_open), "STOP_LOSS_HIT (-0.5%)"
             if prem_low <= target_p:
-                return target_p, "TARGET_HIT (+1%)"
+                return min(target_p, prem_open), "TARGET_HIT (+1%)"
 
         # time stop
         if self._bar_time(bar) >= FORCE_EXIT_TIME:
@@ -807,6 +822,19 @@ class PaperEngine:
         px, why = self._reverse_exit(t, signal, prem_now, slip)
         if px is not None:
             return px, why
+
+        # ---- carry the peak forward for the NEXT bar ---------------------
+        # This is the ONLY place this bar's extreme may enter the peak: the
+        # floor the next bar tests against is set from here, never from the bar
+        # that is still being evaluated.
+        if lock_on:
+            if is_long:
+                _peak = max(prior_peak, prem_now, prem_high)
+                t["peak_pct"] = (_peak - entry_premium) / entry_premium
+            else:
+                _peak = min(prior_peak, prem_now, prem_low)
+                t["peak_pct"] = (entry_premium - _peak) / entry_premium
+            t["pnl_peak"] = _peak
 
         return None, None
 

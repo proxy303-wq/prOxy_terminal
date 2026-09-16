@@ -40,10 +40,13 @@ IST = ZoneInfo("Asia/Kolkata")
 
 SLEEP_SECONDS = 60
 NO_BAR_FALLBACK_SECONDS = 90       # no live bars -> synthetic replay
-CHAIN_REFRESH_SECONDS = 1800       # re-fetch the option chain every 30 min so
+CHAIN_REFRESH_SECONDS = 300        # re-fetch the option chain every 5 min so
                                    # strike selection / IV / expiry stay fresh
                                    # (2026-08-31: a once-per-session chain gave
-                                   # stale spot/premiums that mis-priced entries)
+                                   # stale spot/premiums that mis-priced entries;
+                                   # 2026-09-16: 30 min was still too coarse - a
+                                   # first-touch strike fell back to a chain price
+                                   # 6-13% away from the live premium)
 STATE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "reports", "worker_state.json"
 )
@@ -452,7 +455,32 @@ def run_trading_day(notifier, trade_date, variant="nifty"):
                     return None
 
             engine.set_option_ltp_source(_option_ltp_source)
-            engine.set_entry_ltp_fn(lambda sid: (opt_feed.subscribe_option(sid), opt_feed.live_ltps.get(str(sid)))[1])
+
+            def _entry_ltp(sid, _wait=8.0):
+                """The traded option's LTP AT THE MOMENT OF ENTRY.
+
+                subscribe_option() only ADDS the sid to the poll set - the first
+                price arrives with the next poll (~1-2 s).  The old one-liner
+                read live_ltps in the same breath, got None on a first-touch
+                strike, and left the engine to book the plan's chain snapshot,
+                which is up to CHAIN_REFRESH_SECONDS old (2026-09-15: entries
+                recorded 6-13% under the live premium, which flattered every
+                LONG).  Wait for the poll instead, with a bounded deadline so a
+                dead feed can never hang the session.
+                """
+                opt_feed.subscribe_option(sid)
+                deadline = time.time() + _wait
+                while time.time() < deadline:
+                    v = opt_feed.live_ltps.get(str(sid))
+                    if v:
+                        return v
+                    time.sleep(0.25)
+                notifier.log(
+                    f"entry LTP for sid {sid} did not arrive within {_wait:.0f}s "
+                    f"- entry falls back to the chain price", "WARN")
+                return None
+
+            engine.set_entry_ltp_fn(_entry_ltp)
             notifier.log("LIVE real-premium exits armed - engine polls the traded option's LTP per bar", "INFO")
     except Exception as exc:
         notifier.log(f"LIVE real-premium exits unavailable ({exc}) - exits use the delta model", "WARN")

@@ -162,11 +162,15 @@ LOCK_FLOOR_PCT = 0.0010         # never give back more than to +0.1% (%-mode)
 LOCK_TRAIL_ENABLED = True
 LOCK_TRAIL_STEP_PCT = 0.0020    # floor = peak - 0.2% once armed (%-mode)
 TRAIL_SL_TO_ENTRY = True        # move the stop to breakeven when armed
-# points-mode lock (SL_MODE="points"): arm at +2pt, floor at +1pt, trail
-# at peak - 1pt - so a winner can actually run to the 6-7pt target
-LOCK_ARM_POINTS = 1.0
-LOCK_FLOOR_POINTS = 1.0
-LOCK_TRAIL_STEP_POINTS = 1.0
+# points-mode lock (SL_MODE="points").  2026-09-16 calibration, R = SL_POINTS:
+# the lock used to arm at +2pt and trail 1pt behind the peak (~0.1-0.2R), which
+# converted every winner into a scalp while the measured favourable excursion
+# runs a median +6.6R (09-10) and +28R (09-15).  Now it arms at +1R, never gives
+# back below +1R, and trails 1R behind the peak: the trade is out only when the
+# market takes a full R back.
+LOCK_ARM_POINTS = 10.0
+LOCK_FLOOR_POINTS = 10.0
+LOCK_TRAIL_STEP_POINTS = 10.0
 
 
 # ============================================================
@@ -199,7 +203,9 @@ SL_MODE = "points"
 # 34 trades before their target (a 10pt stop: 5).  Pooled outcome of the same
 # paths: no stop +21,026 INR, 5pt +23,419, 10pt +60,454, 20pt +60,708.
 # 10pt stop with a 20pt target = R:R 2.0, MIN_RISK_REWARD-compliant.
-TARGET_POINTS = 20.0             # profit target in absolute premium points (2R)
+TARGET_POINTS = 30.0             # profit target in absolute premium points (3R).
+                                 # A backstop only: with the 1R trail above, the
+                                 # exit is the trail, not this ceiling.
 SL_POINTS = 10.0                 # stop distance in absolute premium points (1R)
 
 # REVERSE-SIGNAL EXIT DELAY (V4 policy, validated 2026-09-03):# 0 = exit the moment a flipped signal closes (historical behaviour).

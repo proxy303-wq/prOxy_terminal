@@ -1029,13 +1029,16 @@ class PaperEngine:
             "pnl_pct": round(pnl / max(t["entry_premium"] * t["quantity"], 1e-9) * 100.0, 3),
             "paper_spread_cost": round(_paper_sp, 2) if _paper_sp else 0.0,
         }
-        self.tracker.add_trade(record, self.state, self.cfg)
         # The daily P&L drives the day's loss limit and the halt that follows
-        # it.  This call used to sit INSIDE the DIE-autopsy except block below,
-        # so it only ran when the autopsy RAISED: on every normal close the
-        # day's realised P&L never reached the state (the box's copy has it at
-        # top level; the repo copy did not).
+        # it, so it must be applied BEFORE the tracker persists the state
+        # (add_trade -> save_state).  Two bugs lived here: the call used to sit
+        # inside the DIE-autopsy except block (so it only ran when the autopsy
+        # raised), and once moved to top level it still ran AFTER the save, so
+        # the stored day P&L lagged one trade and the halt flag was never
+        # persisted - a mid-session restart then resurrected trading on a day
+        # that had already breached its 1% limit (2026-09-16).
         apply_daily_pnl(self.state, self.cfg, pnl)
+        self.tracker.add_trade(record, self.state, self.cfg)
 # ATHENA DIE autopsy (docs/DIE.md): keep every trade story for the learning loop
         if t.get("die_band") or t.get("die_note"):
             try:
